@@ -1,11 +1,11 @@
-# Nextrium Social (working name)
+# Showrium
 
 One context in, platform-native content out, for LinkedIn, X, Instagram, Facebook, Threads, TikTok, YouTube Shorts, Bluesky, Mastodon and Dev.to.
 
 - **Consumer app** for anyone who wants to share their expertise, teach, or just make people smile.
 - **One API** for developers and businesses.
 
-> The product name is not final. See `blueprint/` for the plan, the naming research and the platform policy findings.
+> A Nextrium product. See `blueprint/` for the plan, the naming research and the platform policy findings.
 
 ## Layout
 

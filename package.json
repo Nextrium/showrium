@@ -1,7 +1,7 @@
 {
-  "name": "@nextrium/social",
+  "name": "@nextrium/showrium",
   "private": true,
-  "description": "Nextrium social content platform (working name): one context in, platform-native content out.",
+  "description": "Showrium by Nextrium: one context in, platform-native content out.",
   "packageManager": "pnpm@10.24.0",
   "engines": {
     "node": ">=22"
