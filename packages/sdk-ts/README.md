@@ -2,4 +2,4 @@
 
 Generated TypeScript SDK for the public API.
 
-See [blueprint/PLAN.md](../../blueprint/PLAN.md) for the design.
+Design docs are internal (Nextrium/internal-docs, `projects/showrium/`).

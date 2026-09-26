@@ -5,7 +5,7 @@ One context in, platform-native content out, for LinkedIn, X, Instagram, Faceboo
 - **Consumer app** for anyone who wants to share their expertise, teach, or just make people smile.
 - **One API** for developers and businesses.
 
-> A Nextrium product. See `blueprint/` for the plan, the naming research and the platform policy findings.
+> A Nextrium product. Internal plans and design docs live in the private `Nextrium/internal-docs` repo.
 
 ## Layout
 
@@ -13,7 +13,6 @@ One context in, platform-native content out, for LinkedIn, X, Instagram, Faceboo
 |---|---|
 | `apps/` | web, api, worker, renderer, gpu, docs |
 | `packages/` | db, core, llm, connectors, platforms, policy, media, billing, sdk-ts, ui |
-| `blueprint/` | architecture, policies, business plan |
 | `infra/` | infrastructure as code |
 
 ## Development

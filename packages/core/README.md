@@ -2,4 +2,4 @@
 
 Domain logic: contexts, briefs, variants, autonomy levels, credits.
 
-See [blueprint/PLAN.md](../../blueprint/PLAN.md) for the design.
+Design docs are internal (Nextrium/internal-docs, `projects/showrium/`).

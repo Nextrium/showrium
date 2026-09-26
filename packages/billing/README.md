@@ -2,4 +2,4 @@
 
 Plans, double-entry credit ledger, Paddle/Lemon Squeezy/Paystack adapters.
 
-See [blueprint/PLAN.md](../../blueprint/PLAN.md) for the design.
+Design docs are internal (Nextrium/internal-docs, `projects/showrium/`).

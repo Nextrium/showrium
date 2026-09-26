@@ -13,3 +13,6 @@ out/
 .DS_Store
 __pycache__/
 .venv/
+
+# Internal docs live in the private Nextrium/internal-docs repo, never here.
+blueprint/
