@@ -13,7 +13,8 @@ pnpm bench
 ```
 
 The real run spends a few cents. Env vars:
-- `ANTHROPIC_API_KEY`: required for the real run.
+- AI keys, any subset: `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`. Every provider with a key is benchmarked side by side. OpenRouter defaults to comparing Claude Haiku and DeepSeek Flash; override with `OPENROUTER_MODELS`.
+- Keys are read from the repo-root `.env` (copy `.env.example`).
 - `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`: optional; enable the Workers AI fallback test.
 - `WORKERS_AI_MODEL`: optional; overrides the fallback model.
 

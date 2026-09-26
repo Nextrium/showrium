@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Measures real per-post AI cost across the primary model and fallbacks.",
   "scripts": {
-    "bench": "tsx src/run.ts",
+    "bench": "tsx --env-file-if-exists=../../.env src/run.ts",
     "bench:dry": "tsx src/run.ts --dry-run",
     "typecheck": "tsc --noEmit -p ."
   },
