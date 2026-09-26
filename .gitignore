@@ -16,3 +16,6 @@ __pycache__/
 
 # Internal docs live in the private Nextrium/internal-docs repo, never here.
 blueprint/
+
+# Benchmark output (may contain internal cost data)
+tools/*/out/
