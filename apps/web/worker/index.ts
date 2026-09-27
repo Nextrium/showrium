@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { secureHeaders } from "hono/secure-headers";
 import { api } from "./api.js";
+import { mcp } from "./mcp.js";
 import { createAuth } from "./auth.js";
 import { apiError, type AppEnv } from "./principal.js";
 import { rateLimit } from "./rate-limit.js";
 import { createDb } from "@nextrium/db";
-import { pruneExpiredOAuthStates, recoverStuckPublishing, runAutopilot, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
+import { expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, runAutopilot, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
 import { aiProviders } from "./ai.js";
 import { publishDeps } from "./connections-api.js";
 
@@ -37,6 +38,7 @@ app.use("/api/*", async (c, next) => {
 // Sign-in attempts: 10 per minute per IP. Other API calls: 120 per minute per IP.
 app.post("/api/auth/*", rateLimit((env) => env.AUTH_LIMITER, "auth"));
 app.use("/api/v1/*", rateLimit((env) => env.API_LIMITER, "api"));
+app.use("/api/mcp", rateLimit((env) => env.API_LIMITER, "api"));
 app.post("/api/v1/waitlist", rateLimit((env) => env.WAITLIST_LIMITER, "waitlist"));
 
 // Readable API reference, rendered from the OpenAPI document by Scalar (CDN-hosted).
@@ -70,6 +72,7 @@ app.get("/api/docs", (c) => {
 
 app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env).handler(c.req.raw));
 app.route("/api/v1", api);
+app.route("/api/mcp", mcp);
 app.all("/api/*", (c) => c.json(apiError("not_found", "No such API route."), 404));
 
 app.onError((err, c) => {
@@ -103,7 +106,7 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
         job === "sources" ? await runSourcePolling(db, { githubToken: env.GITHUB_TOKEN }, now)
         : job === "autopilot" ? await runAutopilot(db, aiProviders(env), now)
         : job === "engagement" ? await runEngagementSync(db, fetch, now)
-        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now) };
+        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now) };
       console.log("cron", job, result);
     })(),
   );

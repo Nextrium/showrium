@@ -20,6 +20,14 @@ export default defineConfig(async () => {
             TOKEN_ENCRYPTION_KEY: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
             // Only example.com is allowlisted in tests, so blocked sign-ups can be tested too.
             BETA_ALLOWED_EMAILS: "@example.com",
+            // Billing test configuration: random secrets per run; product ids are fake.
+            PAYSTACK_SECRET_KEY: "sk_test_" + crypto.randomUUID(),
+            PAYSTACK_NGN_PER_USD: "1500",
+            PAYSTACK_PLANS: JSON.stringify({ "starter:month": "PLN_starter", "lite:month": "PLN_lite" }),
+            LEMONSQUEEZY_API_KEY: "ls_test_" + crypto.randomUUID(),
+            LEMONSQUEEZY_WEBHOOK_SECRET: crypto.randomUUID(),
+            LEMONSQUEEZY_STORE_ID: "1",
+            LEMONSQUEEZY_VARIANTS: JSON.stringify({ "creator:year": "111", "starter:month": "333", "lite:month": "444", "credits:c500": "222" }),
           },
         },
       }),

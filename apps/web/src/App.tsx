@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { APP_ORIGIN, authClient, isWebsite, navigate, usePath } from "./lib";
 import { Home } from "./pages/Home";
 import { Invite } from "./pages/Invite";
+import { Join } from "./pages/Join";
 import { Privacy, Terms } from "./pages/Legal";
 import { SignIn } from "./pages/SignIn";
 import { Workspace } from "./pages/Workspace";
@@ -85,6 +86,7 @@ export function App() {
     path === "/app" || path.startsWith("/app/") ? <Workspace path={path} /> :
     path === "/signin" ? <SignIn /> :
     path === "/invite" ? <Invite /> :
+    path === "/join" ? <Join /> :
     path === "/privacy" ? <Privacy /> :
     path === "/terms" ? <Terms /> :
     <Home />;

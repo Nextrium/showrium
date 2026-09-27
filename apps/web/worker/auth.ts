@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createDb, schema } from "@nextrium/db";
-import { canSignUp, claimInvite, createPersonalOrg, readCookie, recordInviteAcceptedBy } from "@nextrium/core";
+import { canSignUp, claimInvite, createPersonalOrg, readCookie, recordInviteAcceptedBy, teamInviteAllowsSignUp } from "@nextrium/core";
 import { authProviders, signupMode, type Env } from "./env.js";
 
 export const INVITE_COOKIE = "showrium_invite";
@@ -46,6 +46,7 @@ export function createAuth(env: Env) {
           before: async (user, context) => {
             if (canSignUp(signupMode(env), user.email, env.BETA_ALLOWED_EMAILS)) return;
             const token = inviteTokenFrom(context as HookContext);
+            if (token && (await teamInviteAllowsSignUp(db, token, user.email))) return;
             if (token && (await claimInvite(db, token))) return;
             console.warn(`sign-up blocked (mode: ${signupMode(env)}, invite: ${token ? "invalid or used" : "none"})`);
             return false;

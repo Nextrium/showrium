@@ -47,13 +47,39 @@ export class ApiError extends Error {
   }
 }
 
+// --- Workspace selection: people in several workspaces pick one; the API gets it as X-Org-Id. ---
+
+const ORG_KEY = "showrium_org";
+export function currentOrgId(): string | null {
+  try {
+    return localStorage.getItem(ORG_KEY);
+  } catch {
+    return null;
+  }
+}
+export function switchWorkspace(id: string | null) {
+  try {
+    if (id) localStorage.setItem(ORG_KEY, id);
+    else localStorage.removeItem(ORG_KEY);
+  } catch {
+    // Storage unavailable: stay in the default workspace.
+  }
+  window.location.assign("/app");
+}
+export function orgHeaders(): Record<string, string> {
+  const id = currentOrgId();
+  return id ? { "X-Org-Id": id } : {};
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api/v1${path}`, {
     ...init,
-    headers: { ...(init.body ? { "Content-Type": "application/json" } : {}), ...init.headers },
+    headers: { ...(init.body ? { "Content-Type": "application/json" } : {}), ...orgHeaders(), ...init.headers },
   });
   if (res.status === 204) return undefined as T;
   const body = (await res.json().catch(() => null)) as { error?: { code: string; message: string } } | null;
+  // The chosen workspace is gone (removed from the team): fall back to the default one.
+  if (res.status === 403 && body?.error?.code === "no_workspace" && currentOrgId()) switchWorkspace(null);
   if (!res.ok) throw new ApiError(res.status, body?.error?.code ?? "error", body?.error?.message ?? `Request failed (${res.status}).`);
   return body as T;
 }

@@ -47,3 +47,23 @@ export async function addUsage(
   const overage = Math.max(0, total - Math.max(limit, before));
   return { overage: Math.min(n, overage), total };
 }
+
+/**
+ * Features per plan (cost-model-and-pricing.md, section 3). Quotas are in PLAN_LIMITS.
+ * autopilot: the highest autopilot level allowed. insights: AI audience themes. seats: members per workspace.
+ */
+export const PLAN_FEATURES = {
+  free: { autopilot: "coach", insights: false, seats: 1 },
+  lite: { autopilot: "coach", insights: false, seats: 1 },
+  starter: { autopilot: "batch", insights: true, seats: 1 },
+  creator: { autopilot: "autopilot", insights: true, seats: 1 },
+  pro: { autopilot: "autopilot", insights: true, seats: 3 },
+  team: { autopilot: "autopilot", insights: true, seats: 25 },
+} as const satisfies Record<Plan, { autopilot: "coach" | "batch" | "autopilot"; insights: boolean; seats: number }>;
+
+const LEVEL_ORDER = ["coach", "drafts", "batch", "autopilot"] as const;
+/** The level actually used: the chosen one, capped by what the plan allows. */
+export function allowedAutopilotLevel(plan: Plan, wanted: (typeof LEVEL_ORDER)[number]): (typeof LEVEL_ORDER)[number] {
+  const max = LEVEL_ORDER.indexOf(PLAN_FEATURES[plan].autopilot);
+  return LEVEL_ORDER[Math.min(LEVEL_ORDER.indexOf(wanted), max)]!;
+}

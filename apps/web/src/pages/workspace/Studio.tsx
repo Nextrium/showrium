@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { api, formatDate, useApi } from "../../lib";
+import { api, formatDate, orgHeaders, useApi } from "../../lib";
 import { canvasSize, decodeAudio, drawFrame, play, sceneTotal, type Timeline } from "../../video/render";
 import type { Draft } from "./shared";
 
@@ -66,7 +66,7 @@ function Player({ video, onRevised }: { video: Video; onRevised: (v: Video) => v
   const toTikTok = () =>
     run("Sending to TikTok…", async () => {
       if (!file || !tiktok) return;
-      const res = await fetch(`/api/v1/videos/${video.id}/tiktok-inbox?connectionId=${tiktok.id}`, { method: "POST", headers: { "Content-Type": file.blob.type }, body: file.blob });
+      const res = await fetch(`/api/v1/videos/${video.id}/tiktok-inbox?connectionId=${tiktok.id}`, { method: "POST", headers: { "Content-Type": file.blob.type, ...orgHeaders() }, body: file.blob });
       const body = (await res.json().catch(() => null)) as { message?: string; error?: { message: string } } | null;
       if (!res.ok) throw new Error(body?.error?.message ?? "Upload failed.");
       setMessage(body?.message ?? "Sent to your TikTok inbox.");

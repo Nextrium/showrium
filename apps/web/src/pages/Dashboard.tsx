@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { AuditCard, BillingCard, TeamCard } from "../components/BusinessCards";
 import { InvitesCard } from "../components/InvitesCard";
 import { api, authClient, formatDate, navigate, useApi, useRedirect } from "../lib";
 
@@ -162,6 +163,12 @@ export function Dashboard() {
           </div>
         </section>
       </div>
+
+      <div className="grid2">
+        <BillingCard canManage={canManageKeys} />
+        <TeamCard canManage={canManageKeys} myEmail={session?.user.email ?? ""} />
+      </div>
+      {canManageKeys && <AuditCard />}
 
       {me.data.principal.isPlatformAdmin && <InvitesCard />}
 

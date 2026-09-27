@@ -19,6 +19,7 @@ import { connectionsApi } from "./connections-api.js";
 import { contentApi } from "./content-api.js";
 import { videoApi } from "./video-api.js";
 import { autonomyApi } from "./autonomy-api.js";
+import { businessApi } from "./business-api.js";
 import { authProviders, signupMode } from "./env.js";
 import { apiError, canManageKeys, requirePrincipal, type AppEnv } from "./principal.js";
 
@@ -433,13 +434,14 @@ api.route("/", contentApi);
 api.route("/", connectionsApi);
 api.route("/", videoApi);
 api.route("/", autonomyApi);
+api.route("/", businessApi);
 
 api.doc31("/openapi.json", {
   openapi: "3.1.0",
   info: {
     title: "Showrium API",
     version: "1.0.0",
-    description: "One API for Showrium: workspaces, credits and API keys (more resources arrive each phase).",
+    description: "One API for Showrium: material, posts, publishing, video, ideas and insights, billing, teams and the audit log. AI agents can use the MCP server at /api/mcp with the same API key.",
   },
   servers: [{ url: "/api/v1" }],
 });

@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, lt } from "drizzle-orm";
 import { auditEvent, membership, org, type Db, type Role } from "@nextrium/db";
 import { postCreditTxn } from "./credits.js";
 import { newId } from "./ids.js";
@@ -83,4 +83,14 @@ export async function recordAudit(
   event: { orgId: string; actorUserId?: string | null; actorApiKeyId?: string | null; action: string; target?: string; meta?: unknown },
 ) {
   await db.insert(auditEvent).values({ id: newId("aud"), ...event });
+}
+
+/** The workspace's audit log, newest first, 50 per page (`before` = the last id of the previous page). */
+export async function listAudit(db: Db, orgId: string, before?: string) {
+  return db
+    .select({ id: auditEvent.id, action: auditEvent.action, target: auditEvent.target, actorUserId: auditEvent.actorUserId, actorApiKeyId: auditEvent.actorApiKeyId, meta: auditEvent.meta, createdAt: auditEvent.createdAt })
+    .from(auditEvent)
+    .where(before ? and(eq(auditEvent.orgId, orgId), lt(auditEvent.id, before)) : eq(auditEvent.orgId, orgId))
+    .orderBy(desc(auditEvent.id))
+    .limit(50);
 }

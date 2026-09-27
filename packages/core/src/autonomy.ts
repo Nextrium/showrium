@@ -21,7 +21,7 @@ import {
 import { generateStructured, insightSystemPrompt, insightUserPrompt, InsightSchema, type Provider } from "@nextrium/llm";
 import { blueskyEngagement, mastodonEngagement, type FetchLike, type PostEngagement } from "@nextrium/platforms";
 import { addContextItems, compose, getOrgPlan, markSourceChecked, updateDraft } from "./content.js";
-import { getUsage, PLAN_LIMITS } from "./plans.js";
+import { allowedAutopilotLevel, getUsage, PLAN_FEATURES, PLAN_LIMITS } from "./plans.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
 import { ingestFeed, ingestGithubReleases } from "./ingest.js";
@@ -154,7 +154,10 @@ export async function getAutopilot(db: Db, orgId: string) {
 }
 
 export class AutopilotError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code: "invalid" | "plan_required" = "invalid",
+  ) {
     super(message);
     this.name = "AutopilotError";
   }
@@ -167,6 +170,10 @@ export async function saveAutopilot(db: Db, orgId: string, s: AutopilotSettings)
     if (!s.platforms.length) throw new AutopilotError("Choose at least one platform for autopilot.");
     const outside = s.platforms.filter((x) => !p.platforms.includes(x));
     if (outside.length) throw new AutopilotError(`Add ${outside.join(", ")} to your platforms in Voice first.`);
+  }
+  const plan = await getOrgPlan(db, orgId);
+  if (allowedAutopilotLevel(plan, s.level) !== s.level) {
+    throw new AutopilotError(`The ${plan} plan includes up to "${PLAN_FEATURES[plan].autopilot}". Upgrade for more.`, "plan_required");
   }
   if (s.level === "autopilot" && p?.safe) throw new AutopilotError("Monetization-safe mode needs your approval on every post, so full autopilot is off. Use batch approval instead.");
   const values = { ...s, postsPerWeek: Math.min(14, Math.max(1, Math.round(s.postsPerWeek))), publishHourUtc: Math.min(23, Math.max(0, Math.round(s.publishHourUtc))) };
@@ -185,7 +192,10 @@ export function nextSlot(now: Date, hourUtc: number): Date {
 export const AUTOPILOT_EXCLUDED: Platform[] = ["x"];
 
 export async function runAutopilotFor(db: Db, providers: Provider[], orgId: string, now = new Date()) {
-  const s = await getAutopilot(db, orgId);
+  const saved = await getAutopilot(db, orgId);
+  const plan = await getOrgPlan(db, orgId);
+  // A downgraded plan caps the level without changing the saved setting.
+  const s = { ...saved, level: allowedAutopilotLevel(plan, saved.level) };
   if (s.level === "coach") return { skipped: "coach" as const };
   const [p] = await db.select({ safe: persona.monetizationSafe, platforms: persona.platforms }).from(persona).where(eq(persona.orgId, orgId));
   if (!p) return { skipped: "no_persona" as const };
@@ -199,7 +209,6 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   if ((week?.n ?? 0) >= s.postsPerWeek) return { skipped: "weekly_limit" as const };
 
   // Autopilot spends only the plan's monthly allowance, never credits.
-  const plan = await getOrgPlan(db, orgId);
   if ((await getUsage(db, orgId)).postsGenerated + platforms.length > PLAN_LIMITS[plan].posts) return { skipped: "plan_allowance" as const };
 
   const [best] = await db
@@ -393,7 +402,7 @@ export async function listEngagement(db: Db, orgId: string, limit = 100) {
 
 export class InsightError extends Error {
   constructor(
-    readonly code: "too_soon" | "not_enough" | "ai_unavailable" | "not_found" | "already_used",
+    readonly code: "too_soon" | "not_enough" | "ai_unavailable" | "not_found" | "already_used" | "plan_required",
     message: string,
   ) {
     super(message);
@@ -408,6 +417,8 @@ export async function latestInsight(db: Db, orgId: string) {
 
 /** Clusters recent comments into themes (at most once an hour; about $0.0001 per run). */
 export async function refreshInsights(db: Db, providers: Provider[], orgId: string, now = new Date()) {
+  const plan = await getOrgPlan(db, orgId);
+  if (!PLAN_FEATURES[plan].insights) throw new InsightError("plan_required", "Audience themes come with the Starter plan and above.");
   const last = await latestInsight(db, orgId);
   if (last && last.createdAt.getTime() > now.getTime() - HOUR) throw new InsightError("too_soon", "Insights were refreshed in the last hour.");
   const comments = await db

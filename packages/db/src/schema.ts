@@ -503,3 +503,67 @@ export const insight = sqliteTable(
   },
   (t) => [index("insight_org_idx").on(t.orgId, t.createdAt)],
 );
+
+// ---------------------------------------------------------------------------
+// Phase 6: billing and teams.
+// ---------------------------------------------------------------------------
+
+export const PAID_PLANS = ["lite", "starter", "creator", "pro", "team"] as const;
+export type PaidPlan = (typeof PAID_PLANS)[number];
+export const BILLING_PROVIDERS = ["paystack", "lemonsqueezy"] as const;
+export type BillingProvider = (typeof BILLING_PROVIDERS)[number];
+
+/** One subscription per workspace. The org's plan follows it (see core/billing.ts). */
+export const subscription = sqliteTable(
+  "subscription",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().unique().references(() => org.id, { onDelete: "cascade" }),
+    provider: text("provider", { enum: BILLING_PROVIDERS }).notNull(),
+    plan: text("plan", { enum: PAID_PLANS }).notNull(),
+    interval: text("interval", { enum: ["month", "year"] }).notNull(),
+    status: text("status", { enum: ["active", "past_due", "cancelled", "expired"] }).notNull(),
+    providerSubscriptionId: text("provider_subscription_id").notNull(),
+    providerCustomerId: text("provider_customer_id"),
+    currentPeriodEnd: integer("current_period_end", { mode: "timestamp_ms" }),
+    /** The provider's own last-change time; older events arriving late are ignored. */
+    providerUpdatedAt: integer("provider_updated_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("subscription_provider_sub_uq").on(t.provider, t.providerSubscriptionId)],
+);
+
+/** Every webhook event seen, keyed so a retried delivery is applied once. No raw payloads (they hold PII). */
+export const paymentEvent = sqliteTable(
+  "payment_event",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider", { enum: BILLING_PROVIDERS }).notNull(),
+    eventKey: text("event_key").notNull(),
+    type: text("type").notNull(),
+    orgId: text("org_id"),
+    outcome: text("outcome").notNull().default("received"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("payment_event_provider_key_uq").on(t.provider, t.eventKey), index("payment_event_org_idx").on(t.orgId, t.createdAt)],
+);
+
+/** Invitations to join a workspace. Bound to one email address; only a token hash is stored. */
+export const teamInvite = sqliteTable(
+  "team_invite",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    role: text("role", { enum: ROLES }).notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    invitedByUserId: text("invited_by_user_id"),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    acceptedAt: integer("accepted_at", { mode: "timestamp_ms" }),
+    acceptedByUserId: text("accepted_by_user_id"),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("team_invite_org_idx").on(t.orgId, t.createdAt)],
+);

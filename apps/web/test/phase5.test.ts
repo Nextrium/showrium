@@ -37,6 +37,7 @@ async function user(email: string, platforms: string[] = ["bluesky", "tiktok"]) 
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
   await call("PUT", "/persona", { displayName: "Ada", platforms });
+  await env.DB.prepare("UPDATE org SET plan = 'creator' WHERE id = (SELECT org_id FROM membership WHERE user_id = (SELECT id FROM user WHERE email = ?))").bind(email).run();
   const me = (await (await call("GET", "/me")).json()) as { workspace: { id: string } };
   const row = await env.DB.prepare("SELECT id FROM user WHERE email = ?").bind(email).first<{ id: string }>();
   return { call, orgId: me.workspace.id, userId: row!.id };
@@ -290,7 +291,7 @@ describe("phase 5 review fixes", () => {
     expect(out).toMatchObject({ drafts: 1, scheduled: 0 });
 
     const period = new Date().toISOString().slice(0, 7);
-    await env.DB.prepare("UPDATE usage_counter SET posts_generated = 20 WHERE org_id = ? AND period = ?").bind(u.orgId, period).run();
+    await env.DB.prepare("UPDATE usage_counter SET posts_generated = 400 WHERE org_id = ? AND period = ?").bind(u.orgId, period).run();
     await seedIdea(u.orgId);
     expect(await runAutopilotFor(db, providers, u.orgId)).toEqual({ skipped: "plan_allowance" });
   });

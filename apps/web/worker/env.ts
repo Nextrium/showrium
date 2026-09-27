@@ -1,4 +1,4 @@
-import { parseSignupMode } from "@nextrium/core";
+import { parseSignupMode, type BillingConfig } from "@nextrium/core";
 
 export interface Env {
   DB: D1Database;
@@ -34,6 +34,20 @@ export interface Env {
   /** Phase 4 premium video vendors (secrets; unset until contracts exist). */
   HEYGEN_API_KEY?: string;
   VEO_API_KEY?: string;
+  /**
+   * Phase 6 billing. Secrets: PAYSTACK_SECRET_KEY, LEMONSQUEEZY_API_KEY, LEMONSQUEEZY_WEBHOOK_SECRET.
+   * Vars (not secret): product ids as JSON, e.g. PAYSTACK_PLANS = {"starter:month":"PLN_x"},
+   * LEMONSQUEEZY_VARIANTS = {"starter:year":"123","credits:c500":"456"}; the NGN price of one USD.
+   */
+  /** Signs checkout custom data. Optional; falls back to BETTER_AUTH_SECRET. Do not rotate while payments are pending. */
+  BILLING_SIGNING_SECRET?: string;
+  PAYSTACK_SECRET_KEY?: string;
+  PAYSTACK_PLANS?: string;
+  PAYSTACK_NGN_PER_USD?: string;
+  LEMONSQUEEZY_API_KEY?: string;
+  LEMONSQUEEZY_WEBHOOK_SECRET?: string;
+  LEMONSQUEEZY_STORE_ID?: string;
+  LEMONSQUEEZY_VARIANTS?: string;
   /** Platform admins (secret): exact emails allowed to create invites. Unset = nobody. */
   PLATFORM_ADMIN_EMAILS?: string;
   /** Beta sign-up allowlist (secret): emails, "@domain" entries or "*". Unset = no new sign-ups. */
@@ -56,5 +70,29 @@ export function authProviders(env: Env) {
     password: env.AUTH_PASSWORD_ENABLED === "true",
     github: Boolean(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET),
     google: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
+  };
+}
+
+function jsonMap(value: string | undefined): Record<string, string> {
+  try {
+    const parsed = JSON.parse(value ?? "{}") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((e): e is [string, string] => typeof e[1] === "string" || typeof e[1] === "number").map(([k, v]) => [k, String(v)]));
+  } catch {
+    return {};
+  }
+}
+
+/** Billing configuration. A provider is enabled only when its secret and product ids are all present. */
+export function billingConfig(env: Env): BillingConfig {
+  const rate = Number(env.PAYSTACK_NGN_PER_USD ?? "");
+  return {
+    signingSecret: env.BILLING_SIGNING_SECRET || env.BETTER_AUTH_SECRET,
+    returnUrl: `${env.BETTER_AUTH_URL}/app/settings?billing=done`,
+    paystack: env.PAYSTACK_SECRET_KEY && rate > 0 ? { secretKey: env.PAYSTACK_SECRET_KEY, plans: jsonMap(env.PAYSTACK_PLANS), ngnPerUsd: rate } : undefined,
+    lemonsqueezy:
+      env.LEMONSQUEEZY_API_KEY && env.LEMONSQUEEZY_WEBHOOK_SECRET && env.LEMONSQUEEZY_STORE_ID
+        ? { apiKey: env.LEMONSQUEEZY_API_KEY, webhookSecret: env.LEMONSQUEEZY_WEBHOOK_SECRET, storeId: env.LEMONSQUEEZY_STORE_ID, variants: jsonMap(env.LEMONSQUEEZY_VARIANTS) }
+        : undefined,
   };
 }

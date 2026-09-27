@@ -125,7 +125,7 @@ autonomyApi.openapi(
 );
 
 autonomyApi.openapi(
-  createRoute({ method: "put", path: "/autopilot", tags: ["Autonomy"], request: body(AutopilotSchema), responses: { 200: json(AutopilotSchema.extend({ lastRunAt: z.string().nullable() })), ...errs } }),
+  createRoute({ method: "put", path: "/autopilot", tags: ["Autonomy"], request: body(AutopilotSchema), responses: { 200: json(AutopilotSchema.extend({ lastRunAt: z.string().nullable() })), 402: json(Err, "Plan required"), ...errs } }),
   async (c) => {
     const p = c.get("principal");
     // Autopilot can publish without a per-post approval, so only owners and admins may change it.
@@ -136,7 +136,7 @@ autonomyApi.openapi(
       await recordAudit(c.get("db"), { orgId: p.orgId, ...actor(p), action: "autopilot.updated", meta: { level: input.level, platforms: input.platforms } });
       return c.json({ ...s, lastRunAt: s.lastRunAt?.toISOString() ?? null }, 200);
     } catch (error) {
-      if (error instanceof AutopilotError) return c.json(apiError("invalid_autopilot", error.message), 409);
+      if (error instanceof AutopilotError) return error.code === "plan_required" ? c.json(apiError("plan_required", error.message), 402) : c.json(apiError("invalid_autopilot", error.message), 409);
       throw error;
     }
   },
@@ -258,7 +258,7 @@ type InsightRow = NonNullable<Awaited<ReturnType<typeof latestInsight>>>;
 const toInsight = (r: InsightRow | null) => (r ? { id: r.id, themes: r.themes, basedOn: r.basedOn, createdAt: r.createdAt.toISOString() } : null);
 
 function insightStatus(e: InsightError) {
-  return e.code === "too_soon" ? 429 : e.code === "ai_unavailable" ? 503 : e.code === "not_found" ? 404 : 409;
+  return e.code === "too_soon" ? 429 : e.code === "ai_unavailable" ? 503 : e.code === "not_found" ? 404 : e.code === "plan_required" ? 402 : 409;
 }
 
 autonomyApi.openapi(
@@ -267,7 +267,7 @@ autonomyApi.openapi(
 );
 
 autonomyApi.openapi(
-  createRoute({ method: "post", path: "/insights/refresh", tags: ["Learning"], responses: { 201: json(z.object({ insight: InsightOut }), "Refreshed"), 429: json(Err, "Too soon"), 503: json(Err, "AI unavailable"), ...errs } }),
+  createRoute({ method: "post", path: "/insights/refresh", tags: ["Learning"], responses: { 201: json(z.object({ insight: InsightOut }), "Refreshed"), 402: json(Err, "Plan required"), 429: json(Err, "Too soon"), 503: json(Err, "AI unavailable"), ...errs } }),
   async (c) => {
     const p = c.get("principal");
     if (denied(p, "content.write")) return c.json(forbidden("refresh insights"), 403);

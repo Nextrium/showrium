@@ -1,5 +1,5 @@
 import { Link } from "../App";
-import { authClient, useRedirect } from "../lib";
+import { authClient, currentOrgId, switchWorkspace, useApi, useRedirect } from "../lib";
 import { CreatePage } from "./workspace/Create";
 import { DraftsPage } from "./workspace/Drafts";
 import { SourcesPage } from "./workspace/Sources";
@@ -20,6 +20,20 @@ const TABS = [
   { path: "/app/settings", label: "Settings" },
 ];
 
+function WorkspaceSwitcher() {
+  const { data } = useApi<{ data: { id: string; name: string; role: string }[] }>("/workspaces");
+  if (!data || data.data.length < 2) return null;
+  const current = currentOrgId() ?? data.data[0]!.id;
+  return (
+    <label className="switcher">
+      Workspace
+      <select value={current} onChange={(e) => switchWorkspace(e.target.value)}>
+        {data.data.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.role})</option>)}
+      </select>
+    </label>
+  );
+}
+
 export function Workspace({ path }: { path: string }) {
   const { data: session, isPending } = authClient.useSession();
   const signedOut = !isPending && !session;
@@ -39,6 +53,7 @@ export function Workspace({ path }: { path: string }) {
 
   return (
     <div className="dash">
+      <WorkspaceSwitcher />
       <nav className="tabs" aria-label="Workspace">
         {TABS.map((t) => (
           <Link key={t.path} to={t.path} className={`tab${path === t.path ? " active" : ""}`}>
