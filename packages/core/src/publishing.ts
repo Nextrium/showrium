@@ -272,3 +272,10 @@ export async function runDuePublishing(deps: PublishDeps, now = new Date(), limi
   }
   return { due: due.length, published, failed };
 }
+
+/** Decrypted, refreshed OAuth tokens for one of this workspace's connections (server-side use only). */
+export async function connectionTokens(deps: PublishDeps, orgId: string, connectionId: string, platform: ConnectionPlatform): Promise<TokenSet | null> {
+  const conn = await loadConnection(deps, orgId, connectionId);
+  if (!conn || conn.platform !== platform || conn.status !== "active") return null;
+  return freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, aad(conn.orgId, conn.platform, conn.accountId)));
+}

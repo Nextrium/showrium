@@ -176,6 +176,26 @@ export const tiktok = {
   },
 };
 
+/** TikTok Content Posting API: send a video to the user's TikTok inbox as a draft (single chunk, up to 64 MB). */
+export async function tiktokInboxUpload(tokens: TokenSet, video: BodyInit, size: number, contentType: string, doFetch: FetchLike = fetch): Promise<{ publishId: string }> {
+  if (size < 1 || size > 64 * 1024 * 1024) throw new PlatformError("TikTok", "rejected", "Videos must be under 64 MB.");
+  const init = await request("TikTok", doFetch, "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json; charset=UTF-8" },
+    body: JSON.stringify({ source_info: { source: "FILE_UPLOAD", video_size: size, chunk_size: size, total_chunk_count: 1 } }),
+  });
+  const out = (await init.json()) as { data?: { publish_id?: string; upload_url?: string }; error?: { code?: string } };
+  if (!out.data?.upload_url || !out.data.publish_id || (out.error?.code && out.error.code !== "ok")) {
+    throw new PlatformError("TikTok", "rejected", "TikTok didn't accept the upload. Check the account is connected with video permissions.");
+  }
+  await request("TikTok", doFetch, out.data.upload_url, {
+    method: "PUT",
+    headers: { "Content-Type": contentType, "Content-Length": String(size), "Content-Range": `bytes 0-${size - 1}/${size}` },
+    body: video,
+  });
+  return { publishId: out.data.publish_id };
+}
+
 // --- Mastodon (per-instance OAuth with PKCE) --------------------------------------------------
 
 export const MASTODON_SCOPES = "read:accounts write:statuses";

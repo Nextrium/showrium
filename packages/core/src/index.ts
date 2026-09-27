@@ -11,3 +11,4 @@ export * from "./plans.js";
 export * from "./safe-fetch.js";
 export * from "./crypto.js";
 export * from "./publishing.js";
+export * from "./video.js";

@@ -378,3 +378,38 @@ export const mastodonApp = sqliteTable("mastodon_app", {
   createdAt: createdAt(),
 });
 
+
+// ---------------------------------------------------------------------------
+// Phase 4: video projects. The AI plans a timeline (JSON); the browser renders it.
+// ---------------------------------------------------------------------------
+
+export type VideoScene =
+  | { kind: "title"; heading: string; body?: string; durationMs: number }
+  | { kind: "text"; body: string; durationMs: number }
+  | { kind: "bullets"; heading?: string; lines: string[]; durationMs: number }
+  | { kind: "code"; heading?: string; code: string; durationMs: number }
+  | { kind: "quote"; body: string; attribution?: string; durationMs: number }
+  | { kind: "outro"; heading: string; body?: string; durationMs: number };
+
+export interface VideoTimeline {
+  title: string;
+  narration: string;
+  aspect: "9:16" | "1:1" | "16:9";
+  scenes: VideoScene[];
+}
+
+export const videoProject = sqliteTable(
+  "video_project",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    draftId: text("draft_id"),
+    contextItemId: text("context_item_id"),
+    timeline: text("timeline", { mode: "json" }).$type<VideoTimeline>().notNull(),
+    model: text("model").notNull(),
+    revisions: integer("revisions").notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("video_org_idx").on(t.orgId, t.createdAt)],
+);

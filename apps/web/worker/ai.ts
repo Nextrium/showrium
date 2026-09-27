@@ -8,7 +8,24 @@ function fakeAllowed(env: Env): boolean {
   return env.LLM_MODE === "fake" && env.BETTER_AUTH_URL.startsWith("http://localhost");
 }
 
+const FAKE_TIMELINE = {
+  title: "Retries that don't hammer your system",
+  narration: "I shipped retries with backoff today. Here is what changed and why it matters for anyone running background jobs.",
+  aspect: "9:16",
+  scenes: [
+    { kind: "title", heading: "Safer retries", body: "queue-lite v1.4.0", durationMs: 5000 },
+    { kind: "bullets", heading: "What changed", lines: ["Exponential backoff", "Jitter", "Dead-letter queue"], durationMs: 8000 },
+    { kind: "code", heading: "The idea", code: "delay = base * 2 ** attempt\ndelay += random(0, jitter)", durationMs: 8000 },
+    { kind: "outro", heading: "Try it", body: "Link in my profile", durationMs: 5000 },
+  ],
+};
+
 function fakeReply(user: string): string {
+  if (user.startsWith("Plan a ") || user.startsWith("Revise this video plan")) {
+    const aspect = user.match(/Plan a (9:16|1:1|16:9)/)?.[1] ?? "9:16";
+    const title = user.includes("shorter title") ? "Shorter" : FAKE_TIMELINE.title;
+    return JSON.stringify({ ...FAKE_TIMELINE, aspect, title });
+  }
   const repair = user.match(/^Rewrite this (\w+) post/);
   if (repair) return JSON.stringify({ text: "A shorter version that fits." });
   const ids = (user.match(/Platform ids: ([^.]+)\./)?.[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean);

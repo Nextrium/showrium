@@ -31,6 +31,9 @@ export interface Env {
   TIKTOK_SANDBOX_CLIENT_SECRET?: string;
   /** "true" on preview: use the TikTok sandbox app. */
   TIKTOK_USE_SANDBOX?: string;
+  /** Phase 4 premium video vendors (secrets; unset until contracts exist). */
+  HEYGEN_API_KEY?: string;
+  VEO_API_KEY?: string;
   /** Platform admins (secret): exact emails allowed to create invites. Unset = nobody. */
   PLATFORM_ADMIN_EMAILS?: string;
   /** Beta sign-up allowlist (secret): emails, "@domain" entries or "*". Unset = no new sign-ups. */

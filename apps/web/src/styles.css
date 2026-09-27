@@ -133,3 +133,7 @@ textarea, select { font: inherit; padding: 10px 12px; border-radius: 8px; border
 textarea { resize: vertical; line-height: 1.5; }
 .issues { margin: 0; padding-left: 18px; font-size: 14px; }
 .items { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+/* Video studio */
+.studio { display: grid; grid-template-columns: minmax(200px, 360px) 1fr; gap: 16px; align-items: start; }
+.studio-canvas { width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); background: #16213a; }
+@media (max-width: 720px) { .studio { grid-template-columns: 1fr; } }

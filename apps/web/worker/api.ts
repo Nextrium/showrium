@@ -17,6 +17,7 @@ import { setCookie } from "hono/cookie";
 import { INVITE_COOKIE } from "./auth.js";
 import { connectionsApi } from "./connections-api.js";
 import { contentApi } from "./content-api.js";
+import { videoApi } from "./video-api.js";
 import { authProviders, signupMode } from "./env.js";
 import { apiError, canManageKeys, requirePrincipal, type AppEnv } from "./principal.js";
 
@@ -429,6 +430,7 @@ api.openapi(
 
 api.route("/", contentApi);
 api.route("/", connectionsApi);
+api.route("/", videoApi);
 
 api.doc31("/openapi.json", {
   openapi: "3.1.0",
