@@ -1,0 +1,2 @@
+# Test-only secret removed in the following commit (vitest now generates one per run).
+67183934c2b69ae930236f68de5a9cd1cd441a8e:apps/web/vitest.config.ts:generic-api-key:13

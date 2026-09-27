@@ -1,4 +1,5 @@
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
+import crypto from "node:crypto";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig(async () => {
@@ -10,7 +11,8 @@ export default defineConfig(async () => {
         miniflare: {
           bindings: {
             TEST_MIGRATIONS: migrations,
-            BETTER_AUTH_SECRET: "test-secret-that-is-at-least-32-characters-long",
+            // Fresh random secret per run; never a fixed value in source.
+            BETTER_AUTH_SECRET: crypto.randomUUID() + crypto.randomUUID(),
           },
         },
       }),
