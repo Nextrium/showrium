@@ -24,18 +24,22 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-  # Deploys main to Cloudflare after checks pass: database migrations first, then the Worker.
-  # Migrations are additive-only (ADR-0002), so the running Worker keeps working in between.
+  # Deploys after checks pass: main -> production (app.showrium.com),
+  # develop -> preview (preview.showrium.com, its own Worker, database and secrets).
+  # Database migrations run first; they are additive-only (ADR-0002), so the running Worker keeps working.
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     needs: [build, secret-scan]
     runs-on: ubuntu-latest
     concurrency:
-      group: deploy-production
+      group: deploy-${{ github.ref_name }}
       cancel-in-progress: false
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TARGET: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+      D1_NAME: ${{ github.ref == 'refs/heads/main' && 'showrium-db' || 'showrium-db-preview' }}
+      APP_URL: ${{ github.ref == 'refs/heads/main' && 'https://app.showrium.com' || 'https://preview.showrium.com' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
@@ -46,17 +50,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Apply database migrations
         working-directory: apps/web
-        run: pnpm exec wrangler d1 migrations apply showrium-db --remote --env production
+        run: pnpm exec wrangler d1 migrations apply "$D1_NAME" --remote --env "$TARGET"
       - name: Build
         working-directory: apps/web
         run: pnpm exec vite build
         env:
-          CLOUDFLARE_ENV: production
+          CLOUDFLARE_ENV: ${{ env.TARGET }}
       - name: Deploy
         working-directory: apps/web
         run: pnpm exec wrangler deploy
       - name: Smoke test
-        run: curl --fail --silent https://app.showrium.com/api/v1/health
+        run: curl --fail --silent --retry 3 --retry-delay 5 "$APP_URL/api/v1/health"
   secret-scan:
     runs-on: ubuntu-latest
     steps:
