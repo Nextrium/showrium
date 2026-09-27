@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { api, authClient, formatDate, navigate, useApi } from "../lib";
+import { api, authClient, formatDate, navigate, useApi, useRedirect } from "../lib";
 
 type Me = { principal: { kind: string; role: string }; workspace: { id: string; name: string; plan: string } };
 type Credits = { balance: number; transactions: { id: string; kind: string; description: string; amount: number; createdAt: string }[] };
@@ -14,10 +14,9 @@ export function Dashboard() {
   const [keyError, setKeyError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  if (!isPending && !session) {
-    navigate("/signin");
-    return null;
-  }
+  const signedOut = !isPending && !session;
+  useRedirect("/signin", signedOut);
+  if (signedOut) return null;
   if (!me.data) return <p className="note">{me.error ?? "Loading your workspace…"}</p>;
 
   const canManageKeys = me.data.principal.role === "owner" || me.data.principal.role === "admin";
@@ -94,7 +93,7 @@ export function Dashboard() {
         <section className="card" aria-labelledby="keys-title">
           <h3 id="keys-title">API keys</h3>
           <p className="note">
-            For developers: call the <a href="/api/v1/openapi.json">Showrium API</a> with{" "}
+            For developers: call the <a href="/api/docs">Showrium API</a> with{" "}
             <code>Authorization: Bearer &lt;key&gt;</code>.
           </p>
           {canManageKeys && (

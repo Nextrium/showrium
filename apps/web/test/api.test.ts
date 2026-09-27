@@ -38,6 +38,12 @@ describe("public endpoints", () => {
     expect(Object.keys(doc.paths)).toContain("/api-keys");
   });
 
+  it("serves a readable API reference page", async () => {
+    const res = await SELF.fetch(`${BASE}/api/docs`);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(await res.text()).toContain("/api/v1/openapi.json");
+  });
+
   it("returns JSON 404 for unknown API routes", async () => {
     const res = await SELF.fetch(`${BASE}/api/v1/nope`);
     expect(res.status).toBe(404);

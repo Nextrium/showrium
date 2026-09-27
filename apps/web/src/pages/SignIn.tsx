@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { authClient, navigate, useApi } from "../lib";
+import { authClient, navigate, useApi, useRedirect } from "../lib";
 
 type Config = { auth: { password: boolean; github: boolean; google: boolean } };
 
@@ -10,10 +10,8 @@ export function SignIn() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (session) {
-    navigate("/app");
-    return null;
-  }
+  useRedirect("/app", Boolean(session));
+  if (session) return null;
 
   const social = async (provider: "github" | "google") => {
     setError(null);

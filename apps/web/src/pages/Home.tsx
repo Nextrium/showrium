@@ -17,8 +17,8 @@ export function Home() {
           <Link to={`${APP_ORIGIN}/signin`} className="button">
             Get started free
           </Link>
-          <a href={`${APP_ORIGIN}/api/v1/openapi.json`} className="button secondary">
-            Read the API spec
+          <a href={`${APP_ORIGIN}/api/docs`} className="button secondary">
+            API docs for developers
           </a>
         </div>
         <div className="platforms" aria-label="Supported platforms">

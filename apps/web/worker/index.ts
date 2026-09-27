@@ -15,6 +15,24 @@ app.use("/api/*", async (c, next) => {
   await next();
 });
 
+// Readable API reference for developers, rendered from the OpenAPI document (Scalar, free, CDN-hosted).
+const SCALAR_VERSION = "1.72.1";
+app.get("/api/docs", (c) =>
+  c.html(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Showrium API reference</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <script id="api-reference" data-url="/api/v1/openapi.json"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@${SCALAR_VERSION}/dist/browser/standalone.js"></script>
+  </body>
+</html>`),
+);
+
 app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env).handler(c.req.raw));
 app.route("/api/v1", api);
 app.all("/api/*", (c) => c.json(apiError("not_found", "No such API route."), 404));

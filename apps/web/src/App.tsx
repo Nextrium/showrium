@@ -37,8 +37,9 @@ function WebsiteNav() {
   );
 }
 
-function AppNav() {
+function AppNav({ path }: { path: string }) {
   const { data: session } = authClient.useSession();
+  if (path === "/app") return null;
   return session ? (
     <Link to="/app" className="button secondary">
       Open dashboard
@@ -50,15 +51,15 @@ function AppNav() {
   );
 }
 
-function TopBar() {
+function TopBar({ path }: { path: string }) {
   return (
     <header className="topbar">
-      <Link to="/" className="brand">
+      <Link to={window.location.hostname === "app.showrium.com" ? "/app" : "/"} className="brand">
         <img src="/favicon.svg" alt="" />
         Showrium
       </Link>
       <nav className="nav" aria-label="Main">
-        {isWebsite ? <WebsiteNav /> : <AppNav />}
+        {isWebsite ? <WebsiteNav /> : <AppNav path={path} />}
       </nav>
     </header>
   );
@@ -77,18 +78,8 @@ function Footer() {
   );
 }
 
-const APP_PATHS = new Set(["/app", "/signin"]);
-
 export function App() {
   const path = usePath();
-  if (isWebsite && APP_PATHS.has(path)) {
-    window.location.replace(`${APP_ORIGIN}${path}`);
-    return null;
-  }
-  if (window.location.hostname === "app.showrium.com" && path === "/") {
-    navigate("/app");
-    return null;
-  }
   const page =
     path === "/app" ? <Dashboard /> :
     path === "/signin" ? <SignIn /> :
@@ -97,7 +88,7 @@ export function App() {
     <Home />;
   return (
     <div className="page">
-      <TopBar />
+      <TopBar path={path} />
       <main>{page}</main>
       <Footer />
     </div>

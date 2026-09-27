@@ -21,10 +21,18 @@ export function usePath(): string {
   const [path, setPath] = useState(window.location.pathname);
   useEffect(() => {
     const onChange = () => setPath(window.location.pathname);
+    onChange(); // pick up any navigation that happened before this listener was attached
     window.addEventListener("popstate", onChange);
     return () => window.removeEventListener("popstate", onChange);
   }, []);
   return path;
+}
+
+/** Navigate after render (navigating during render can be missed). */
+export function useRedirect(to: string, when: boolean) {
+  useEffect(() => {
+    if (when) navigate(to);
+  }, [to, when]);
 }
 
 // --- API client for /api/v1 (same origin, session cookie) ---
