@@ -1,22 +1,37 @@
 import { Link } from "../App";
-import { APP_ORIGIN } from "../lib";
+import { WaitlistForm } from "../components/WaitlistForm";
+import { APP_ORIGIN, useApi } from "../lib";
+
+type Config = { signupMode: "waitlist" | "allowlist" };
 
 const PLATFORMS = ["LinkedIn", "X", "Instagram", "Facebook", "Threads", "TikTok", "YouTube Shorts", "Bluesky", "Mastodon", "Dev.to"];
 
 export function Home() {
+  const { data: config } = useApi<Config>("/config");
+  const waitlist = config?.signupMode !== "allowlist";
   return (
     <>
       <section className="hero">
-        <span className="eyebrow">Private beta</span>
+        <span className="eyebrow">{waitlist ? "Invite-only beta" : "Private beta"}</span>
         <h1>Show what you can do.</h1>
         <p className="lede">
           Showrium turns the work you've already done, the ideas in your head and the things that make you laugh into
           posts made for each platform, written in your own voice. You approve every post.
         </p>
+        {waitlist && (
+          <div className="waitlist">
+            <WaitlistForm />
+            <p className="note">
+              Already invited? <Link to={`${APP_ORIGIN}/signin`}>Sign in</Link>
+            </p>
+          </div>
+        )}
         <div className="actions">
-          <Link to={`${APP_ORIGIN}/signin`} className="button">
-            Get started free
-          </Link>
+          {!waitlist && (
+            <Link to={`${APP_ORIGIN}/signin`} className="button">
+              Get started free
+            </Link>
+          )}
           <a href={`${APP_ORIGIN}/api/docs`} className="button secondary">
             API docs for developers
           </a>

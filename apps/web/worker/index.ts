@@ -18,11 +18,13 @@ app.use(
   }),
 );
 
-// The API lives on the app domain only. Calls that reach the website domain are sent there.
+// The API lives on the app domain. Calls that reach the website domain are sent there, except the
+// two public endpoints the website itself uses (so it never needs cross-site requests or CORS).
+const WEBSITE_API_PATHS = new Set(["/api/v1/config", "/api/v1/waitlist"]);
 app.use("/api/*", async (c, next) => {
   const url = new URL(c.req.url);
   const appOrigin = new URL(c.env.BETTER_AUTH_URL).origin;
-  if (url.origin !== appOrigin && url.origin === new URL(c.env.SITE_URL).origin) {
+  if (url.origin !== appOrigin && url.origin === new URL(c.env.SITE_URL).origin && !WEBSITE_API_PATHS.has(url.pathname)) {
     return c.redirect(`${appOrigin}${url.pathname}${url.search}`, 308);
   }
   await next();
@@ -31,6 +33,7 @@ app.use("/api/*", async (c, next) => {
 // Sign-in attempts: 10 per minute per IP. Other API calls: 120 per minute per IP.
 app.post("/api/auth/*", rateLimit((env) => env.AUTH_LIMITER, "auth"));
 app.use("/api/v1/*", rateLimit((env) => env.API_LIMITER, "api"));
+app.post("/api/v1/waitlist", rateLimit((env) => env.WAITLIST_LIMITER, "waitlist"));
 
 // Readable API reference, rendered from the OpenAPI document by Scalar (CDN-hosted).
 // This page shares the app origin, so the script is pinned with Subresource Integrity and

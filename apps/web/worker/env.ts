@@ -1,3 +1,5 @@
+import { parseSignupMode } from "@nextrium/core";
+
 export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
@@ -7,6 +9,9 @@ export interface Env {
   SITE_URL: string;
   BETTER_AUTH_SECRET: string;
   AUTH_PASSWORD_ENABLED?: string;
+  /** "waitlist" (nobody can self sign-up) or "allowlist". Anything else means waitlist. */
+  SIGNUP_MODE?: string;
+  WAITLIST_LIMITER?: RateLimit;
   /** Beta sign-up allowlist (secret): emails, "@domain" entries or "*". Unset = no new sign-ups. */
   BETA_ALLOWED_EMAILS?: string;
   /** Cloudflare rate limiters. Optional so a missing binding degrades to "allow" (documented fail-open). */
@@ -16,6 +21,10 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+}
+
+export function signupMode(env: Env) {
+  return parseSignupMode(env.SIGNUP_MODE);
 }
 
 export function authProviders(env: Env) {

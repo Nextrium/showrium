@@ -21,3 +21,18 @@ export type PrincipalKind = "user" | "api_key";
 export function canManageApiKeys(kind: PrincipalKind, role: Role | string): boolean {
   return kind === "user" && (role === "owner" || role === "admin");
 }
+
+export type SignupMode = "waitlist" | "allowlist";
+
+/** Reads the configured sign-up mode. Anything unexpected means "waitlist" (fail closed). */
+export function parseSignupMode(value: string | undefined): SignupMode {
+  return value === "allowlist" ? "allowlist" : "waitlist";
+}
+
+/**
+ * Whether a new account may be created. Waitlist mode: nobody (people join the waitlist and get invited).
+ * Allowlist mode: only emails on the allowlist.
+ */
+export function canSignUp(mode: SignupMode, email: string, allowlist: string | undefined): boolean {
+  return mode === "allowlist" && isEmailAllowed(email, allowlist);
+}

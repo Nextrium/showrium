@@ -21,14 +21,17 @@
   ],
   "ratelimits": [
     { "name": "AUTH_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
-    { "name": "API_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } }
+    { "name": "API_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } },
+    { "name": "WAITLIST_LIMITER", "namespace_id": "1005", "simple": { "limit": 5, "period": 60 } }
   ],
   "vars": {
     "BETTER_AUTH_URL": "http://localhost:5173",
     "SITE_URL": "http://localhost:5173",
     // Safe default: off. Password hashing exceeds the free plan's 10 ms CPU limit, so it is
     // enabled only locally (.dev.vars) and in tests. A deploy that misses its env stays safe.
-    "AUTH_PASSWORD_ENABLED": "false"
+    "AUTH_PASSWORD_ENABLED": "false",
+    // Safe default: waitlist (nobody can self sign-up). Preview uses the allowlist.
+    "SIGNUP_MODE": "waitlist"
   },
   "observability": { "enabled": true },
   "env": {
@@ -42,7 +45,8 @@
       "preview_urls": false,
       "ratelimits": [
         { "name": "AUTH_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
-        { "name": "API_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } }
+        { "name": "API_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } },
+    { "name": "WAITLIST_LIMITER", "namespace_id": "1005", "simple": { "limit": 5, "period": 60 } }
       ],
       "d1_databases": [
         {
@@ -55,7 +59,8 @@
       "vars": {
         "BETTER_AUTH_URL": "https://app.showrium.com",
         "SITE_URL": "https://showrium.com",
-        "AUTH_PASSWORD_ENABLED": "false"
+        "AUTH_PASSWORD_ENABLED": "false",
+        "SIGNUP_MODE": "waitlist"
       },
       "observability": { "enabled": true }
     },
@@ -66,7 +71,8 @@
       "preview_urls": false,
       "ratelimits": [
         { "name": "AUTH_LIMITER", "namespace_id": "1003", "simple": { "limit": 10, "period": 60 } },
-        { "name": "API_LIMITER", "namespace_id": "1004", "simple": { "limit": 120, "period": 60 } }
+        { "name": "API_LIMITER", "namespace_id": "1004", "simple": { "limit": 120, "period": 60 } },
+        { "name": "WAITLIST_LIMITER", "namespace_id": "1006", "simple": { "limit": 5, "period": 60 } }
       ],
       "d1_databases": [
         {
@@ -79,7 +85,8 @@
       "vars": {
         "BETTER_AUTH_URL": "https://preview.showrium.com",
         "SITE_URL": "https://preview.showrium.com",
-        "AUTH_PASSWORD_ENABLED": "false"
+        "AUTH_PASSWORD_ENABLED": "false",
+        "SIGNUP_MODE": "allowlist"
       },
       "observability": { "enabled": true }
     }

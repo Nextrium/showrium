@@ -1,8 +1,8 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createDb, schema } from "@nextrium/db";
-import { createPersonalOrg, isEmailAllowed } from "@nextrium/core";
-import { authProviders, type Env } from "./env.js";
+import { canSignUp, createPersonalOrg } from "@nextrium/core";
+import { authProviders, signupMode, type Env } from "./env.js";
 
 // Created per request: D1 and secrets are only available on the request's env.
 export function createAuth(env: Env) {
@@ -32,10 +32,11 @@ export function createAuth(env: Env) {
     databaseHooks: {
       user: {
         create: {
-          // Private beta: only allowlisted emails can create an account. Existing users are unaffected.
+          // Waitlist mode: nobody can self sign-up. Allowlist mode: only allowlisted emails.
+          // Existing users are unaffected (this runs only when an account is created).
           before: async (user) => {
-            if (!isEmailAllowed(user.email, env.BETA_ALLOWED_EMAILS)) {
-              console.warn("sign-up blocked: email not on the beta allowlist");
+            if (!canSignUp(signupMode(env), user.email, env.BETA_ALLOWED_EMAILS)) {
+              console.warn(`sign-up blocked (mode: ${signupMode(env)})`);
               return false;
             }
           },

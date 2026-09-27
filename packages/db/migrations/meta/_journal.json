@@ -15,6 +15,13 @@
       "when": 1790484775143,
       "tag": "0001_silent_bucky",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790488341633,
+      "tag": "0002_handy_scourge",
+      "breakpoints": true
     }
   ]
 }

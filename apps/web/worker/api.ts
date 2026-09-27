@@ -1,6 +1,7 @@
 // Public REST API, version 1. The web app uses exactly this API.
 // OpenAPI document: GET /api/v1/openapi.json
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { createDb } from "@nextrium/db";
 import {
   ApiKeyLimitError,
   createApiKey,
@@ -11,7 +12,8 @@ import {
   recordAudit,
   revokeApiKey,
 } from "@nextrium/core";
-import { authProviders } from "./env.js";
+import { joinWaitlist } from "@nextrium/core";
+import { authProviders, signupMode } from "./env.js";
 import { apiError, canManageKeys, requirePrincipal, type AppEnv } from "./principal.js";
 
 const ErrorSchema = z
@@ -53,13 +55,50 @@ api.openapi(
         description: "Which sign-in methods are available",
         content: {
           "application/json": {
-            schema: z.object({ auth: z.object({ password: z.boolean(), github: z.boolean(), google: z.boolean() }) }),
+            schema: z.object({
+              auth: z.object({ password: z.boolean(), github: z.boolean(), google: z.boolean() }),
+              signupMode: z.enum(["waitlist", "allowlist"]),
+            }),
           },
         },
       },
     },
   }),
-  (c) => c.json({ auth: authProviders(c.env) }, 200),
+  (c) => c.json({ auth: authProviders(c.env), signupMode: signupMode(c.env) }, 200),
+);
+
+api.openapi(
+  createRoute({
+    method: "post",
+    path: "/waitlist",
+    tags: ["System"],
+    request: {
+      body: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: z.object({
+              email: z.email().max(254),
+              // Honeypot: hidden in the form. People leave it empty; bots fill it in.
+              website: z.string().max(200).optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      202: {
+        description: "Received. The same response is returned whether or not the email was already on the list.",
+        content: { "application/json": { schema: z.object({ ok: z.literal(true) }) } },
+      },
+      400: { description: "Invalid email", content: { "application/json": { schema: ErrorSchema } } },
+    },
+  }),
+  async (c) => {
+    const { email, website } = c.req.valid("json");
+    if (!website) await joinWaitlist(createDb(c.env.DB), email);
+    return c.json({ ok: true as const }, 202);
+  },
 );
 
 // --- Authenticated ----------------------------------------------------------

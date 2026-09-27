@@ -14,6 +14,7 @@ export default defineConfig(async () => {
             // Fresh random secret per run; never a fixed value in source.
             BETTER_AUTH_SECRET: crypto.randomUUID() + crypto.randomUUID(),
             AUTH_PASSWORD_ENABLED: "true",
+            SIGNUP_MODE: "allowlist",
             // Only example.com is allowlisted in tests, so blocked sign-ups can be tested too.
             BETA_ALLOWED_EMAILS: "@example.com",
           },

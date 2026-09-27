@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react";
+import { WaitlistForm } from "../components/WaitlistForm";
 import { authClient, navigate, useApi, useRedirect } from "../lib";
 
-type Config = { auth: { password: boolean; github: boolean; google: boolean } };
+type Config = { auth: { password: boolean; github: boolean; google: boolean }; signupMode: "waitlist" | "allowlist" };
 
 export function SignIn() {
   const { data: config } = useApi<Config>("/config");
@@ -10,7 +11,7 @@ export function SignIn() {
   // OAuth failures come back as ?error=... (e.g. an email that isn't on the beta allowlist).
   const [error, setError] = useState<string | null>(() =>
     new URLSearchParams(window.location.search).get("error")
-      ? "We couldn't sign you in. Showrium is in private beta: if you don't have an invite yet, email support@showrium.com."
+      ? "We couldn't sign you in. Showrium is invite-only right now: join the waitlist below, or email support@showrium.com."
       : null,
   );
   const [busy, setBusy] = useState(false);
@@ -97,6 +98,12 @@ export function SignIn() {
       )}
 
       {none && <p className="note">Sign-in opens soon. To join the beta, email support@showrium.com.</p>}
+      {config?.signupMode === "waitlist" && (
+        <div className="waitlist">
+          <p className="note">New here? Showrium is invite-only for now. Join the waitlist and we'll email your invite.</p>
+          <WaitlistForm />
+        </div>
+      )}
       {error && <p className="error" role="alert">{error}</p>}
     </section>
   );
