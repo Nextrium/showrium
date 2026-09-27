@@ -16,5 +16,11 @@
   "devDependencies": {
     "turbo": "^2.11.4",
     "typescript": "^7.0.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "sharp@<0.35.4": "^0.35.4",
+      "esbuild@<=0.24.2": "^0.25.0"
+    }
   }
 }
