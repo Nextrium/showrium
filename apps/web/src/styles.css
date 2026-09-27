@@ -113,3 +113,7 @@ td.num { text-align: right; }
 .legal h2 { font-size: 22px; margin-top: 28px; }
 .legal p, .legal li { color: var(--ink); }
 .draft { border-left: 3px solid var(--accent); background: var(--surface); padding: 10px 14px; border-radius: 0 8px 8px 0; font-size: 14px; }
+
+/* Honeypot field: off-screen, not display:none (some bots skip hidden fields). */
+.hp { position: absolute; left: -10000px; width: 1px; height: 1px; opacity: 0; }
+.waitlist { display: grid; gap: 10px; max-width: 560px; }

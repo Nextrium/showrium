@@ -167,3 +167,16 @@ export const auditEvent = sqliteTable(
   },
   (t) => [index("audit_event_org_idx").on(t.orgId, t.createdAt)],
 );
+
+// ---------------------------------------------------------------------------
+// Waitlist: people asking for access while production is invite-only.
+// Only the email is stored (lowercased), plus when they joined and when they were invited.
+// ---------------------------------------------------------------------------
+
+export const waitlistEntry = sqliteTable("waitlist_entry", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull().unique(),
+  source: text("source").notNull().default("website"),
+  invitedAt: integer("invited_at", { mode: "timestamp_ms" }),
+  createdAt: createdAt(),
+});

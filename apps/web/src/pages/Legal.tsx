@@ -2,7 +2,7 @@
 
 const DraftNote = () => (
   <p className="draft">
-    Draft for the private beta, last updated 27 September 2026 (rev. 2). Questions: legal@showrium.com.
+    Draft for the private beta, last updated 27 September 2026 (rev. 3). Questions: legal@showrium.com.
   </p>
 );
 
@@ -18,6 +18,7 @@ export function Privacy() {
 
       <h2>What we collect</h2>
       <ul>
+        <li><strong>Waitlist:</strong> if you join the waitlist, just your email address, used only to send your invite and product updates you can opt out of.</li>
         <li><strong>Account details:</strong> name, email, profile picture and sign-in method.</li>
         <li><strong>Content you give us:</strong> text, voice notes, links, repositories and files you connect, plus the drafts we create with you.</li>
         <li><strong>Sign-in and connected accounts:</strong> access tokens from GitHub, Google or social platforms, stored encrypted, and the posts, comments and statistics those platforms let us read.</li>
