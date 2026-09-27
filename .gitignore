@@ -19,3 +19,8 @@ blueprint/
 
 # Benchmark output (may contain internal cost data)
 tools/*/out/
+
+# Local Worker secrets
+.dev.vars*
+!.dev.vars.example
+.wrangler/

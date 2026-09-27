@@ -1,0 +1,35 @@
+{
+  "name": "@nextrium/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "deploy": "vite build && wrangler deploy",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@hono/zod-openapi": "1.6.3",
+    "@nextrium/core": "workspace:*",
+    "@nextrium/db": "workspace:*",
+    "better-auth": "1.7.6",
+    "hono": "4.13.9",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.60.2",
+    "@cloudflare/vitest-pool-workers": "0.22.0",
+    "@cloudflare/workers-types": "^5.20260926.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "^7.0.2",
+    "vite": "8.3.1",
+    "vitest": "^4.1.11",
+    "wrangler": "4.141.0"
+  }
+}

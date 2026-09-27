@@ -1,0 +1,20 @@
+{
+  "name": "@nextrium/core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@nextrium/db": "workspace:*",
+    "drizzle-orm": "0.45.3",
+    "ulid": "^3.0.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260926.1",
+    "typescript": "^7.0.2"
+  }
+}

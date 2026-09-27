@@ -23,6 +23,39 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+  # Deploys main to Cloudflare after checks pass: database migrations first, then the Worker.
+  # Migrations are additive-only (ADR-0002), so the running Worker keeps working in between.
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, secret-scan]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Apply database migrations
+        working-directory: apps/web
+        run: pnpm exec wrangler d1 migrations apply showrium-db --remote --env production
+      - name: Build
+        working-directory: apps/web
+        run: pnpm exec vite build
+        env:
+          CLOUDFLARE_ENV: production
+      - name: Deploy
+        working-directory: apps/web
+        run: pnpm exec wrangler deploy
+      - name: Smoke test
+        run: curl --fail --silent https://showrium.abdulrahmanabdulbasit321.workers.dev/api/v1/health
   secret-scan:
     runs-on: ubuntu-latest
     steps:

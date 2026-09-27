@@ -1,0 +1,47 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  // One Worker serves the web app (static assets, free) and the API (/api/*).
+  // Custom domains (showrium.com, api.showrium.com) are attached once in the
+  // Cloudflare dashboard, not here, so deploys need no zone permissions.
+  "name": "showrium",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "showrium-db",
+      "database_id": "025234bd-f294-41ed-bcbf-af7b2a2aad1a",
+      "migrations_dir": "../../packages/db/migrations"
+    }
+  ],
+  "vars": {
+    "BETTER_AUTH_URL": "http://localhost:5173",
+    // Password sign-in hashes on the server, which exceeds the free plan's 10 ms CPU limit.
+    // Enabled locally and in tests only; production uses GitHub/Google sign-in.
+    "AUTH_PASSWORD_ENABLED": "true"
+  },
+  "observability": { "enabled": true },
+  "env": {
+    "production": {
+      "name": "showrium",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "showrium-db",
+          "database_id": "025234bd-f294-41ed-bcbf-af7b2a2aad1a",
+          "migrations_dir": "../../packages/db/migrations"
+        }
+      ],
+      "vars": {
+        "BETTER_AUTH_URL": "https://showrium.abdulrahmanabdulbasit321.workers.dev",
+        "AUTH_PASSWORD_ENABLED": "false"
+      },
+      "observability": { "enabled": true }
+    }
+  }
+}

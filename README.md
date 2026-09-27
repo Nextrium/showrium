@@ -21,7 +21,12 @@ Requires Node 22 and pnpm 10.
 
 ```bash
 pnpm install
-pnpm dev
+pnpm test
+pnpm --filter @nextrium/web dev
 ```
+
+- Live preview: https://showrium.abdulrahmanabdulbasit321.workers.dev
+- API spec: `/api/v1/openapi.json`
+- Setup details: [apps/web/README.md](apps/web/README.md)
 
 Proprietary. © Nextrium. All rights reserved.
