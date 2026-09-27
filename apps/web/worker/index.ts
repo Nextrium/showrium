@@ -5,7 +5,8 @@ import { createAuth } from "./auth.js";
 import { apiError, type AppEnv } from "./principal.js";
 import { rateLimit } from "./rate-limit.js";
 import { createDb } from "@nextrium/db";
-import { runDuePublishing } from "@nextrium/core";
+import { pruneExpiredOAuthStates, recoverStuckPublishing, runAutopilot, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
+import { aiProviders } from "./ai.js";
 import { publishDeps } from "./connections-api.js";
 
 const app = new Hono<AppEnv>();
@@ -76,14 +77,34 @@ app.onError((err, c) => {
   return c.json(apiError("internal_error", "Something went wrong on our side. Please try again."), 500);
 });
 
-// Cron trigger (every 5 minutes in deployed environments): publish scheduled posts that are due.
-async function scheduled(_event: ScheduledController, env: AppEnv["Bindings"], ctx: ExecutionContext) {
-  if (!env.TOKEN_ENCRYPTION_KEY) return;
+// Two cron triggers, each its own invocation so each stays inside the free plan's per-invocation
+// limits (50 D1 queries, 50 outbound requests):
+//   "*/5 * * * *"      publishes due posts (at most 5 per run);
+//   "2-59/5 * * * *"   runs one background job, taking turns.
+export const PUBLISH_CRON = "*/5 * * * *";
+const JOBS = ["sources", "autopilot", "engagement", "housekeeping"] as const;
+export function cronJob(scheduledTime: number) {
+  return JOBS[Math.floor(scheduledTime / 300_000) % JOBS.length]!;
+}
+
+async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ctx: ExecutionContext) {
+  const db = createDb(env.DB);
+  const now = new Date(event.scheduledTime);
   ctx.waitUntil(
     (async () => {
-      const deps = await publishDeps(env, createDb(env.DB));
-      const result = await runDuePublishing(deps);
-      if (result.due) console.log("scheduled publishing", result);
+      if (event.cron === PUBLISH_CRON) {
+        if (!env.TOKEN_ENCRYPTION_KEY) return;
+        const result = await runDuePublishing(await publishDeps(env, db), now, 5);
+        if (result.due) console.log("scheduled publishing", result);
+        return;
+      }
+      const job = cronJob(event.scheduledTime);
+      const result =
+        job === "sources" ? await runSourcePolling(db, { githubToken: env.GITHUB_TOKEN }, now)
+        : job === "autopilot" ? await runAutopilot(db, aiProviders(env), now)
+        : job === "engagement" ? await runEngagementSync(db, fetch, now)
+        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now) };
+      console.log("cron", job, result);
     })(),
   );
 }

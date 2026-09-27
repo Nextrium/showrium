@@ -413,3 +413,93 @@ export const videoProject = sqliteTable(
   },
   (t) => [index("video_org_idx").on(t.orgId, t.createdAt)],
 );
+
+// ---------------------------------------------------------------------------
+// Phase 5: autonomy and learning. Ideas from sources, autopilot rules, engagement, insights.
+// ---------------------------------------------------------------------------
+
+export const IDEA_STATUSES = ["new", "drafted", "dismissed"] as const;
+/** A post-worthy moment found in a source (a release, a new article). */
+export const idea = sqliteTable(
+  "idea",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    contextItemId: text("context_item_id").notNull().references(() => contextItem.id, { onDelete: "cascade" }),
+    reason: text("reason").notNull(),
+    score: integer("score").notNull().default(0),
+    status: text("status", { enum: IDEA_STATUSES }).notNull().default("new"),
+    draftedAt: integer("drafted_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("idea_org_context_uq").on(t.orgId, t.contextItemId), index("idea_org_status_idx").on(t.orgId, t.status, t.score)],
+);
+
+/** 0 coach (ideas only), 1 drafts, 2 batch (drafts + approve in one tap), 3 autopilot (schedules clean posts). */
+export const AUTOPILOT_LEVELS = ["coach", "drafts", "batch", "autopilot"] as const;
+export type AutopilotLevel = (typeof AUTOPILOT_LEVELS)[number];
+export const autopilot = sqliteTable(
+  "autopilot",
+  {
+    orgId: text("org_id").primaryKey().references(() => org.id, { onDelete: "cascade" }),
+    level: text("level", { enum: AUTOPILOT_LEVELS }).notNull().default("coach"),
+    mode: text("mode", { enum: CONTENT_MODES }).notNull().default("build_in_public"),
+    platforms: text("platforms", { mode: "json" }).$type<Platform[]>().notNull().default(sql`'[]'`),
+    postsPerWeek: integer("posts_per_week").notNull().default(3),
+    /** Hour of day (UTC) that autopilot schedules posts for. */
+    publishHourUtc: integer("publish_hour_utc").notNull().default(14),
+    lastRunAt: integer("last_run_at", { mode: "timestamp_ms" }),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("autopilot_run_idx").on(t.level, t.lastRunAt)],
+);
+
+/** Replies and comments on published posts: from platform APIs (Bluesky, Mastodon) or pasted by the user. */
+export const engagement = sqliteTable(
+  "engagement",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    draftId: text("draft_id").notNull().references(() => draft.id, { onDelete: "cascade" }),
+    platform: text("platform", { enum: PLATFORMS }).notNull(),
+    origin: text("origin", { enum: ["api", "manual"] }).notNull(),
+    /** Platform id of the reply (dedup); null for pasted comments. */
+    externalId: text("external_id"),
+    author: text("author").notNull().default(""),
+    text: text("text").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("engagement_org_external_uq").on(t.orgId, t.externalId), index("engagement_org_created_idx").on(t.orgId, t.createdAt), index("engagement_draft_idx").on(t.draftId)],
+);
+
+/** Post metrics, refreshed by the listener or entered by the user. */
+export const postMetrics = sqliteTable("post_metrics", {
+  draftId: text("draft_id").primaryKey().references(() => draft.id, { onDelete: "cascade" }),
+  orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+  likes: integer("likes").notNull().default(0),
+  replies: integer("replies").notNull().default(0),
+  reposts: integer("reposts").notNull().default(0),
+  checkedAt: integer("checked_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+export type InsightTheme = {
+  label: string;
+  kind: "question" | "objection" | "praise" | "request" | "other";
+  count: number;
+  examples: string[];
+  suggestion: string;
+};
+/** What the audience is saying, clustered by the AI from recent comments. */
+export const insight = sqliteTable(
+  "insight",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    themes: text("themes", { mode: "json" }).$type<InsightTheme[]>().notNull(),
+    basedOn: integer("based_on").notNull(),
+    model: text("model").notNull(),
+    costMicroUsd: integer("cost_micro_usd").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index("insight_org_idx").on(t.orgId, t.createdAt)],
+);

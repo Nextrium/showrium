@@ -26,6 +26,7 @@ import {
   removeSource,
   savePersona,
   SourceLimitError,
+  syncSource,
   UnsafeUrlError,
   updateDraft,
   type Permission,
@@ -262,16 +263,8 @@ contentApi.openapi(
     const { orgId } = c.get("principal");
     const src = await getSource(c.get("db"), orgId, c.req.valid("param").id);
     if (!src) return c.json(apiError("not_found", "No such source in this workspace."), 404);
-    try {
-      const items = src.kind === "github_repo" ? await ingestGithubReleases(src.key, { token: c.env.GITHUB_TOKEN }) : await ingestFeed(src.key);
-      const added = await addContextItems(c.get("db"), orgId, src.kind === "github_repo" ? "github_release" : "rss_item", items, src.id);
-      await markSourceChecked(c.get("db"), orgId, src.id, null);
-      return c.json({ added: added.length, error: null }, 200);
-    } catch (error) {
-      const message = error instanceof Error ? error.message.slice(0, 300) : "Sync failed.";
-      await markSourceChecked(c.get("db"), orgId, src.id, message);
-      return c.json({ added: 0, error: message }, 200);
-    }
+    const out = await syncSource(c.get("db"), src, { githubToken: c.env.GITHUB_TOKEN });
+    return c.json({ added: out.added, error: out.error }, 200);
   },
 );
 

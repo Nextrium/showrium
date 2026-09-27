@@ -279,3 +279,23 @@ export async function connectionTokens(deps: PublishDeps, orgId: string, connect
   if (!conn || conn.platform !== platform || conn.status !== "active") return null;
   return freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, aad(conn.orgId, conn.platform, conn.accountId)));
 }
+
+/** Housekeeping: removes OAuth states that expired without being used (abandoned sign-ins). */
+export async function pruneExpiredOAuthStates(db: Db, now = new Date()) {
+  const removed = await db.delete(oauthState).where(lte(oauthState.expiresAt, now)).returning({ state: oauthState.state });
+  return removed.length;
+}
+
+/**
+ * Housekeeping: a post stays "publishing" only if its run died mid-way (limits, deploy, crash).
+ * After 15 minutes it becomes "failed" with a note; we can't know whether the platform received it,
+ * so the user checks before retrying rather than risking a duplicate.
+ */
+export async function recoverStuckPublishing(db: Db, now = new Date()) {
+  const stuck = await db
+    .update(draft)
+    .set({ status: "failed", lastError: "Publishing was interrupted. Check the platform before trying again.", updatedAt: now })
+    .where(and(eq(draft.status, "publishing"), lte(draft.updatedAt, new Date(now.getTime() - 15 * 60_000))))
+    .returning({ id: draft.id });
+  return stuck.length;
+}

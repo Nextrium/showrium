@@ -21,6 +21,9 @@ const FAKE_TIMELINE = {
 };
 
 function fakeReply(user: string): string {
+  if (user.startsWith("Group these")) {
+    return JSON.stringify({ themes: [{ label: "How retries work", kind: "question", count: 3, examples: ["How is the delay chosen?"], suggestion: "Explain how the retry delay grows and why jitter helps." }] });
+  }
   if (user.startsWith("Plan a ") || user.startsWith("Revise this video plan")) {
     const aspect = user.match(/Plan a (9:16|1:1|16:9)/)?.[1] ?? "9:16";
     const title = user.includes("shorter title") ? "Shorter" : FAKE_TIMELINE.title;

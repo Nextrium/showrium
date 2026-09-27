@@ -1,3 +1,279 @@
+import { useEffect, useState, type FormEvent } from "react";
+import { api, formatDate, useApi } from "../../lib";
+import { MODES, type Draft, type Persona, type Platform } from "./shared";
+
+type Idea = { id: string; reason: string; score: number; title: string; body: string; url: string | null; createdAt: string };
+type Autopilot = { level: "coach" | "drafts" | "batch" | "autopilot"; mode: string; platforms: Platform[]; postsPerWeek: number; publishHourUtc: number; lastRunAt: string | null };
+type Theme = { label: string; kind: string; count: number; examples: string[]; suggestion: string };
+type Insight = { id: string; themes: Theme[]; basedOn: number; createdAt: string } | null;
+type Analytics = {
+  statuses: Record<string, number>;
+  platforms: { platform: string; posts: number; likes: number; replies: number; reposts: number }[];
+  modes: { mode: string; posts: number; avgScore: number }[];
+  perWeek: number[];
+  top: { id: string; platform: string; text: string; url: string | null; score: number }[];
+  aiCostUsdThisMonth: number;
+  newIdeas: number;
+};
+
+const LEVELS = [
+  { id: "coach", label: "Coach", hint: "Ideas only. You decide what to write." },
+  { id: "drafts", label: "Drafts", hint: "Showrium writes posts from your best ideas. You approve each one." },
+  { id: "batch", label: "Batch", hint: "Posts are written for you; approve them all in one tap in Drafts." },
+  { id: "autopilot", label: "Autopilot", hint: "Clean posts are scheduled to your connected accounts. You can cancel any time before they go out. Never X, never replies." },
+] as const;
+
+const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
+
+function Ideas({ platforms }: { platforms: Platform[] }) {
+  const { data, reload } = useApi<{ data: Idea[] }>("/ideas");
+  const [mode, setMode] = useState<string>("build_in_public");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const act = async (id: string, what: "compose" | "dismiss") => {
+    setBusy(id);
+    setError(null);
+    setMessage(null);
+    try {
+      if (what === "compose") {
+        const out = await api<{ drafts: unknown[] }>(`/ideas/${id}/compose`, { method: "POST", body: JSON.stringify({ mode, platforms }) });
+        setMessage(`${out.drafts.length} post${out.drafts.length === 1 ? "" : "s"} written. Find them in Drafts.`);
+      } else await api(`/ideas/${id}/dismiss`, { method: "POST" });
+      reload();
+    } catch (err) {
+      setError(errorText(err, "That didn't work."));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h3>Ideas</h3>
+      <p className="note">Post-worthy moments found in your sources (checked every few hours) and in what your audience asks.</p>
+      <label>
+        Write them as
+        <select value={mode} onChange={(e) => setMode(e.target.value)}>
+          {MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+        </select>
+      </label>
+      {!platforms.length && <p className="note">Choose your platforms in Voice to write posts from ideas.</p>}
+      <ul className="items">
+        {data?.data.map((i) => (
+          <li key={i.id}>
+            <strong>{i.reason}</strong>
+            {i.body && <p className="note">{i.body.slice(0, 200)}{i.body.length > 200 ? "…" : ""}</p>}
+            <div className="row">
+              <button className="button" disabled={Boolean(busy) || !platforms.length} onClick={() => act(i.id, "compose")}>{busy === i.id ? "Writing…" : "Write posts"}</button>
+              <button className="button secondary" disabled={Boolean(busy)} onClick={() => act(i.id, "dismiss")}>Not now</button>
+              {i.url && <a className="note" href={i.url} target="_blank" rel="noreferrer">Source</a>}
+            </div>
+          </li>
+        ))}
+        {data?.data.length === 0 && <li className="muted">No new ideas. Connect a repository or feed in Sources, and ideas appear here.</li>}
+      </ul>
+      {message && <p className="note" role="status">{message}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
+function AutopilotCard({ persona }: { persona: Persona | null }) {
+  const { data, reload } = useApi<Autopilot>("/autopilot");
+  const [form, setForm] = useState<Autopilot | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (data) setForm(data);
+  }, [data]);
+  if (!form) return null;
+
+  const offset = -new Date().getTimezoneOffset() / 60;
+  const localHour = (form.publishHourUtc + offset + 24) % 24;
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSaved(false);
+    try {
+      const { lastRunAt: _ignored, ...body } = form;
+      await api("/autopilot", { method: "PUT", body: JSON.stringify(body) });
+      setSaved(true);
+      reload();
+    } catch (err) {
+      setError(errorText(err, "Couldn't save."));
+    }
+  };
+  const toggle = (p: Platform) => setForm({ ...form, platforms: form.platforms.includes(p) ? form.platforms.filter((x) => x !== p) : [...form.platforms, p] });
+
+  return (
+    <section className="card">
+      <h3>How much Showrium does for you</h3>
+      <form className="form" onSubmit={save}>
+        <fieldset className="fieldset">
+          {LEVELS.map((l) => (
+            <label key={l.id} className="check">
+              <input type="radio" name="level" checked={form.level === l.id} disabled={l.id === "autopilot" && persona?.monetizationSafe} onChange={() => setForm({ ...form, level: l.id })} />
+              <span><strong>{l.label}</strong> <span className="note">{l.hint}</span></span>
+            </label>
+          ))}
+        </fieldset>
+        {persona?.monetizationSafe && <p className="note">Monetization-safe mode is on, so every post needs your approval and full autopilot is off.</p>}
+        {form.level !== "coach" && (
+          <>
+            <fieldset className="fieldset">
+              <legend>Platforms</legend>
+              {(persona?.platforms ?? []).map((p) => (
+                <label key={p} className="check"><input type="checkbox" checked={form.platforms.includes(p)} onChange={() => toggle(p)} /> {p}</label>
+              ))}
+            </fieldset>
+            <div className="row">
+              <label>Style<select value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>{MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
+              <label>Ideas per week<input type="number" min={1} max={14} value={form.postsPerWeek} onChange={(e) => setForm({ ...form, postsPerWeek: Number(e.target.value) })} /></label>
+              {form.level === "autopilot" && (
+                <label>Post at (UTC hour)<input type="number" min={0} max={23} value={form.publishHourUtc} onChange={(e) => setForm({ ...form, publishHourUtc: Number(e.target.value) })} /></label>
+              )}
+            </div>
+            {form.level === "autopilot" && <p className="note">That's about {String(localHour).padStart(2, "0")}:00 your time. Only posts with no warnings are scheduled; everything else waits in Drafts.</p>}
+          </>
+        )}
+        <button className="button">Save</button>
+        {data?.lastRunAt && <p className="note">Last run {formatDate(data.lastRunAt)}.</p>}
+        {saved && <p className="note" role="status">Saved.</p>}
+        {error && <p className="error" role="alert">{error}</p>}
+      </form>
+    </section>
+  );
+}
+
+function Stats() {
+  const { data } = useApi<Analytics>("/analytics");
+  if (!data) return null;
+  const max = Math.max(1, ...data.perWeek);
+  return (
+    <section className="card">
+      <h3>How it's going</h3>
+      <div className="row stats">
+        <div><strong>{data.statuses.published ?? 0}</strong><span className="note">published</span></div>
+        <div><strong>{(data.statuses.draft ?? 0) + (data.statuses.approved ?? 0)}</strong><span className="note">waiting</span></div>
+        <div><strong>{data.statuses.scheduled ?? 0}</strong><span className="note">scheduled</span></div>
+        <div><strong>{data.newIdeas}</strong><span className="note">new ideas</span></div>
+      </div>
+      <p className="note">Posts published per week (last 8 weeks)</p>
+      <div className="bars" role="img" aria-label={`Posts per week: ${data.perWeek.join(", ")}`}>
+        {data.perWeek.map((v, i) => <span key={i} style={{ height: `${Math.max(4, (v / max) * 100)}%` }} title={`${v}`} />)}
+      </div>
+      {data.platforms.length > 0 && (
+        <div className="table-wrap"><table>
+          <thead><tr><th>Last 30 days</th><th>Posts</th><th>Likes</th><th>Replies</th><th>Reposts</th></tr></thead>
+          <tbody>{data.platforms.map((p) => <tr key={p.platform}><td>{p.platform}</td><td>{p.posts}</td><td>{p.likes}</td><td>{p.replies}</td><td>{p.reposts}</td></tr>)}</tbody>
+        </table></div>
+      )}
+      {data.top.length > 0 && (
+        <>
+          <p className="note">Best posts</p>
+          <ul className="items">{data.top.map((t) => <li key={t.id}>{t.url ? <a href={t.url} target="_blank" rel="noreferrer">{t.text}</a> : t.text} <span className="muted">· {t.platform} · score {t.score}</span></li>)}</ul>
+        </>
+      )}
+      <p className="note">Counts come from Bluesky and Mastodon automatically, and from the numbers you enter for other platforms.</p>
+    </section>
+  );
+}
+
+function Audience({ onIdea }: { onIdea: () => void }) {
+  const { data, reload } = useApi<{ insight: Insight }>("/insights");
+  const published = useApi<{ data: Draft[] }>("/drafts?status=published");
+  const comments = useApi<{ data: { id: string; platform: string; author: string; text: string; origin: string }[] }>("/engagement");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (fn: () => Promise<string>) => {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      setMessage(await fn());
+    } catch (err) {
+      setError(errorText(err, "That didn't work."));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const refresh = () => run(async () => (await api("/insights/refresh", { method: "POST" }), reload(), "Updated."));
+  const makeIdea = (i: number) => run(async () => (await api(`/insights/${data!.insight!.id}/themes/${i}/idea`, { method: "POST" }), onIdea(), "Added to Ideas."));
+  const paste = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const f = new FormData(form);
+    const num = (k: string) => (f.get(k) ? Number(f.get(k)) : undefined);
+    return run(async () => {
+      const lines = String(f.get("comments") ?? "").split("\n").map((s) => s.trim()).filter(Boolean);
+      await api(`/drafts/${String(f.get("draftId"))}/engagement`, { method: "POST", body: JSON.stringify({ comments: lines, likes: num("likes"), replies: num("replies"), reposts: num("reposts") }) });
+      form.reset();
+      comments.reload();
+      return "Saved.";
+    });
+  };
+  const insight = data?.insight;
+
+  return (
+    <section className="card">
+      <h3>What your audience is saying</h3>
+      <div className="row">
+        <button className="button secondary" disabled={busy} onClick={refresh}>{busy ? "Working…" : "Find themes in comments"}</button>
+        {insight && <span className="note">From {insight.basedOn} comments · {formatDate(insight.createdAt)}</span>}
+      </div>
+      {insight?.themes.length === 0 && <p className="note">No clear themes yet.</p>}
+      <ul className="items">
+        {insight?.themes.map((t, i) => (
+          <li key={i}>
+            <strong>{t.label}</strong> <span className="chip">{t.kind}</span> <span className="muted">· {t.count}</span>
+            {t.examples.length > 0 && <p className="note">"{t.examples.join('" · "')}"</p>}
+            <p>{t.suggestion}</p>
+            <button className="button secondary" disabled={busy} onClick={() => makeIdea(i)}>Make this an idea</button>
+          </li>
+        ))}
+      </ul>
+
+      <details>
+        <summary>Add comments from LinkedIn, X, TikTok or elsewhere</summary>
+        <p className="note">These platforms don't let apps read comments, so paste them here (one per line). Only you see them; they're used to find themes.</p>
+        <form className="form" onSubmit={paste}>
+          <label>Post<select name="draftId" required>{published.data?.data.map((d) => <option key={d.id} value={d.id}>{d.platform}: {d.text.slice(0, 60)}</option>)}</select></label>
+          <label>Comments<textarea name="comments" rows={4} maxLength={50_000} /></label>
+          <div className="row">
+            <label>Likes<input name="likes" type="number" min={0} /></label>
+            <label>Replies<input name="replies" type="number" min={0} /></label>
+            <label>Reposts<input name="reposts" type="number" min={0} /></label>
+          </div>
+          <button className="button" disabled={busy || !published.data?.data.length}>Save</button>
+        </form>
+      </details>
+
+      {comments.data && comments.data.data.length > 0 && (
+        <details>
+          <summary>Recent comments ({comments.data.data.length})</summary>
+          <ul className="items">{comments.data.data.slice(0, 30).map((c) => <li key={c.id}><span className="muted">{c.platform} {c.author}</span> {c.text}</li>)}</ul>
+        </details>
+      )}
+      {message && <p className="note" role="status">{message}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
 export function InsightsPage() {
-  return <p className="note">Coming in the next update.</p>;
+  const { data } = useApi<{ persona: Persona | null }>("/persona");
+  const persona = data?.persona ?? null;
+  const [ideasVersion, setIdeasVersion] = useState(0);
+  return (
+    <div className="dash">
+      <Ideas key={ideasVersion} platforms={persona?.platforms ?? []} />
+      <Stats />
+      <Audience onIdea={() => setIdeasVersion((v) => v + 1)} />
+      <AutopilotCard persona={persona} />
+    </div>
+  );
 }

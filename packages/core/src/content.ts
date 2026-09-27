@@ -25,6 +25,7 @@ import {
 } from "@nextrium/llm";
 import { checkFacts, hasErrors, lintPost, type LintIssue } from "@nextrium/policy";
 import { getBalance, InsufficientCreditsError, postCreditTxn } from "./credits.js";
+import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
 import type { IngestedItem } from "./ingest.js";
 import { addUsage, CREDITS_PER_EXTRA_POST, getUsage, PLAN_LIMITS, type Plan } from "./plans.js";
@@ -58,7 +59,11 @@ export async function addContextItems(
   if (!items.length) return [];
   const rows = items.map((i) => ({ id: newId("ctx"), orgId, sourceId, kind, title: i.title, body: i.body, url: i.url, externalId: i.externalId }));
   // Items already seen from a source (same externalId) are skipped, not duplicated.
-  return db.insert(contextItem).values(rows).onConflictDoNothing({ target: [contextItem.orgId, contextItem.externalId] }).returning({ id: contextItem.id, title: contextItem.title });
+  const added: { id: string; title: string }[] = [];
+  for (const part of chunkRows(rows, 8)) {
+    added.push(...(await db.insert(contextItem).values(part).onConflictDoNothing({ target: [contextItem.orgId, contextItem.externalId] }).returning({ id: contextItem.id, title: contextItem.title })));
+  }
+  return added;
 }
 
 export async function listContextItems(db: Db, orgId: string, limit = 50) {

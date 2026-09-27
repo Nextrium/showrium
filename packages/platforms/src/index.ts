@@ -297,3 +297,57 @@ export function intentUrl(platform: string, text: string, meta: { mastodonInstan
       return null; // Facebook, Instagram, TikTok, YouTube: copy the text and open the app.
   }
 }
+
+// --- Engagement readers (public, read-only endpoints; no tokens needed) ---------------------
+
+export interface PostEngagement {
+  likes: number;
+  replies: number;
+  reposts: number;
+  /** Direct replies, newest first, at most 50. Text is plain (HTML removed). */
+  comments: { externalId: string; author: string; text: string }[];
+}
+
+const plain = (html: string) =>
+  html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim();
+const count = (n: unknown) => (typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0);
+
+/** Bluesky: counts and direct replies from the public AppView. */
+export async function blueskyEngagement(uri: string, doFetch: FetchLike = fetch): Promise<PostEngagement> {
+  if (!/^at:\/\/did:[a-z0-9:._-]+\/app\.bsky\.feed\.post\/[a-z0-9]+$/i.test(uri)) throw new PlatformError("Bluesky", "rejected", "That isn't a Bluesky post address.");
+  const q = new URLSearchParams({ uri, depth: "1", parentHeight: "0" });
+  const res = await request("Bluesky", doFetch, `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?${q}`, {});
+  type P = { uri: string; author?: { handle?: string }; record?: { text?: string }; likeCount?: number; replyCount?: number; repostCount?: number; quoteCount?: number };
+  const data = (await res.json()) as { thread?: { post?: P; replies?: { post?: P }[] } };
+  const post = data.thread?.post;
+  const comments = (data.thread?.replies ?? [])
+    .map((r) => r.post)
+    .filter((p): p is P => Boolean(p?.uri && p.record?.text))
+    .slice(0, 50)
+    .map((p) => ({ externalId: p.uri, author: `@${p.author?.handle ?? "unknown"}`, text: String(p.record!.text).slice(0, 2000) }));
+  return { likes: count(post?.likeCount), replies: count(post?.replyCount), reposts: count(post?.repostCount) + count(post?.quoteCount), comments };
+}
+
+/** Mastodon: counts and direct replies for a public status on the account's instance. */
+export async function mastodonEngagement(instance: string, statusId: string, doFetch: FetchLike = fetch): Promise<PostEngagement> {
+  if (!/^[a-z0-9.-]+$/i.test(instance) || !/^\d{1,30}$/.test(statusId)) throw new PlatformError("Mastodon", "rejected", "That isn't a Mastodon post address.");
+  const base = `https://${instance}/api/v1/statuses/${statusId}`;
+  const status = (await (await request("Mastodon", doFetch, base, {})).json()) as { favourites_count?: number; replies_count?: number; reblogs_count?: number };
+  type S = { id: string; in_reply_to_id?: string | null; content?: string; account?: { acct?: string } };
+  const context = (await (await request("Mastodon", doFetch, `${base}/context`, {})).json()) as { descendants?: S[] };
+  const comments = (context.descendants ?? [])
+    .filter((s) => s.in_reply_to_id === statusId && s.content)
+    .slice(-50)
+    .reverse()
+    .map((s) => ({ externalId: `mastodon:${instance}:${s.id}`, author: `@${s.account?.acct ?? "unknown"}`, text: plain(s.content!).slice(0, 2000) }));
+  return { likes: count(status.favourites_count), replies: count(status.replies_count), reposts: count(status.reblogs_count), comments };
+}

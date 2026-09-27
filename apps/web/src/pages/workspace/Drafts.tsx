@@ -78,6 +78,21 @@ export function DraftCard({ draft, onChange }: { draft: Draft; onChange: (d: Dra
 export function DraftsPage() {
   const [status, setStatus] = useState<string>("draft");
   const { data, reload } = useApi<{ data: Draft[] }>(`/drafts?status=${status}`);
+  const [bulk, setBulk] = useState<string | null>(null);
+  const ready = (data?.data ?? []).filter((d) => d.status === "draft" && d.issues.length === 0);
+
+  // Batch approval: approves every draft without errors in one tap (at most 50 at a time).
+  const approveAll = async () => {
+    setBulk("Approving…");
+    try {
+      const out = await api<{ approved: string[]; skipped: { reason: string }[] }>("/drafts/bulk-approve", { method: "POST", body: JSON.stringify({ ids: ready.slice(0, 50).map((d) => d.id) }) });
+      setBulk(`Approved ${out.approved.length}.${out.skipped.length ? ` Skipped ${out.skipped.length}: ${out.skipped[0]!.reason}` : ""}`);
+      reload();
+    } catch (err) {
+      setBulk(err instanceof Error ? err.message : "Couldn't approve.");
+    }
+  };
+
   return (
     <div className="dash">
       <div className="tabs small caps">
@@ -85,6 +100,12 @@ export function DraftsPage() {
           <button key={s} className={`tab${s === status ? " active" : ""}`} onClick={() => setStatus(s)}>{s}</button>
         ))}
       </div>
+      {status === "draft" && ready.length > 1 && (
+        <div className="row">
+          <button className="button" disabled={bulk === "Approving…"} onClick={approveAll}>Approve all {Math.min(50, ready.length)} posts with no warnings</button>
+          {bulk && <span className="note" role="status">{bulk}</span>}
+        </div>
+      )}
       {data?.data.length === 0 && <p className="note">Nothing here yet.</p>}
       {data?.data.map((d) => <DraftCard key={d.id} draft={d} onChange={() => reload()} />)}
     </div>

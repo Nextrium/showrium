@@ -20,6 +20,8 @@ export function apiError(code: string, message: string) {
 }
 
 export const requirePrincipal = createMiddleware<AppEnv>(async (c, next) => {
+  // Several sub-apps guard overlapping paths (e.g. /drafts/*); resolve the caller only once.
+  if (c.get("principal")) return next();
   const db = createDb(c.env.DB);
   c.set("db", db);
 

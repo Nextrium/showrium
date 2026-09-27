@@ -59,7 +59,9 @@ export function parseFeed(xml: string): IngestedItem[] {
   const blocks = xml.match(/<item[\s>][\s\S]*?<\/item>|<entry[\s>][\s\S]*?<\/entry>/gi) ?? [];
   for (const block of blocks.slice(0, 20)) {
     const atomLink = block.match(/<link[^>]+href=["']([^"']+)["']/i)?.[1] ?? null;
-    const link = pick(block, "link") || atomLink;
+    const rawLink = decodeEntities(pick(block, "link") || atomLink || "").trim();
+    // Feeds are outside input: keep only web links (never javascript: or data: URLs).
+    const link = /^https?:\/\//i.test(rawLink) ? rawLink.slice(0, 2000) : null;
     const title = stripTags(pick(block, "title"));
     const body = stripTags(pick(block, "content:encoded") || pick(block, "description") || pick(block, "content") || pick(block, "summary"));
     const guid = pick(block, "guid") || pick(block, "id") || link || title;
