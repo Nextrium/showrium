@@ -16,6 +16,8 @@ export default defineConfig(async () => {
             AUTH_PASSWORD_ENABLED: "true",
             SIGNUP_MODE: "allowlist",
             PLATFORM_ADMIN_EMAILS: "admin@example.com",
+            // Deterministic AI stand-in (honoured only on localhost).
+            LLM_MODE: "fake",
             // Only example.com is allowlisted in tests, so blocked sign-ups can be tested too.
             BETA_ALLOWED_EMAILS: "@example.com",
           },

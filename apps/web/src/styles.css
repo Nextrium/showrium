@@ -117,3 +117,19 @@ td.num { text-align: right; }
 /* Honeypot field: off-screen, not display:none (some bots skip hidden fields). */
 .hp { position: absolute; left: -10000px; width: 1px; height: 1px; opacity: 0; }
 .waitlist { display: grid; gap: 10px; max-width: 560px; }
+
+/* Workspace */
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.tab { font: 500 14px/1 var(--body); padding: 8px 12px; border-radius: 6px; color: var(--muted); text-decoration: none; background: none; border: 1px solid transparent; cursor: pointer; }
+.tab:hover { color: var(--ink); }
+.tab.active { color: var(--ink); background: var(--surface); border-color: var(--line); }
+.tabs.small .tab { font-size: 13px; padding: 6px 10px; }
+.tabs.caps .tab { text-transform: capitalize; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
+.chip-check { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; background: var(--surface); }
+.fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+textarea, select { font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); width: 100%; }
+textarea { resize: vertical; line-height: 1.5; }
+.issues { margin: 0; padding-left: 18px; font-size: 14px; }
+.items { margin: 0; padding-left: 18px; display: grid; gap: 6px; }

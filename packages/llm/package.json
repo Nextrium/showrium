@@ -1,5 +1,5 @@
 {
-  "name": "@nextrium/core",
+  "name": "@nextrium/llm",
   "private": true,
   "type": "module",
   "exports": {
@@ -10,10 +10,7 @@
   },
   "dependencies": {
     "@nextrium/db": "workspace:*",
-    "@nextrium/llm": "workspace:*",
-    "@nextrium/policy": "workspace:*",
-    "drizzle-orm": "0.45.3",
-    "ulid": "^3.0.2"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260926.1",

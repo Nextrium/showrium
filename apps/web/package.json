@@ -14,11 +14,12 @@
     "@hono/zod-openapi": "1.6.3",
     "@nextrium/core": "workspace:*",
     "@nextrium/db": "workspace:*",
+    "@nextrium/llm": "workspace:*",
+    "@nextrium/policy": "workspace:*",
     "better-auth": "1.7.6",
     "hono": "4.13.9",
     "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "zod": "4.6.5"
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.60.2",
@@ -30,6 +31,7 @@
     "typescript": "^7.0.2",
     "vite": "8.3.1",
     "vitest": "^4.1.11",
-    "wrangler": "4.141.0"
+    "wrangler": "4.141.0",
+    "zod": "4.6.5"
   }
 }

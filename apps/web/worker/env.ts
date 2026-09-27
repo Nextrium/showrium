@@ -12,6 +12,13 @@ export interface Env {
   /** "waitlist" (nobody can self sign-up) or "allowlist". Anything else means waitlist. */
   SIGNUP_MODE?: string;
   WAITLIST_LIMITER?: RateLimit;
+  /** AI: OpenRouter key (secret) and the Workers AI binding (deployed environments only). */
+  OPENROUTER_API_KEY?: string;
+  AI?: Ai;
+  /** "fake" enables a deterministic AI stand-in, honoured only on localhost (tests, local dev). */
+  LLM_MODE?: string;
+  /** Optional GitHub token to raise the API rate limit for public repo sources. */
+  GITHUB_TOKEN?: string;
   /** Platform admins (secret): exact emails allowed to create invites. Unset = nobody. */
   PLATFORM_ADMIN_EMAILS?: string;
   /** Beta sign-up allowlist (secret): emails, "@domain" entries or "*". Unset = no new sign-ups. */

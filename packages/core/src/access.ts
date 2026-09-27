@@ -57,3 +57,18 @@ export function readCookie(cookieHeader: string | null | undefined, name: string
   }
   return null;
 }
+
+/** Workspace permissions by role. API keys act with the admin role (they can't manage keys, see above). */
+export type Permission = "content.read" | "content.write" | "draft.approve" | "publish" | "workspace.manage";
+const ROLE_PERMISSIONS: Record<string, Permission[]> = {
+  owner: ["content.read", "content.write", "draft.approve", "publish", "workspace.manage"],
+  admin: ["content.read", "content.write", "draft.approve", "publish", "workspace.manage"],
+  editor: ["content.read", "content.write"],
+  approver: ["content.read", "draft.approve", "publish"],
+  viewer: ["content.read"],
+};
+
+/** Unknown roles get nothing (deny by default). */
+export function can(role: string, permission: Permission): boolean {
+  return ROLE_PERMISSIONS[role]?.includes(permission) ?? false;
+}

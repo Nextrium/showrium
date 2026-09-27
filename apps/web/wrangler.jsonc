@@ -38,6 +38,7 @@
     "production": {
       "name": "showrium",
       // showrium.com = website; app.showrium.com = product (sign-in, dashboard, API, OAuth callbacks).
+      "ai": { "binding": "AI" },
       // Domains are attached in the Cloudflare dashboard. The workers.dev address is off.
       "workers_dev": false,
       // Off: version preview URLs would run old (possibly vulnerable) versions against the
@@ -67,6 +68,7 @@
     // develop branch: a separate Worker with its own database and secrets. Never touches production.
     "preview": {
       "name": "showrium-preview",
+      "ai": { "binding": "AI" },
       "workers_dev": false,
       "preview_urls": false,
       "ratelimits": [

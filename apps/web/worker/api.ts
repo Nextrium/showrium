@@ -15,6 +15,7 @@ import {
 import { createInvite, isInviteUsable, isPlatformAdmin, joinWaitlist, listInvites, revokeInvite } from "@nextrium/core";
 import { setCookie } from "hono/cookie";
 import { INVITE_COOKIE } from "./auth.js";
+import { contentApi } from "./content-api.js";
 import { authProviders, signupMode } from "./env.js";
 import { apiError, canManageKeys, requirePrincipal, type AppEnv } from "./principal.js";
 
@@ -424,6 +425,8 @@ api.openapi(
     return c.json({ ok: true as const }, 200);
   },
 );
+
+api.route("/", contentApi);
 
 api.doc31("/openapi.json", {
   openapi: "3.1.0",

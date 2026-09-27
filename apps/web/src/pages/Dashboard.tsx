@@ -165,10 +165,6 @@ export function Dashboard() {
 
       {me.data.principal.isPlatformAdmin && <InvitesCard />}
 
-      <section className="card">
-        <h3>Coming next</h3>
-        <p>Connect your platforms and sources, set up your voice, and get your first drafts. We'll email you as each part opens.</p>
-      </section>
     </div>
   );
 }

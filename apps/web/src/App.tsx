@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
 import { APP_ORIGIN, authClient, isWebsite, navigate, usePath } from "./lib";
-import { Dashboard } from "./pages/Dashboard";
 import { Home } from "./pages/Home";
 import { Invite } from "./pages/Invite";
 import { Privacy, Terms } from "./pages/Legal";
 import { SignIn } from "./pages/SignIn";
+import { Workspace } from "./pages/Workspace";
 
 export function Link({ to, children, className }: { to: string; children: ReactNode; className?: string }) {
   if (/^https?:/.test(to)) {
@@ -40,7 +40,7 @@ function WebsiteNav() {
 
 function AppNav({ path }: { path: string }) {
   const { data: session } = authClient.useSession();
-  if (path === "/app") return null;
+  if (path === "/app" || path.startsWith("/app/")) return null;
   return session ? (
     <Link to="/app" className="button secondary">
       Open dashboard
@@ -82,7 +82,7 @@ function Footer() {
 export function App() {
   const path = usePath();
   const page =
-    path === "/app" ? <Dashboard /> :
+    path === "/app" || path.startsWith("/app/") ? <Workspace path={path} /> :
     path === "/signin" ? <SignIn /> :
     path === "/invite" ? <Invite /> :
     path === "/privacy" ? <Privacy /> :

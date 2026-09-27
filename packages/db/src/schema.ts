@@ -201,3 +201,129 @@ export const invite = sqliteTable(
   },
   (t) => [index("invite_created_idx").on(t.createdAt)],
 );
+
+// ---------------------------------------------------------------------------
+// Phase 2: persona, sources, context, briefs, drafts, usage.
+// ---------------------------------------------------------------------------
+
+export const PLATFORMS = [
+  "linkedin",
+  "x",
+  "instagram",
+  "facebook",
+  "threads",
+  "bluesky",
+  "mastodon",
+  "tiktok",
+  "youtube_shorts",
+] as const;
+export type Platform = (typeof PLATFORMS)[number];
+
+export const CONTENT_MODES = ["smile", "teach", "expert_take", "build_in_public", "promote"] as const;
+export type ContentMode = (typeof CONTENT_MODES)[number];
+
+/** Who the user is and how they sound. One per workspace for now (brands come later). */
+export const persona = sqliteTable("persona", {
+  orgId: text("org_id").primaryKey().references(() => org.id, { onDelete: "cascade" }),
+  displayName: text("display_name").notNull(),
+  role: text("role").notNull().default(""),
+  expertise: text("expertise", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
+  interests: text("interests", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
+  audience: text("audience").notNull().default(""),
+  voice: text("voice").notNull().default(""),
+  avoid: text("avoid", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
+  blockers: text("blockers", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
+  /** Platforms the user chose. Nothing is preselected. */
+  platforms: text("platforms", { mode: "json" }).$type<Platform[]>().notNull().default(sql`'[]'`),
+  /** Monetization-safe mode: approval required, no autopilot, X via tap-to-post. */
+  monetizationSafe: integer("monetization_safe", { mode: "boolean" }).notNull().default(false),
+  updatedAt: updatedAt(),
+});
+
+export const SOURCE_KINDS = ["github_repo", "rss"] as const;
+export const source = sqliteTable(
+  "source",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: SOURCE_KINDS }).notNull(),
+    /** "owner/repo" for GitHub, a feed URL for RSS. */
+    key: text("key").notNull(),
+    lastCheckedAt: integer("last_checked_at", { mode: "timestamp_ms" }),
+    lastError: text("last_error"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("source_org_kind_key_uq").on(t.orgId, t.kind, t.key)],
+);
+
+export const CONTEXT_KINDS = ["manual", "url", "github_release", "rss_item", "voice"] as const;
+export const contextItem = sqliteTable(
+  "context_item",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    sourceId: text("source_id").references(() => source.id, { onDelete: "set null" }),
+    kind: text("kind", { enum: CONTEXT_KINDS }).notNull(),
+    title: text("title").notNull().default(""),
+    body: text("body").notNull(),
+    url: text("url"),
+    /** Dedup key from the source (release id, feed guid). */
+    externalId: text("external_id"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("context_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("context_org_external_uq").on(t.orgId, t.externalId)],
+);
+
+export const brief = sqliteTable(
+  "brief",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    contextItemId: text("context_item_id").references(() => contextItem.id, { onDelete: "set null" }),
+    mode: text("mode", { enum: CONTENT_MODES }).notNull(),
+    angle: text("angle").notNull(),
+    keyPoints: text("key_points", { mode: "json" }).$type<string[]>().notNull(),
+    model: text("model").notNull(),
+    costMicroUsd: integer("cost_micro_usd").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index("brief_org_idx").on(t.orgId, t.createdAt)],
+);
+
+export const DRAFT_STATUSES = ["draft", "approved", "scheduled", "publishing", "published", "failed", "discarded"] as const;
+export type DraftStatus = (typeof DRAFT_STATUSES)[number];
+export const draft = sqliteTable(
+  "draft",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    briefId: text("brief_id").references(() => brief.id, { onDelete: "set null" }),
+    platform: text("platform", { enum: PLATFORMS }).notNull(),
+    text: text("text").notNull(),
+    status: text("status", { enum: DRAFT_STATUSES }).notNull().default("draft"),
+    /** Policy lint results: [{code, severity, message}]. */
+    issues: text("issues", { mode: "json" }).$type<{ code: string; severity: "error" | "warn"; message: string }[]>().notNull().default(sql`'[]'`),
+    aiGenerated: integer("ai_generated", { mode: "boolean" }).notNull().default(true),
+    scheduledAt: integer("scheduled_at", { mode: "timestamp_ms" }),
+    publishedAt: integer("published_at", { mode: "timestamp_ms" }),
+    externalPostId: text("external_post_id"),
+    externalUrl: text("external_url"),
+    lastError: text("last_error"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("draft_org_status_idx").on(t.orgId, t.status, t.createdAt), index("draft_due_idx").on(t.status, t.scheduledAt)],
+);
+
+/** Posts generated per workspace per calendar month (UTC), for plan quotas. */
+export const usageCounter = sqliteTable(
+  "usage_counter",
+  {
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    period: text("period").notNull(),
+    postsGenerated: integer("posts_generated").notNull().default(0),
+    videosRendered: integer("videos_rendered").notNull().default(0),
+    xApiPosts: integer("x_api_posts").notNull().default(0),
+  },
+  (t) => [uniqueIndex("usage_org_period_uq").on(t.orgId, t.period)],
+);
