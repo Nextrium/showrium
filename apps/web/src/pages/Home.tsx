@@ -1,4 +1,5 @@
 import { Link } from "../App";
+import { APP_ORIGIN } from "../lib";
 
 const PLATFORMS = ["LinkedIn", "X", "Instagram", "Facebook", "Threads", "TikTok", "YouTube Shorts", "Bluesky", "Mastodon", "Dev.to"];
 
@@ -13,10 +14,10 @@ export function Home() {
           posts made for each platform, written in your own voice. You approve every post.
         </p>
         <div className="actions">
-          <Link to="/signin" className="button">
+          <Link to={`${APP_ORIGIN}/signin`} className="button">
             Get started free
           </Link>
-          <a href="/api/v1/openapi.json" className="button secondary">
+          <a href={`${APP_ORIGIN}/api/v1/openapi.json`} className="button secondary">
             Read the API spec
           </a>
         </div>

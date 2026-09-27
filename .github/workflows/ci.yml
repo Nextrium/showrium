@@ -55,7 +55,7 @@ jobs:
         working-directory: apps/web
         run: pnpm exec wrangler deploy
       - name: Smoke test
-        run: curl --fail --silent https://showrium.abdulrahmanabdulbasit321.workers.dev/api/v1/health
+        run: curl --fail --silent https://app.showrium.com/api/v1/health
   secret-scan:
     runs-on: ubuntu-latest
     steps:

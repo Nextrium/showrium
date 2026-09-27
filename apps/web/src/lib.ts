@@ -1,6 +1,12 @@
 import { createAuthClient } from "better-auth/react";
 import { useCallback, useEffect, useState } from "react";
 
+// showrium.com is the public website; the product runs on app.showrium.com.
+// Locally (and on preview URLs) everything runs on one origin.
+const WEBSITE_HOST = "showrium.com";
+export const isWebsite = window.location.hostname === WEBSITE_HOST;
+export const APP_ORIGIN = isWebsite ? "https://app.showrium.com" : "";
+
 export const authClient = createAuthClient();
 
 // --- Minimal router (a handful of pages doesn't need a routing library) ---

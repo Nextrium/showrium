@@ -25,7 +25,7 @@ pnpm test
 pnpm --filter @nextrium/web dev
 ```
 
-- Live preview: https://showrium.abdulrahmanabdulbasit321.workers.dev
+- Website: https://showrium.com · App and API: https://app.showrium.com
 - API spec: `/api/v1/openapi.json`
 - Setup details: [apps/web/README.md](apps/web/README.md)
 

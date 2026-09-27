@@ -21,6 +21,7 @@
   ],
   "vars": {
     "BETTER_AUTH_URL": "http://localhost:5173",
+    "SITE_URL": "http://localhost:5173",
     // Password sign-in hashes on the server, which exceeds the free plan's 10 ms CPU limit.
     // Enabled locally and in tests only; production uses GitHub/Google sign-in.
     "AUTH_PASSWORD_ENABLED": "true"
@@ -29,6 +30,10 @@
   "env": {
     "production": {
       "name": "showrium",
+      // showrium.com = website; app.showrium.com = product (sign-in, dashboard, API, OAuth callbacks).
+      // Domains are attached in the Cloudflare dashboard. The workers.dev address is off.
+      "workers_dev": false,
+      "preview_urls": true,
       "d1_databases": [
         {
           "binding": "DB",
@@ -38,7 +43,8 @@
         }
       ],
       "vars": {
-        "BETTER_AUTH_URL": "https://showrium.abdulrahmanabdulbasit321.workers.dev",
+        "BETTER_AUTH_URL": "https://app.showrium.com",
+        "SITE_URL": "https://showrium.com",
         "AUTH_PASSWORD_ENABLED": "false"
       },
       "observability": { "enabled": true }
