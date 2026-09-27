@@ -69,6 +69,7 @@
     "preview": {
       "name": "showrium-preview",
       "ai": { "binding": "AI" },
+      "triggers": { "crons": ["*/5 * * * *"] },
       "workers_dev": false,
       "preview_urls": false,
       "ratelimits": [
@@ -88,7 +89,8 @@
         "BETTER_AUTH_URL": "https://preview.showrium.com",
         "SITE_URL": "https://preview.showrium.com",
         "AUTH_PASSWORD_ENABLED": "false",
-        "SIGNUP_MODE": "allowlist"
+        "SIGNUP_MODE": "allowlist",
+        "TIKTOK_USE_SANDBOX": "true"
       },
       "observability": { "enabled": true }
     }

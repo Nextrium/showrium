@@ -1,5 +1,4 @@
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
-import crypto from "node:crypto";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig(async () => {
@@ -18,6 +17,7 @@ export default defineConfig(async () => {
             PLATFORM_ADMIN_EMAILS: "admin@example.com",
             // Deterministic AI stand-in (honoured only on localhost).
             LLM_MODE: "fake",
+            TOKEN_ENCRYPTION_KEY: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))),
             // Only example.com is allowlisted in tests, so blocked sign-ups can be tested too.
             BETA_ALLOWED_EMAILS: "@example.com",
           },

@@ -4,6 +4,9 @@ import { api } from "./api.js";
 import { createAuth } from "./auth.js";
 import { apiError, type AppEnv } from "./principal.js";
 import { rateLimit } from "./rate-limit.js";
+import { createDb } from "@nextrium/db";
+import { runDuePublishing } from "@nextrium/core";
+import { publishDeps } from "./connections-api.js";
 
 const app = new Hono<AppEnv>();
 
@@ -73,4 +76,16 @@ app.onError((err, c) => {
   return c.json(apiError("internal_error", "Something went wrong on our side. Please try again."), 500);
 });
 
-export default app;
+// Cron trigger (every 5 minutes in deployed environments): publish scheduled posts that are due.
+async function scheduled(_event: ScheduledController, env: AppEnv["Bindings"], ctx: ExecutionContext) {
+  if (!env.TOKEN_ENCRYPTION_KEY) return;
+  ctx.waitUntil(
+    (async () => {
+      const deps = await publishDeps(env, createDb(env.DB));
+      const result = await runDuePublishing(deps);
+      if (result.due) console.log("scheduled publishing", result);
+    })(),
+  );
+}
+
+export default { fetch: app.fetch, scheduled };

@@ -79,7 +79,7 @@ export function lintPost(platform: Platform, text: string, opts: { hasMedia?: bo
   return issues;
 }
 
-export const hasErrors = (issues: LintIssue[]) => issues.some((i) => i.severity === "error");
+export const hasErrors = (issues: { severity: "error" | "warn" }[]) => issues.some((i) => i.severity === "error");
 
 export type FactIssue = LintIssue & { code: "unverified_fact" };
 

@@ -19,6 +19,18 @@ export interface Env {
   LLM_MODE?: string;
   /** Optional GitHub token to raise the API rate limit for public repo sources. */
   GITHUB_TOKEN?: string;
+  /** Phase 3: token encryption key (32 bytes, base64) and platform app credentials (secrets). */
+  TOKEN_ENCRYPTION_KEY?: string;
+  X_CLIENT_ID?: string;
+  X_CLIENT_SECRET?: string;
+  LINKEDIN_CLIENT_ID?: string;
+  LINKEDIN_CLIENT_SECRET?: string;
+  TIKTOK_CLIENT_KEY?: string;
+  TIKTOK_CLIENT_SECRET?: string;
+  TIKTOK_SANDBOX_CLIENT_KEY?: string;
+  TIKTOK_SANDBOX_CLIENT_SECRET?: string;
+  /** "true" on preview: use the TikTok sandbox app. */
+  TIKTOK_USE_SANDBOX?: string;
   /** Platform admins (secret): exact emails allowed to create invites. Unset = nobody. */
   PLATFORM_ADMIN_EMAILS?: string;
   /** Beta sign-up allowlist (secret): emails, "@domain" entries or "*". Unset = no new sign-ups. */

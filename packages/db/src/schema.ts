@@ -306,6 +306,9 @@ export const draft = sqliteTable(
     aiGenerated: integer("ai_generated", { mode: "boolean" }).notNull().default(true),
     scheduledAt: integer("scheduled_at", { mode: "timestamp_ms" }),
     publishedAt: integer("published_at", { mode: "timestamp_ms" }),
+    /** Account to publish to (API path) and how it was published. */
+    connectionId: text("connection_id"),
+    publishMethod: text("publish_method", { enum: ["api", "tap_to_post", "manual"] }),
     externalPostId: text("external_post_id"),
     externalUrl: text("external_url"),
     lastError: text("last_error"),
@@ -327,3 +330,51 @@ export const usageCounter = sqliteTable(
   },
   (t) => [uniqueIndex("usage_org_period_uq").on(t.orgId, t.period)],
 );
+
+// ---------------------------------------------------------------------------
+// Phase 3: connected social accounts and publishing.
+// Tokens are AES-GCM encrypted (key: TOKEN_ENCRYPTION_KEY secret) and never leave the server.
+// ---------------------------------------------------------------------------
+
+export const CONNECTION_PLATFORMS = ["x", "linkedin", "tiktok", "bluesky", "mastodon"] as const;
+export type ConnectionPlatform = (typeof CONNECTION_PLATFORMS)[number];
+
+export const connection = sqliteTable(
+  "connection",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    platform: text("platform", { enum: CONNECTION_PLATFORMS }).notNull(),
+    accountId: text("account_id").notNull(),
+    handle: text("handle").notNull(),
+    /** Encrypted JSON: access/refresh tokens, or a Bluesky app password. */
+    secret: text("secret").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
+    /** Non-secret extras, e.g. the Mastodon instance or Bluesky PDS. */
+    meta: text("meta", { mode: "json" }).$type<Record<string, string>>().notNull().default(sql`'{}'`),
+    status: text("status", { enum: ["active", "needs_reconnect"] }).notNull().default("active"),
+    createdByUserId: text("created_by_user_id"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex("connection_org_platform_account_uq").on(t.orgId, t.platform, t.accountId), index("connection_org_idx").on(t.orgId)],
+);
+
+/** One-time OAuth state (CSRF + PKCE). Consumed on callback; expires after 10 minutes. */
+export const oauthState = sqliteTable("oauth_state", {
+  state: text("state").primaryKey(),
+  orgId: text("org_id").notNull(),
+  userId: text("user_id").notNull(),
+  platform: text("platform", { enum: CONNECTION_PLATFORMS }).notNull(),
+  codeVerifier: text("code_verifier").notNull(),
+  meta: text("meta", { mode: "json" }).$type<Record<string, string>>().notNull().default(sql`'{}'`),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+/** Mastodon apps registered per instance (client credentials, encrypted). */
+export const mastodonApp = sqliteTable("mastodon_app", {
+  instance: text("instance").primaryKey(),
+  secret: text("secret").notNull(),
+  createdAt: createdAt(),
+});
+

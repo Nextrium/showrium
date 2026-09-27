@@ -15,6 +15,7 @@
     "@nextrium/core": "workspace:*",
     "@nextrium/db": "workspace:*",
     "@nextrium/llm": "workspace:*",
+    "@nextrium/platforms": "workspace:*",
     "@nextrium/policy": "workspace:*",
     "better-auth": "1.7.6",
     "hono": "4.13.9",
