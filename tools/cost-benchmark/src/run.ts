@@ -53,6 +53,7 @@ interface StepResult {
   costUsd: number;
   latencyMs: number;
   valid: boolean;
+  output?: unknown;
 }
 const results: StepResult[] = [];
 
@@ -86,7 +87,7 @@ function claudeRunner(client: Anthropic): Runner {
       });
       const u = response.usage;
       record(fixture, step, "anthropic", model, u.input_tokens, u.cache_read_input_tokens ?? 0, u.output_tokens,
-        claudeCost(model, u), Date.now() - started, response.parsed_output !== null);
+        claudeCost(model, u), Date.now() - started, response.parsed_output !== null, response.parsed_output);
       return response.parsed_output;
     },
   };
@@ -102,15 +103,15 @@ function compatRunner(p: CompatProvider): Runner {
       const { parsed, usage } = await compatChat(p, SYSTEM, prompt, schema, maxTokens);
       const cached = usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? 0;
       record(fixture, step, p.name, p.model, usage.prompt_tokens, cached, usage.completion_tokens,
-        p.cost(usage), Date.now() - started, parsed !== null);
+        p.cost(usage), Date.now() - started, parsed !== null, parsed);
       return parsed;
     },
   };
 }
 
 function record(fixture: Fixture, step: string, provider: string, model: string, inputTokens: number,
-  cachedTokens: number, outputTokens: number, costUsd: number, latencyMs: number, valid: boolean): void {
-  results.push({ fixture: fixture.id, step, provider, model, inputTokens, cachedTokens, outputTokens, costUsd, latencyMs, valid });
+  cachedTokens: number, outputTokens: number, costUsd: number, latencyMs: number, valid: boolean, output?: unknown): void {
+  results.push({ fixture: fixture.id, step, provider, model, inputTokens, cachedTokens, outputTokens, costUsd, latencyMs, valid, output });
 }
 
 async function runPipeline(runner: Runner): Promise<void> {
@@ -120,7 +121,7 @@ async function runPipeline(runner: Runner): Promise<void> {
         `Mode: ${fixture.mode}\nContext:\n${fixture.context}\n\nWrite a content brief.`, BriefSchema, 1024);
       await runner.run(fixture, "variants_x8",
         `Mode: ${fixture.mode}\nContext:\n${fixture.context}\n\nBrief:\n${JSON.stringify(brief ?? {})}\n\n` +
-          `Write one post for each platform: ${PLATFORMS.join(", ")}.`, VariantsSchema, 4096);
+          `Write one post for each platform: ${PLATFORMS.join(", ")}.`, VariantsSchema, 8192);
       if (fixture.mode === "expert_take") {
         await runner.run(fixture, "longform_article",
           `Context:\n${fixture.context}\n\nWrite a 600-800 word Dev.to article in the user's voice.`, ArticleSchema, 4096, true);
