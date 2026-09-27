@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { APP_ORIGIN, authClient, isWebsite, navigate, usePath } from "./lib";
 import { Dashboard } from "./pages/Dashboard";
 import { Home } from "./pages/Home";
+import { Invite } from "./pages/Invite";
 import { Privacy, Terms } from "./pages/Legal";
 import { SignIn } from "./pages/SignIn";
 
@@ -83,6 +84,7 @@ export function App() {
   const page =
     path === "/app" ? <Dashboard /> :
     path === "/signin" ? <SignIn /> :
+    path === "/invite" ? <Invite /> :
     path === "/privacy" ? <Privacy /> :
     path === "/terms" ? <Terms /> :
     <Home />;

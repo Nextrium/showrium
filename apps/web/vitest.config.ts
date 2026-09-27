@@ -15,6 +15,7 @@ export default defineConfig(async () => {
             BETTER_AUTH_SECRET: crypto.randomUUID() + crypto.randomUUID(),
             AUTH_PASSWORD_ENABLED: "true",
             SIGNUP_MODE: "allowlist",
+            PLATFORM_ADMIN_EMAILS: "admin@example.com",
             // Only example.com is allowlisted in tests, so blocked sign-ups can be tested too.
             BETA_ALLOWED_EMAILS: "@example.com",
           },

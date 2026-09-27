@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react";
+import { InvitesCard } from "../components/InvitesCard";
 import { api, authClient, formatDate, navigate, useApi, useRedirect } from "../lib";
 
-type Me = { principal: { kind: string; role: string }; workspace: { id: string; name: string; plan: string } };
+type Me = { principal: { kind: string; role: string; isPlatformAdmin: boolean }; workspace: { id: string; name: string; plan: string } };
 type Credits = { balance: number; transactions: { id: string; kind: string; description: string; amount: number; createdAt: string }[] };
 type ApiKey = { id: string; name: string; prefix: string; lastUsedAt: string | null; revokedAt: string | null; createdAt: string };
 
@@ -161,6 +162,8 @@ export function Dashboard() {
           </div>
         </section>
       </div>
+
+      {me.data.principal.isPlatformAdmin && <InvitesCard />}
 
       <section className="card">
         <h3>Coming next</h3>

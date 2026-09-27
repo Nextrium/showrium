@@ -36,3 +36,24 @@ export function parseSignupMode(value: string | undefined): SignupMode {
 export function canSignUp(mode: SignupMode, email: string, allowlist: string | undefined): boolean {
   return mode === "allowlist" && isEmailAllowed(email, allowlist);
 }
+
+/**
+ * Platform admins (Nextrium staff) can create invites. Exact emails only: no wildcards
+ * and no domains, so a misconfiguration can't make everyone an admin. Unset = nobody.
+ */
+export function isPlatformAdmin(email: string | null | undefined, adminList: string | undefined): boolean {
+  if (!email) return false;
+  const normalized = email.trim().toLowerCase();
+  const admins = (adminList ?? "").split(",").map((e) => e.trim().toLowerCase()).filter((e) => e.includes("@") && !e.startsWith("@") && e !== "*");
+  return admins.includes(normalized);
+}
+
+/** Reads one cookie from a Cookie header without a parsing library. */
+export function readCookie(cookieHeader: string | null | undefined, name: string): string | null {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === name) return decodeURIComponent(v.join("="));
+  }
+  return null;
+}

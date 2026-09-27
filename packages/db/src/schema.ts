@@ -180,3 +180,24 @@ export const waitlistEntry = sqliteTable("waitlist_entry", {
   invitedAt: integer("invited_at", { mode: "timestamp_ms" }),
   createdAt: createdAt(),
 });
+
+// ---------------------------------------------------------------------------
+// Invites: single-use links created by platform admins. They let a person create an
+// account with any sign-in email, in waitlist or allowlist mode. Only a token hash is stored.
+// ---------------------------------------------------------------------------
+
+export const invite = sqliteTable(
+  "invite",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull().unique(),
+    note: text("note"),
+    createdByUserId: text("created_by_user_id"),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    acceptedAt: integer("accepted_at", { mode: "timestamp_ms" }),
+    acceptedByUserId: text("accepted_by_user_id"),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("invite_created_idx").on(t.createdAt)],
+);

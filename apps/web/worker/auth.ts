@@ -1,8 +1,16 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createDb, schema } from "@nextrium/db";
-import { canSignUp, createPersonalOrg } from "@nextrium/core";
+import { canSignUp, claimInvite, createPersonalOrg, readCookie, recordInviteAcceptedBy } from "@nextrium/core";
 import { authProviders, signupMode, type Env } from "./env.js";
+
+export const INVITE_COOKIE = "showrium_invite";
+
+type HookContext = { headers?: Headers; request?: Request } | null | undefined;
+function inviteTokenFrom(context: HookContext): string | null {
+  const cookie = context?.headers?.get("cookie") ?? context?.request?.headers.get("cookie");
+  return readCookie(cookie, INVITE_COOKIE);
+}
 
 // Created per request: D1 and secrets are only available on the request's env.
 export function createAuth(env: Env) {
@@ -32,16 +40,20 @@ export function createAuth(env: Env) {
     databaseHooks: {
       user: {
         create: {
-          // Waitlist mode: nobody can self sign-up. Allowlist mode: only allowlisted emails.
+          // Who may create an account: allowlisted emails (allowlist mode only), or anyone
+          // holding a valid invite link (any mode). Invites are consumed atomically here.
           // Existing users are unaffected (this runs only when an account is created).
-          before: async (user) => {
-            if (!canSignUp(signupMode(env), user.email, env.BETA_ALLOWED_EMAILS)) {
-              console.warn(`sign-up blocked (mode: ${signupMode(env)})`);
-              return false;
-            }
+          before: async (user, context) => {
+            if (canSignUp(signupMode(env), user.email, env.BETA_ALLOWED_EMAILS)) return;
+            const token = inviteTokenFrom(context as HookContext);
+            if (token && (await claimInvite(db, token))) return;
+            console.warn(`sign-up blocked (mode: ${signupMode(env)}, invite: ${token ? "invalid or used" : "none"})`);
+            return false;
           },
           // Every new user gets a personal workspace, owner role and the beta welcome credits.
-          after: async (user) => {
+          after: async (user, context) => {
+            const token = inviteTokenFrom(context as HookContext);
+            if (token) await recordInviteAcceptedBy(db, token, user.id).catch((e) => console.error("invite bookkeeping failed", e));
             // If this fails, the account still exists; requirePrincipal() self-heals on first use.
             try {
               await createPersonalOrg(db, { userId: user.id, userName: user.name });

@@ -12,6 +12,8 @@ export interface Env {
   /** "waitlist" (nobody can self sign-up) or "allowlist". Anything else means waitlist. */
   SIGNUP_MODE?: string;
   WAITLIST_LIMITER?: RateLimit;
+  /** Platform admins (secret): exact emails allowed to create invites. Unset = nobody. */
+  PLATFORM_ADMIN_EMAILS?: string;
   /** Beta sign-up allowlist (secret): emails, "@domain" entries or "*". Unset = no new sign-ups. */
   BETA_ALLOWED_EMAILS?: string;
   /** Cloudflare rate limiters. Optional so a missing binding degrades to "allow" (documented fail-open). */
