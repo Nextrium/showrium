@@ -2,7 +2,7 @@
 // never from the request body, so one tenant can't reach another tenant's data.
 import { createMiddleware } from "hono/factory";
 import { createDb, type Db, type Role } from "@nextrium/db";
-import { resolveApiKey, resolveMembership } from "@nextrium/core";
+import { canManageApiKeys, ensurePersonalOrg, resolveApiKey, resolveMembership } from "@nextrium/core";
 import { createAuth } from "./auth.js";
 import type { Env } from "./env.js";
 
@@ -42,13 +42,18 @@ export const requirePrincipal = createMiddleware<AppEnv>(async (c, next) => {
     }
   }
 
-  const membership = await resolveMembership(db, session.user.id, c.req.header("X-Org-Id") ?? undefined);
+  const requestedOrgId = c.req.header("X-Org-Id") ?? undefined;
+  let membership = await resolveMembership(db, session.user.id, requestedOrgId);
+  if (!membership && !requestedOrgId) {
+    // The sign-up hook may have failed to create the workspace. Create it now if none exists.
+    await ensurePersonalOrg(db, { userId: session.user.id, userName: session.user.name });
+    membership = await resolveMembership(db, session.user.id);
+  }
   if (!membership) return c.json(apiError("no_workspace", "You don't have access to this workspace."), 403);
   c.set("principal", { kind: "user", userId: session.user.id, orgId: membership.orgId, role: membership.role });
   return next();
 });
 
 export function canManageKeys(principal: Principal): boolean {
-  // API keys can't create or revoke keys; only owners and admins signed in to the app can.
-  return principal.kind === "user" && (principal.role === "owner" || principal.role === "admin");
+  return canManageApiKeys(principal.kind, principal.role);
 }

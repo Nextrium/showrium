@@ -2,7 +2,7 @@
 
 const DraftNote = () => (
   <p className="draft">
-    Draft for the private beta, last updated 27 September 2026. Questions: legal@showrium.com.
+    Draft for the private beta, last updated 27 September 2026 (rev. 2). Questions: legal@showrium.com.
   </p>
 );
 
@@ -20,7 +20,7 @@ export function Privacy() {
       <ul>
         <li><strong>Account details:</strong> name, email, profile picture and sign-in method.</li>
         <li><strong>Content you give us:</strong> text, voice notes, links, repositories and files you connect, plus the drafts we create with you.</li>
-        <li><strong>Connected social accounts:</strong> access tokens (stored encrypted) and the posts, comments and statistics those platforms let us read.</li>
+        <li><strong>Sign-in and connected accounts:</strong> access tokens from GitHub, Google or social platforms, stored encrypted, and the posts, comments and statistics those platforms let us read.</li>
         <li><strong>Usage and billing:</strong> actions in the app, credit balance and transactions, and payment records from our payment providers. We never see or store full card numbers.</li>
       </ul>
 
@@ -42,7 +42,8 @@ export function Privacy() {
       <p>
         Data is stored on Cloudflare's global network and may be processed outside Nigeria, with safeguards required by
         the Nigeria Data Protection Act 2023 and, for users in the EU/UK, the GDPR. We keep account data while your
-        account is open and delete it within 30 days after you close it, except records we must keep by law.
+        account is open. To close your account and delete your data, email legal@showrium.com; we complete deletion
+        within 30 days, except records we must keep by law.
       </p>
 
       <h2>Your rights</h2>

@@ -13,6 +13,7 @@ export function Dashboard() {
   const [newKey, setNewKey] = useState<{ name: string; key: string } | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const signedOut = !isPending && !session;
   useRedirect("/signin", signedOut);
@@ -25,7 +26,9 @@ export function Dashboard() {
     e.preventDefault();
     const formEl = e.currentTarget;
     const name = String(new FormData(formEl).get("keyName"));
+    if (creating) return;
     setKeyError(null);
+    setCreating(true);
     try {
       const created = await api<{ name: string; key: string }>("/api-keys", { method: "POST", body: JSON.stringify({ name }) });
       setNewKey(created);
@@ -34,11 +37,17 @@ export function Dashboard() {
       keys.reload();
     } catch (err) {
       setKeyError(err instanceof Error ? err.message : "Couldn't create the key.");
+    } finally {
+      setCreating(false);
     }
   };
 
   const revoke = async (id: string) => {
-    await api(`/api-keys/${id}`, { method: "DELETE" });
+    try {
+      await api(`/api-keys/${id}`, { method: "DELETE" });
+    } catch (err) {
+      setKeyError(err instanceof Error ? err.message : "Couldn't revoke the key.");
+    }
     keys.reload();
   };
 
@@ -102,7 +111,7 @@ export function Dashboard() {
                 Key name
                 <input id="keyName" name="keyName" required maxLength={60} placeholder="e.g. Production server" />
               </label>
-              <button className="button">Create key</button>
+              <button className="button" disabled={creating}>{creating ? "Creating…" : "Create key"}</button>
             </form>
           )}
           {keyError && <p className="error" role="alert">{keyError}</p>}

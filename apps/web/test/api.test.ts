@@ -3,11 +3,14 @@ import { describe, expect, it } from "vitest";
 
 const BASE = "http://localhost:5173";
 const ORIGIN = { Origin: BASE };
+// Each test sign-up comes from its own client IP so the sign-in rate limit (10/min per IP) doesn't trip.
+let ipCounter = 0;
+const uniqueIp = () => `10.1.${Math.floor(++ipCounter / 250)}.${ipCounter % 250}`;
 
 async function signUp(email: string, name: string): Promise<string> {
   const res = await SELF.fetch(`${BASE}/api/auth/sign-up/email`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...ORIGIN },
+    headers: { "Content-Type": "application/json", ...ORIGIN, "CF-Connecting-IP": uniqueIp() },
     body: JSON.stringify({ email, name, password: "correct-horse-battery" }),
   });
   expect(res.status).toBe(200);

@@ -24,3 +24,6 @@ tools/*/out/
 .dev.vars*
 !.dev.vars.example
 .wrangler/
+
+# Local assistant preview config
+.claude/

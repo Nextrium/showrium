@@ -7,7 +7,12 @@ export function SignIn() {
   const { data: config } = useApi<Config>("/config");
   const { data: session } = authClient.useSession();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
-  const [error, setError] = useState<string | null>(null);
+  // OAuth failures come back as ?error=... (e.g. an email that isn't on the beta allowlist).
+  const [error, setError] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get("error")
+      ? "We couldn't sign you in. Showrium is in private beta: if you don't have an invite yet, email support@showrium.com."
+      : null,
+  );
   const [busy, setBusy] = useState(false);
 
   useRedirect("/app", Boolean(session));
@@ -15,7 +20,7 @@ export function SignIn() {
 
   const social = async (provider: "github" | "google") => {
     setError(null);
-    const { error } = await authClient.signIn.social({ provider, callbackURL: "/app" });
+    const { error } = await authClient.signIn.social({ provider, callbackURL: "/app", errorCallbackURL: "/signin" });
     if (error) setError(error.message ?? "Couldn't start sign-in. Please try again.");
   };
 

@@ -2,6 +2,7 @@
 // OpenAPI document: GET /api/v1/openapi.json
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import {
+  ApiKeyLimitError,
   createApiKey,
   getBalance,
   getOrg,
@@ -196,6 +197,7 @@ api.openapi(
           },
         },
       },
+      409: { description: "Too many active keys", content: { "application/json": { schema: ErrorSchema } } },
       ...errors,
     },
   }),
@@ -204,11 +206,17 @@ api.openapi(
     if (!canManageKeys(principal)) {
       return c.json(apiError("forbidden", "Only workspace owners and admins can create API keys, from the app."), 403);
     }
-    const created = await createApiKey(c.get("db"), {
-      orgId: principal.orgId,
-      name: c.req.valid("json").name,
-      createdByUserId: principal.kind === "user" ? principal.userId : null,
-    });
+    let created;
+    try {
+      created = await createApiKey(c.get("db"), {
+        orgId: principal.orgId,
+        name: c.req.valid("json").name,
+        createdByUserId: principal.kind === "user" ? principal.userId : null,
+      });
+    } catch (error) {
+      if (error instanceof ApiKeyLimitError) return c.json(apiError("key_limit", error.message), 409);
+      throw error;
+    }
     await recordAudit(c.get("db"), {
       orgId: principal.orgId,
       actorUserId: principal.kind === "user" ? principal.userId : null,
