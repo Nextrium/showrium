@@ -1,10 +1,20 @@
 // API keys for developers and businesses. Only a SHA-256 hash is stored; the key itself
 // is shown once, at creation. Keys look like "shr_live_<43 random chars>".
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, count, desc, eq, isNull } from "drizzle-orm";
 import { apiKey, type Db } from "@nextrium/db";
 import { newId } from "./ids.js";
 
 const KEY_PREFIX = "shr_live_";
+/** Active keys allowed per workspace; stops runaway key creation. */
+export const MAX_ACTIVE_KEYS = 25;
+
+export class ApiKeyLimitError extends Error {
+  constructor() {
+    super(`A workspace can have at most ${MAX_ACTIVE_KEYS} active API keys. Revoke one first.`);
+    this.name = "ApiKeyLimitError";
+  }
+}
+
 const LAST_USED_WRITE_INTERVAL_MS = 60 * 60 * 1000; // Save D1 writes: update at most hourly.
 
 export async function hashApiKey(key: string): Promise<string> {
@@ -18,6 +28,11 @@ function randomSecret(): string {
 }
 
 export async function createApiKey(db: Db, input: { orgId: string; name: string; createdByUserId: string | null }) {
+  const [active] = await db
+    .select({ n: count() })
+    .from(apiKey)
+    .where(and(eq(apiKey.orgId, input.orgId), isNull(apiKey.revokedAt)));
+  if ((active?.n ?? 0) >= MAX_ACTIVE_KEYS) throw new ApiKeyLimitError();
   const key = `${KEY_PREFIX}${randomSecret()}`;
   const row = {
     id: newId("key"),
@@ -43,7 +58,8 @@ export async function listApiKeys(db: Db, orgId: string) {
     })
     .from(apiKey)
     .where(eq(apiKey.orgId, orgId))
-    .orderBy(desc(apiKey.createdAt));
+    .orderBy(desc(apiKey.createdAt))
+    .limit(100);
 }
 
 /** Returns true when a key was revoked; false when it doesn't exist in this org or was already revoked. */

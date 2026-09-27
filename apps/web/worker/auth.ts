@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createDb, schema } from "@nextrium/db";
-import { createPersonalOrg } from "@nextrium/core";
+import { createPersonalOrg, isEmailAllowed } from "@nextrium/core";
 import { authProviders, type Env } from "./env.js";
 
 // Created per request: D1 and secrets are only available on the request's env.
@@ -22,12 +22,31 @@ export function createAuth(env: Env) {
     }),
     emailAndPassword: { enabled: providers.password, minPasswordLength: 10 },
     socialProviders,
+    account: {
+      // OAuth access/refresh tokens are encrypted at rest (the privacy policy promises this).
+      encryptOAuthTokens: true,
+      // Only link a new sign-in method to an existing account when the email is verified on both sides.
+      accountLinking: { enabled: true, requireLocalEmailVerified: true },
+    },
+    telemetry: { enabled: false },
     databaseHooks: {
       user: {
         create: {
+          // Private beta: only allowlisted emails can create an account. Existing users are unaffected.
+          before: async (user) => {
+            if (!isEmailAllowed(user.email, env.BETA_ALLOWED_EMAILS)) {
+              console.warn("sign-up blocked: email not on the beta allowlist");
+              return false;
+            }
+          },
           // Every new user gets a personal workspace, owner role and the beta welcome credits.
           after: async (user) => {
-            await createPersonalOrg(db, { userId: user.id, userName: user.name });
+            // If this fails, the account still exists; requirePrincipal() self-heals on first use.
+            try {
+              await createPersonalOrg(db, { userId: user.id, userName: user.name });
+            } catch (error) {
+              console.error("personal workspace creation failed at sign-up; will retry on first request", error);
+            }
           },
         },
       },

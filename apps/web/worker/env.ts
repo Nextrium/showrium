@@ -6,7 +6,12 @@ export interface Env {
   /** Origin of the public website: https://showrium.com in production. */
   SITE_URL: string;
   BETTER_AUTH_SECRET: string;
-  AUTH_PASSWORD_ENABLED: string;
+  AUTH_PASSWORD_ENABLED?: string;
+  /** Beta sign-up allowlist (secret): emails, "@domain" entries or "*". Unset = no new sign-ups. */
+  BETA_ALLOWED_EMAILS?: string;
+  /** Cloudflare rate limiters. Optional so a missing binding degrades to "allow" (documented fail-open). */
+  AUTH_LIMITER?: RateLimit;
+  API_LIMITER?: RateLimit;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
   GOOGLE_CLIENT_ID?: string;

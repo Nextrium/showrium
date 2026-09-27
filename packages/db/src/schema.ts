@@ -75,6 +75,10 @@ export const org = sqliteTable("org", {
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
   plan: text("plan", { enum: ["free", "lite", "starter", "creator", "pro", "team"] }).notNull().default("free"),
+  // Set on a user's personal workspace. Unique, so concurrent requests can't create two.
+  // Deliberately no foreign key: SQLite can't add ON DELETE rules to an existing table, and a
+  // plain reference would block deleting the user. Account deletion removes the personal org.
+  personalOwnerUserId: text("personal_owner_user_id").unique(),
   createdAt: createdAt(),
 });
 

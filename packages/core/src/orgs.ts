@@ -11,15 +11,23 @@ function slugify(name: string): string {
   return `${base}-${crypto.getRandomValues(new Uint32Array(1))[0]!.toString(36).slice(0, 5)}`;
 }
 
-/** Creates the user's first workspace, makes them owner, and grants the welcome credits. */
+/**
+ * Creates the user's personal workspace, makes them owner, and grants the welcome credits.
+ * At most one per user: a concurrent second call hits the unique index and returns null.
+ */
 export async function createPersonalOrg(db: Db, input: { userId: string; userName: string }) {
   const orgId = newId("org");
-  const name = `${input.userName.split(" ")[0] || "My"}'s workspace`;
-  await db.batch([
-    db.insert(org).values({ id: orgId, name, slug: slugify(name) }),
-    db.insert(membership).values({ id: newId("mem"), orgId, userId: input.userId, role: "owner" }),
-    db.insert(auditEvent).values({ id: newId("aud"), orgId, actorUserId: input.userId, action: "org.created", target: orgId }),
-  ]);
+  const name = `${input.userName.trim().split(/\s+/)[0] || "My"}'s workspace`;
+  try {
+    await db.batch([
+      db.insert(org).values({ id: orgId, name, slug: slugify(name), personalOwnerUserId: input.userId }),
+      db.insert(membership).values({ id: newId("mem"), orgId, userId: input.userId, role: "owner" }),
+      db.insert(auditEvent).values({ id: newId("aud"), orgId, actorUserId: input.userId, action: "org.created", target: orgId }),
+    ]);
+  } catch (error) {
+    if (String(error).includes("UNIQUE constraint failed: org.personal_owner_user_id")) return null;
+    throw error;
+  }
   await postCreditTxn(db, {
     orgId,
     kind: "grant",
@@ -28,6 +36,17 @@ export async function createPersonalOrg(db: Db, input: { userId: string; userNam
     description: "Beta welcome credits",
   });
   return { orgId, name };
+}
+
+/**
+ * Self-heal for accounts whose workspace wasn't created at sign-up (e.g. a database error
+ * in the sign-up hook). Creates it only if the user has no personal workspace at all;
+ * if one exists but they aren't a member, access stays denied (fail closed).
+ */
+export async function ensurePersonalOrg(db: Db, input: { userId: string; userName: string }) {
+  const [existing] = await db.select({ id: org.id }).from(org).where(eq(org.personalOwnerUserId, input.userId));
+  if (existing) return;
+  await createPersonalOrg(db, input);
 }
 
 /**

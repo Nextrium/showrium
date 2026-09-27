@@ -19,12 +19,16 @@
       "migrations_dir": "../../packages/db/migrations"
     }
   ],
+  "ratelimits": [
+    { "name": "AUTH_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+    { "name": "API_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } }
+  ],
   "vars": {
     "BETTER_AUTH_URL": "http://localhost:5173",
     "SITE_URL": "http://localhost:5173",
-    // Password sign-in hashes on the server, which exceeds the free plan's 10 ms CPU limit.
-    // Enabled locally and in tests only; production uses GitHub/Google sign-in.
-    "AUTH_PASSWORD_ENABLED": "true"
+    // Safe default: off. Password hashing exceeds the free plan's 10 ms CPU limit, so it is
+    // enabled only locally (.dev.vars) and in tests. A deploy that misses its env stays safe.
+    "AUTH_PASSWORD_ENABLED": "false"
   },
   "observability": { "enabled": true },
   "env": {
@@ -33,7 +37,13 @@
       // showrium.com = website; app.showrium.com = product (sign-in, dashboard, API, OAuth callbacks).
       // Domains are attached in the Cloudflare dashboard. The workers.dev address is off.
       "workers_dev": false,
-      "preview_urls": true,
+      // Off: version preview URLs would run old (possibly vulnerable) versions against the
+      // production database and secrets. Re-enable only with a separate preview database.
+      "preview_urls": false,
+      "ratelimits": [
+        { "name": "AUTH_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+        { "name": "API_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } }
+      ],
       "d1_databases": [
         {
           "binding": "DB",
@@ -45,6 +55,30 @@
       "vars": {
         "BETTER_AUTH_URL": "https://app.showrium.com",
         "SITE_URL": "https://showrium.com",
+        "AUTH_PASSWORD_ENABLED": "false"
+      },
+      "observability": { "enabled": true }
+    },
+    // develop branch: a separate Worker with its own database and secrets. Never touches production.
+    "preview": {
+      "name": "showrium-preview",
+      "workers_dev": false,
+      "preview_urls": false,
+      "ratelimits": [
+        { "name": "AUTH_LIMITER", "namespace_id": "1003", "simple": { "limit": 10, "period": 60 } },
+        { "name": "API_LIMITER", "namespace_id": "1004", "simple": { "limit": 120, "period": 60 } }
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "showrium-db-preview",
+          "database_id": "35a309bc-a22e-45b7-b660-cc266ba8b720",
+          "migrations_dir": "../../packages/db/migrations"
+        }
+      ],
+      "vars": {
+        "BETTER_AUTH_URL": "https://preview.showrium.com",
+        "SITE_URL": "https://preview.showrium.com",
         "AUTH_PASSWORD_ENABLED": "false"
       },
       "observability": { "enabled": true }
