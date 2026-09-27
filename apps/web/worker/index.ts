@@ -3,6 +3,7 @@ import { secureHeaders } from "hono/secure-headers";
 import { api } from "./api.js";
 import { mcp } from "./mcp.js";
 import { createAuth } from "./auth.js";
+import { publishingPaused } from "./env.js";
 import { apiError, type AppEnv } from "./principal.js";
 import { rateLimit } from "./rate-limit.js";
 import { createDb } from "@nextrium/db";
@@ -70,6 +71,16 @@ app.get("/api/docs", (c) => {
 </html>`);
 });
 
+app.get("/api/health", async (c) => {
+  c.header("Cache-Control", "no-store");
+  try {
+    await c.env.DB.prepare("SELECT 1").first();
+    return c.json({ ok: true, publishingPaused: publishingPaused(c.env) }, 200);
+  } catch {
+    return c.json({ ok: false }, 503);
+  }
+});
+
 app.on(["GET", "POST"], "/api/auth/*", (c) => createAuth(c.env).handler(c.req.raw));
 app.route("/api/v1", api);
 app.route("/api/mcp", mcp);
@@ -95,8 +106,9 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
   const now = new Date(event.scheduledTime);
   ctx.waitUntil(
     (async () => {
+      const paused = publishingPaused(env);
       if (event.cron === PUBLISH_CRON) {
-        if (!env.TOKEN_ENCRYPTION_KEY) return;
+        if (!env.TOKEN_ENCRYPTION_KEY || paused) return;
         const result = await runDuePublishing(await publishDeps(env, db), now, 5);
         if (result.due) console.log("scheduled publishing", result);
         return;
@@ -104,7 +116,7 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
       const job = cronJob(event.scheduledTime);
       const result =
         job === "sources" ? await runSourcePolling(db, { githubToken: env.GITHUB_TOKEN }, now)
-        : job === "autopilot" ? await runAutopilot(db, aiProviders(env), now)
+        : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now))
         : job === "engagement" ? await runEngagementSync(db, fetch, now)
         : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now) };
       console.log("cron", job, result);

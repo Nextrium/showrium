@@ -268,6 +268,15 @@ export async function runDuePublishing(deps: PublishDeps, now = new Date(), limi
     } catch (error) {
       failed++;
       if (!(error instanceof PublishError)) console.error("scheduled publish error", error);
+      // Checks that fail before the claim (account disconnected, errors, credits) leave the post
+      // "scheduled"; it would be retried every run and, at the head of the queue, block others.
+      if (!(error instanceof PublishError && error.code === "conflict")) {
+        const message = error instanceof PublishError ? error.message : "Publishing failed unexpectedly.";
+        await deps.db
+          .update(draft)
+          .set({ status: "failed", lastError: message, updatedAt: new Date() })
+          .where(and(eq(draft.id, d.id), eq(draft.status, "scheduled")));
+      }
     }
   }
   return { due: due.length, published, failed };

@@ -48,6 +48,11 @@ export interface Env {
   LEMONSQUEEZY_WEBHOOK_SECRET?: string;
   LEMONSQUEEZY_STORE_ID?: string;
   LEMONSQUEEZY_VARIANTS?: string;
+  /**
+   * Incident kill switch (variable): "true" stops all posting through platform APIs (manual publish,
+   * scheduled posts and autopilot). Tap-to-post still works: people post from their own apps.
+   */
+  PUBLISHING_PAUSED?: string;
   /** Platform admins (secret): exact emails allowed to create invites. Unset = nobody. */
   PLATFORM_ADMIN_EMAILS?: string;
   /** Beta sign-up allowlist (secret): emails, "@domain" entries or "*". Unset = no new sign-ups. */
@@ -60,6 +65,8 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
 }
+
+export const publishingPaused = (env: Env) => env.PUBLISHING_PAUSED === "true";
 
 export function signupMode(env: Env) {
   return parseSignupMode(env.SIGNUP_MODE);

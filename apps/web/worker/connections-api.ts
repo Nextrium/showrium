@@ -24,6 +24,7 @@ import {
 } from "@nextrium/core";
 import { bluesky, intentUrl, linkedin, mastodon, PlatformError, tiktok, x, type OAuthConfig } from "@nextrium/platforms";
 import type { Env } from "./env.js";
+import { publishingPaused } from "./env.js";
 import { apiError, requirePrincipal, type AppEnv } from "./principal.js";
 
 export const connectionsApi = new OpenAPIHono<AppEnv>({
@@ -263,6 +264,7 @@ connectionsApi.openapi(
   async (c) => {
     const p = c.get("principal");
     if (!can(p.role, "publish")) return c.json(apiError("forbidden", "Your role can't publish in this workspace."), 403);
+    if (publishingPaused(c.env)) return c.json(apiError("publishing_paused", "Posting through Showrium is paused for maintenance. Use tap-to-post, or try again later."), 503);
     const { id } = c.req.valid("param");
     let deps: PublishDeps;
     try {
