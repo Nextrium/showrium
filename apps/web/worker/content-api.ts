@@ -23,6 +23,7 @@ import {
   PLAN_LIMITS,
   recordAudit,
   removeSource,
+  resolveBlogSource,
   savePersona,
   SourceLimitError,
   syncSource,
@@ -215,24 +216,41 @@ contentApi.openapi(
     path: "/sources",
     tags: ["Sources"],
     request: body(z.discriminatedUnion("kind", [z.object({ kind: z.literal("github_repo"), repo: z.string().trim().regex(GITHUB_REPO_RE, "Use the form owner/repository.") }), z.object({ kind: z.literal("rss"), url: z.string().trim().max(2000) })])),
-    responses: { 201: json(z.object({ id: z.string() }), "Added"), 409: json(Err, "Limit reached or already added"), ...errs },
+    responses: {
+      201: json(z.object({ id: z.string(), kind: z.enum(["github_repo", "rss", "page"]), key: z.string(), note: z.string().nullable() }), "Added"),
+      409: json(Err, "Limit reached or already added"),
+      ...errs,
+    },
   }),
   async (c) => {
     if (denied(c, "content.write")) return c.json(forbidden("connect sources"), 403);
     const input = c.req.valid("json");
     const { orgId } = c.get("principal");
-    const key = input.kind === "github_repo" ? input.repo.toLowerCase() : input.url;
+    let kind: "github_repo" | "rss" | "page" = input.kind;
+    let key = input.kind === "github_repo" ? input.repo.toLowerCase() : input.url;
+    let note: string | null = null;
     if (input.kind === "rss") {
+      // People paste the blog page, not its feed: find the feed, or watch the page itself.
       try {
         assertSafeUrl(input.url);
+        const resolved = await resolveBlogSource(input.url);
+        kind = resolved.kind;
+        key = resolved.key;
+        note =
+          resolved.how === "page"
+            ? "This site has no feed, so Showrium watches the page for new articles."
+            : resolved.how === "feed"
+              ? null
+              : "Found this site's feed and connected that.";
       } catch (error) {
-        return c.json(apiError("unsafe_url", error instanceof Error ? error.message : "Invalid feed address."), 400);
+        const message = error instanceof UnsafeUrlError ? error.message : error instanceof Error ? error.message : "We couldn't read that address.";
+        return c.json(apiError("unreadable_source", message), 400);
       }
     }
     try {
-      const created = await addSource(c.get("db"), orgId, await getOrgPlan(c.get("db"), orgId), input.kind, key);
+      const created = await addSource(c.get("db"), orgId, await getOrgPlan(c.get("db"), orgId), kind, key);
       if (!created) return c.json(apiError("already_added", "That source is already connected."), 409);
-      return c.json({ id: created.id }, 201);
+      return c.json({ id: created.id, kind, key, note }, 201);
     } catch (error) {
       if (error instanceof SourceLimitError) return c.json(apiError("source_limit", error.message), 409);
       throw error;

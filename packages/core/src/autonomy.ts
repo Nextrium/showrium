@@ -24,7 +24,7 @@ import { addContextItems, compose, getOrgPlan, markSourceChecked, updateDraft } 
 import { allowedAutopilotLevel, getUsage, PLAN_FEATURES, PLAN_LIMITS } from "./plans.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
-import { ingestFeed, ingestGithubActivity } from "./ingest.js";
+import { ingestFeed, ingestGithubActivity, ingestWatchedPage } from "./ingest.js";
 import { recordAudit } from "./orgs.js";
 import { API_PUBLISH_PLATFORMS, scheduleDraft } from "./publishing.js";
 
@@ -67,6 +67,10 @@ export async function syncSource(
     if (src.kind === "github_repo") {
       const gh = await ingestGithubActivity(src.key, { fetch: opts.fetch, ...(opts.now ? { now: opts.now } : {}) });
       batches.push({ kind: "github_release", items: gh.releases }, { kind: "github_activity", items: gh.activity });
+    } else if (src.kind === "page") {
+      const watched = await ingestWatchedPage(src.key, src.seen, { fetch: opts.fetch });
+      batches.push({ kind: "rss_item", items: watched.items });
+      await db.update(source).set({ seen: watched.seen }).where(eq(source.id, src.id));
     } else {
       batches.push({ kind: "rss_item", items: await ingestFeed(src.key, opts.fetch) });
     }

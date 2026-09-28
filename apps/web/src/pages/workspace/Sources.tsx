@@ -3,7 +3,7 @@ import { api, timeAgo, useApi } from "../../lib";
 import { Link } from "../../ui/Link";
 import { Alert, Badge, Button, Empty, Icon, PageHeader, Panel, type IconName } from "../../ui/kit";
 
-type Source = { id: string; kind: "github_repo" | "rss"; key: string; lastCheckedAt: string | null; lastError: string | null };
+type Source = { id: string; kind: "github_repo" | "rss" | "page"; key: string; lastCheckedAt: string | null; lastError: string | null };
 type ContextItem = { id: string; kind: string; title: string; body: string; url: string | null; createdAt: string };
 type Usage = { sources: { limit: number } };
 
@@ -13,14 +13,14 @@ const CATALOG: { group: string; items: CatalogItem[] }[] = [
     group: "For builders",
     items: [
       { id: "github", name: "GitHub repository", body: "Releases, plus each day’s commits and merged pull requests. Public repositories; no release needed.", icon: "git", kind: "github_repo", placeholder: "owner/repository", label: "Repository" },
-      { id: "devto", name: "Dev.to, Hashnode or Medium", body: "Your articles as soon as they go live. Paste your feed address.", icon: "sources", kind: "rss", placeholder: "https://dev.to/feed/yourname", label: "Feed address" },
+      { id: "devto", name: "Dev.to, Hashnode or Medium", body: "Your articles as soon as they go live. Paste your profile or blog address.", icon: "sources", kind: "rss", placeholder: "https://dev.to/yourname", label: "Address" },
       { id: "mcp", name: "AI coding tools", body: "Claude Code or Cursor can tell Showrium what you shipped, through the MCP server.", icon: "code" },
     ],
   },
   {
     group: "For writers and creators",
     items: [
-      { id: "rss", name: "Blog or newsletter", body: "Any site with a feed: WordPress, Substack, Ghost and more.", icon: "sources", kind: "rss", placeholder: "https://example.com/feed.xml", label: "Feed address" },
+      { id: "rss", name: "Blog, newsletter or website", body: "Paste the page that lists your posts. Showrium finds its feed, or watches the page for new articles.", icon: "globe", kind: "rss", placeholder: "https://example.com/blog", label: "Address" },
       { id: "youtube", name: "YouTube channel", body: "Each new video becomes posts that point people to it.", icon: "play" },
       { id: "podcast", name: "Podcast", body: "New episodes, with the key moments pulled out.", icon: "voice" },
     ],
@@ -58,10 +58,10 @@ function SourceRow({ s, onRemoved }: { s: Source; onRemoved: () => void }) {
   const status = result ?? (s.lastError ? { tone: "warn" as const, text: s.lastError } : s.lastCheckedAt ? { tone: "ok" as const, text: `Checked ${timeAgo(s.lastCheckedAt)}` } : { tone: "warn" as const, text: "Not checked yet" });
   return (
     <li className="flex flex-wrap items-center gap-3 border-t border-line py-3.5 first:border-t-0">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-raised text-ink-2"><Icon name={s.kind === "github_repo" ? "git" : "sources"} /></span>
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-raised text-ink-2"><Icon name={s.kind === "github_repo" ? "git" : s.kind === "page" ? "globe" : "sources"} /></span>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate font-semibold">{s.key}</span>
-        <span className="text-[13px] text-muted">{s.kind === "github_repo" ? "GitHub · releases, commits and merged pull requests" : "Feed"}</span>
+        <span className="text-[13px] text-muted">{s.kind === "github_repo" ? "GitHub · releases, commits and merged pull requests" : s.kind === "page" ? "Web page · watched for new articles" : "Feed"}</span>
       </div>
       <span role="status" className={`text-[13px] sm:max-w-[300px] ${status.tone === "ok" ? "text-ok" : "text-warn"}`}>{status.text}</span>
       <div className="flex gap-2">
@@ -72,7 +72,7 @@ function SourceRow({ s, onRemoved }: { s: Source; onRemoved: () => void }) {
   );
 }
 
-function AddForm({ item, onDone, onCancel }: { item: CatalogItem; onDone: () => void; onCancel: () => void }) {
+function AddForm({ item, onDone, onCancel }: { item: CatalogItem; onDone: (notice: string) => void; onCancel: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = async (e: FormEvent<HTMLFormElement>) => {
@@ -81,10 +81,11 @@ function AddForm({ item, onDone, onCancel }: { item: CatalogItem; onDone: () => 
     setBusy(true);
     setError(null);
     try {
-      const created = await api<{ id: string }>("/sources", { method: "POST", body: JSON.stringify(item.kind === "github_repo" ? { kind: "github_repo", repo: value } : { kind: "rss", url: value }) });
+      const created = await api<{ id: string; key: string; note: string | null }>("/sources", { method: "POST", body: JSON.stringify(item.kind === "github_repo" ? { kind: "github_repo", repo: value } : { kind: "rss", url: value }) });
       // First check straight away, so people see what was found.
-      await api(`/sources/${created.id}/sync`, { method: "POST" }).catch(() => undefined);
-      onDone();
+      const out = await api<{ added: number; error: string | null }>(`/sources/${created.id}/sync`, { method: "POST" }).catch(() => null);
+      const found = out?.error ? ` The first check said: ${out.error}` : out ? ` ${out.added ? `${out.added} new item${out.added === 1 ? "" : "s"} found.` : "Nothing new yet."}` : "";
+      onDone(`Connected ${created.key}.${created.note ? ` ${created.note}` : ""}${found}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't add the source.");
     } finally {
@@ -112,6 +113,7 @@ export function SourcesPage() {
   const contexts = useApi<{ data: ContextItem[] }>("/contexts");
   const { data: usage } = useApi<Usage>("/usage");
   const [adding, setAdding] = useState<CatalogItem | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const count = sources.data?.data.length ?? 0;
   const limit = usage?.sources.limit;
   const full = limit !== undefined && count >= limit;
@@ -132,7 +134,17 @@ export function SourcesPage() {
       <div className="flex flex-col gap-3">
         <h2 className="font-sans text-base font-semibold tracking-normal">Add a source</h2>
         {full && <Alert tone="warn">Your plan’s {limit} source{limit === 1 ? " is" : "s are"} in use. Remove one, or upgrade in Billing.</Alert>}
-        {adding && <AddForm item={adding} onCancel={() => setAdding(null)} onDone={() => { setAdding(null); sources.reload(); contexts.reload(); }} />}
+        {notice && <Alert tone="ok">{notice}</Alert>}
+        {adding && (
+          <AddForm
+            item={adding}
+            onCancel={() => setAdding(null)}
+            onDone={(n) => {
+              setAdding(null);
+              setNotice(n);
+            }}
+          />
+        )}
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {CATALOG.map((g) => (
             <Panel key={g.group}>
@@ -153,7 +165,7 @@ export function SourcesPage() {
                   return (
                     <li key={item.id}>
                       {item.kind ? (
-                        <button type="button" disabled={full} onClick={() => setAdding(item)} className={`${cls} cursor-pointer bg-transparent hover:border-line-strong hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-60`}>{inner}</button>
+                        <button type="button" disabled={full} onClick={() => { setNotice(null); setAdding(item); }} className={`${cls} cursor-pointer bg-transparent hover:border-line-strong hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-60`}>{inner}</button>
                       ) : item.id === "note" ? (
                         <Link to="/app/new" className={`${cls} no-underline hover:border-line-strong hover:bg-sunken`}>{inner}</Link>
                       ) : item.id === "mcp" ? (

@@ -76,6 +76,103 @@ export async function ingestFeed(url: string, doFetch?: FetchLike): Promise<Inge
   return parseFeed(feed.text);
 }
 
+// --- Any blog or site: find its feed, or watch the page itself -------------------------------------
+
+const FEED_TYPES = /xml|rss|atom/;
+const COMMON_FEED_PATHS = ["feed", "rss.xml", "feed.xml", "atom.xml", "index.xml"];
+
+export type ResolvedSource = { kind: "rss" | "page"; key: string; how: "feed" | "discovered" | "guessed" | "page" };
+
+/**
+ * People paste whatever address they have (usually the blog page, not its feed). Resolve it:
+ * a feed is used as is; a page's advertised feed is used next; then a few common feed paths;
+ * otherwise the page itself is watched for new article links.
+ */
+export async function resolveBlogSource(raw: string, doFetch?: FetchLike): Promise<ResolvedSource> {
+  // Big server-rendered pages can be slow to finish streaming; give the page itself more time.
+  const page = await safeFetchText(raw, { fetch: doFetch, timeoutMs: 15_000, maxBytes: 2_000_000 });
+  if (FEED_TYPES.test(page.contentType) && parseFeed(page.text).length) return { kind: "rss", key: page.url, how: "feed" };
+  if (!/html/.test(page.contentType)) throw new Error("That address isn't a web page or a feed.");
+  const advertised = [...page.text.matchAll(/<link\b[^>]*>/gi)]
+    .map((m) => m[0])
+    .filter((tag) => /rel=["']?alternate/i.test(tag) && /type=["']?application\/(rss|atom)\+xml/i.test(tag))
+    .map((tag) => tag.match(/href=["']([^"']+)["']/i)?.[1])
+    .filter((h): h is string => Boolean(h));
+  for (const href of advertised.slice(0, 2)) {
+    const url = new URL(decodeEntities(href), page.url).toString();
+    if (await looksLikeFeed(url, doFetch)) return { kind: "rss", key: url, how: "discovered" };
+  }
+  const base = new URL(page.url);
+  const dir = base.pathname.endsWith("/") ? base.pathname : `${base.pathname}/`;
+  const guesses = [...new Set([...COMMON_FEED_PATHS.map((p) => new URL(`${dir}${p}`, base).toString()), new URL("/feed", base).toString(), new URL("/rss.xml", base).toString()])].slice(0, 5);
+  // Tried together (most answer 404 quickly); the first match in this order wins.
+  const hits = await Promise.all(guesses.map((url) => looksLikeFeed(url, doFetch)));
+  const guessed = guesses[hits.indexOf(true)];
+  if (guessed) return { kind: "rss", key: guessed, how: "guessed" };
+  if (!extractArticleLinks(page.text, page.url).length) throw new Error("We couldn't find a feed or any article links on that page. Try the page that lists your posts.");
+  return { kind: "page", key: page.url, how: "page" };
+}
+
+async function looksLikeFeed(url: string, doFetch?: FetchLike) {
+  try {
+    const res = await safeFetchText(url, { fetch: doFetch, accept: "application/rss+xml,application/atom+xml,application/xml,text/xml", allowedTypes: FEED_TYPES, timeoutMs: 6_000 });
+    return parseFeed(res.text).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+const NOT_ARTICLES = /\/(tag|tags|category|categories|author|authors|page|search|feed|rss)(\/|$)/i;
+
+/**
+ * Article links on a listing page: same site, below the page's own path (a /blog page lists
+ * /blog/<post>), in page order (usually newest first), without tag, category or paging links.
+ */
+export function extractArticleLinks(html: string, pageUrl: string): string[] {
+  const page = new URL(pageUrl);
+  const prefix = page.pathname.replace(/\/$/, "");
+  const out: string[] = [];
+  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"'#]+)["']/gi)) {
+    let url: URL;
+    try {
+      url = new URL(decodeEntities(m[1]!), page);
+    } catch {
+      continue;
+    }
+    if (url.host !== page.host || !/^https?:$/.test(url.protocol)) continue;
+    const path = url.pathname.replace(/\/$/, "");
+    if (!path.startsWith(`${prefix}/`) || path === prefix || NOT_ARTICLES.test(path) || /\.(xml|jpe?g|png|gif|webp|svg|pdf|zip)$/i.test(path)) continue;
+    const clean = `${url.origin}${path}`;
+    if (!out.includes(clean)) out.push(clean);
+    if (out.length >= 60) break;
+  }
+  return out;
+}
+
+/**
+ * A watched page: new article links since last time, each read as an item. On the first check
+ * only the newest few are read and everything else is remembered, so old posts don't flood ideas.
+ */
+export async function ingestWatchedPage(pageUrl: string, seen: string[], opts: { fetch?: FetchLike | undefined; perCheck?: number } = {}) {
+  const page = await safeFetchText(pageUrl, { fetch: opts.fetch, allowedTypes: /html/, timeoutMs: 15_000, maxBytes: 2_000_000 });
+  const links = extractArticleLinks(page.text, page.url);
+  const fresh = links.filter((l) => !seen.includes(l)).slice(0, opts.perCheck ?? 3);
+  const items: IngestedItem[] = [];
+  for (const link of fresh) {
+    try {
+      const article = await ingestUrl(link, opts.fetch);
+      // "Post title | Site name" → "Post title" (short trailing site names only).
+      const title = article.title.replace(/\s+[|–—-]\s+[^|–—-]{1,40}$/, "").trim() || article.title;
+      items.push({ ...article, title, externalId: `page:${link}`.slice(0, 300), url: link });
+    } catch {
+      // Unreadable article: skipped, and remembered so it isn't retried every check.
+    }
+  }
+  // Remember everything on the page now (newest first, capped) plus anything seen before.
+  const nextSeen = [...new Set([...links, ...seen])].slice(0, 300);
+  return { items, seen: nextSeen };
+}
+
 export const GITHUB_REPO_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 
 // --- GitHub: public feeds (no API token, no API rate limit) ---------------------------------------

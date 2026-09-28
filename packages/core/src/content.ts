@@ -85,7 +85,7 @@ export class SourceLimitError extends Error {
   }
 }
 
-export async function addSource(db: Db, orgId: string, plan: Plan, kind: "github_repo" | "rss", key: string) {
+export async function addSource(db: Db, orgId: string, plan: Plan, kind: "github_repo" | "rss" | "page", key: string) {
   const existing = await db.select({ id: source.id }).from(source).where(eq(source.orgId, orgId));
   if (existing.length >= PLAN_LIMITS[plan].sources) throw new SourceLimitError(PLAN_LIMITS[plan].sources);
   const [row] = await db

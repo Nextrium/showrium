@@ -245,15 +245,18 @@ export const persona = sqliteTable("persona", {
   updatedAt: updatedAt(),
 });
 
-export const SOURCE_KINDS = ["github_repo", "rss"] as const;
+/** github_repo; rss (a feed); page (a blog or news page without a feed, watched for new article links). */
+export const SOURCE_KINDS = ["github_repo", "rss", "page"] as const;
 export const source = sqliteTable(
   "source",
   {
     id: text("id").primaryKey(),
     orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
     kind: text("kind", { enum: SOURCE_KINDS }).notNull(),
-    /** "owner/repo" for GitHub, a feed URL for RSS. */
+    /** "owner/repo" for GitHub, a feed URL for RSS, the page URL for a watched page. */
     key: text("key").notNull(),
+    /** Watched pages: article links already seen, so only new ones become ideas (newest first, capped). */
+    seen: text("seen", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
     lastCheckedAt: integer("last_checked_at", { mode: "timestamp_ms" }),
     lastError: text("last_error"),
     createdAt: createdAt(),

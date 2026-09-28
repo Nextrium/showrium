@@ -1,0 +1,1 @@
+ALTER TABLE `source` ADD `seen` text DEFAULT '[]' NOT NULL;
