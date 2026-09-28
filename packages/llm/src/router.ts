@@ -39,8 +39,10 @@ export class AllProvidersFailedError extends Error {
 
 /** Pulls the first JSON object out of a model reply (some models wrap JSON in prose or fences). */
 export function extractJson(text: string): unknown {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = fenced ? fenced[1]! : text;
+  // Plain string search, not a regex: a fence regex can take quadratic time on odd replies.
+  const open = text.indexOf("```");
+  const close = open === -1 ? -1 : text.indexOf("```", open + 3);
+  const candidate = close === -1 ? text : text.slice(open + 3, close).replace(/^json/i, "");
   const start = candidate.indexOf("{");
   const end = candidate.lastIndexOf("}");
   if (start === -1 || end <= start) throw new Error("no JSON object in reply");

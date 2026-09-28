@@ -11,7 +11,8 @@ export interface LintIssue {
 const URL_RE = /\bhttps?:\/\/[^\s)]+/gi;
 const HASHTAG_RE = /(^|\s)#[\p{L}\p{N}_]+/gu;
 // Leftover template markers a model sometimes emits instead of real content.
-const PLACEHOLDER_RE = /\[(?:insert|your|link|name|company)[^\]]*\]|\{\{[^}]+\}\}|lorem ipsum/i;
+// Bounded, and the inner classes exclude the opening character, so matching stays linear.
+const PLACEHOLDER_RE = /\[(?:insert|your|link|name|company)[^[\]]{0,80}\]|\{\{[^{}]{1,80}\}\}|lorem ipsum/i;
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F‪-‮⁦-⁩]/;
 
@@ -83,6 +84,12 @@ export const hasErrors = (issues: { severity: "error" | "warn" }[]) => issues.so
 
 export type FactIssue = LintIssue & { code: "unverified_fact" };
 
+function trimEndPunctuation(s: string): string {
+  let end = s.length;
+  while (end > 0 && ".,!?".includes(s[end - 1]!)) end--;
+  return s.slice(0, end);
+}
+
 /**
  * Flags @handles, numbers and links in a draft that don't appear in the source material.
  * Models sometimes "correct" handles (@kemi-dev -> @kemi_dev) or invent figures; the user must check them.
@@ -91,7 +98,7 @@ export function checkFacts(text: string, source: string): FactIssue[] {
   const src = source.toLowerCase();
   const found = new Set<string>();
   for (const m of text.matchAll(/@[a-z0-9][a-z0-9._-]*[a-z0-9]/gi)) found.add(m[0]);
-  for (const m of text.matchAll(/\bhttps?:\/\/[^\s)]+/gi)) found.add(m[0].replace(/[.,!?]+$/, ""));
+  for (const m of text.matchAll(/\bhttps?:\/\/[^\s)]+/gi)) found.add(trimEndPunctuation(m[0]));
   for (const m of text.matchAll(/(?<![\w.])\d+(?:[.,]\d+)*%?/g)) found.add(m[0]);
   const unverified = [...found].filter((token) => !src.includes(token.toLowerCase()));
   return unverified.length

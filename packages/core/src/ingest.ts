@@ -19,13 +19,57 @@ export function decodeEntities(s: string): string {
     .replace(/&([a-z]+);/gi, (m, n: string) => ENTITIES[n.toLowerCase()] ?? m);
 }
 
+/**
+ * Finds <name ...>...</name> blocks in order, in linear time.
+ * (A lazy regex like /<svg[\s\S]*?<\/svg>/ can take quadratic time on hostile pages.)
+ */
+export function findElements(text: string, name: string, limit = Infinity): { start: number; end: number }[] {
+  const open = new RegExp(`<${name}[\\s>/]`, "gi");
+  const close = new RegExp(`</${name}\\s*>`, "gi");
+  const out: { start: number; end: number }[] = [];
+  while (out.length < limit) {
+    const o = open.exec(text);
+    if (!o) break;
+    close.lastIndex = o.index + o[0].length;
+    const c = close.exec(text);
+    if (!c) break;
+    out.push({ start: o.index, end: c.index + c[0].length });
+    open.lastIndex = c.index + c[0].length;
+  }
+  return out;
+}
+
+const blocksOf = (text: string, name: string, limit?: number) => findElements(text, name, limit).map((b) => text.slice(b.start, b.end));
+
+/** The text inside the first <name>...</name>, or "". */
+function innerOf(text: string, name: string): string {
+  const block = blocksOf(text, name, 1)[0];
+  if (!block) return "";
+  const from = block.indexOf(">") + 1;
+  const to = block.lastIndexOf("</");
+  return from > 0 && to >= from ? block.slice(from, to) : "";
+}
+
+function removeElements(html: string, names: string[]): string {
+  let out = html;
+  for (const name of names) {
+    let kept = "";
+    let from = 0;
+    for (const b of findElements(out, name)) {
+      kept += `${out.slice(from, b.start)} `;
+      from = b.end;
+    }
+    out = kept + out.slice(from);
+  }
+  return out;
+}
+
 export function stripTags(html: string): string {
   return decodeEntities(
-    html
-      .replace(/<(script|style|noscript|svg|template)[\s\S]*?<\/\1>/gi, " ")
+    removeElements(html, ["script", "style", "noscript", "svg", "template"])
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/<\/(p|div|li|h[1-6]|blockquote|pre|tr)>/gi, "\n")
-      .replace(/<[^>]+>/g, " "),
+      .replace(/<[^<>]+>/g, " "),
   )
     .replace(/[ \t\f\v]+/g, " ")
     .replace(/ *\n */g, "\n")
@@ -39,9 +83,10 @@ const clip = (s: string) => (s.length > MAX_CONTEXT_CHARS ? `${s.slice(0, MAX_CO
 export async function ingestUrl(raw: string, doFetch?: FetchLike): Promise<IngestedItem> {
   const page = await safeFetchText(raw, { fetch: doFetch, allowedTypes: /text\/html|application\/xhtml|text\/plain/ });
   if (page.contentType.includes("text/plain")) return { externalId: null, title: "", body: clip(page.text.trim()), url: page.url };
-  const title = decodeEntities(page.text.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() ?? "");
-  const description = decodeEntities(page.text.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i)?.[1] ?? "");
-  const main = page.text.match(/<(article|main)[\s\S]*?<\/\1>/i)?.[0] ?? page.text.match(/<body[\s\S]*<\/body>/i)?.[0] ?? page.text;
+  const title = decodeEntities(innerOf(page.text, "title").trim());
+  const descTag = [...page.text.matchAll(/<meta\b[^<>]*>/gi)].map((m) => m[0]).find((t) => /\bname=["']description["']/i.test(t));
+  const description = decodeEntities(descTag?.match(/\bcontent=["']([^"']*)["']/i)?.[1] ?? "");
+  const main = blocksOf(page.text, "article", 1)[0] ?? blocksOf(page.text, "main", 1)[0] ?? blocksOf(page.text, "body", 1)[0] ?? page.text;
   const text = stripTags(main);
   const body = clip([description, text].filter(Boolean).join("\n\n"));
   if (body.length < 40) throw new Error("Couldn't find readable text on that page.");
@@ -51,14 +96,12 @@ export async function ingestUrl(raw: string, doFetch?: FetchLike): Promise<Inges
 /** Parses RSS 2.0 and Atom. Tolerant: skips entries it can't read. */
 export function parseFeed(xml: string): IngestedItem[] {
   const pick = (block: string, tag: string) => {
-    const m = block.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, "i"));
-    if (!m) return "";
-    return m[1]!.replace(/^<!\[CDATA\[([\s\S]*?)\]\]>$/, "$1").trim();
+    return innerOf(block, tag).replace(/^<!\[CDATA\[([\s\S]*?)\]\]>$/, "$1").trim();
   };
   const items: IngestedItem[] = [];
-  const blocks = xml.match(/<item[\s>][\s\S]*?<\/item>|<entry[\s>][\s\S]*?<\/entry>/gi) ?? [];
+  const blocks = [...blocksOf(xml, "item", 20), ...blocksOf(xml, "entry", 20)];
   for (const block of blocks.slice(0, 20)) {
-    const atomLink = block.match(/<link[^>]+href=["']([^"']+)["']/i)?.[1] ?? null;
+    const atomLink = block.match(/<link[^<>]+href=["']([^"']+)["']/i)?.[1] ?? null;
     const rawLink = decodeEntities(pick(block, "link") || atomLink || "").trim();
     // Feeds are outside input: keep only web links (never javascript: or data: URLs).
     const link = /^https?:\/\//i.test(rawLink) ? rawLink.slice(0, 2000) : null;
@@ -95,7 +138,7 @@ export async function resolveBlogSource(raw: string, doFetch?: FetchLike): Promi
   const page = await safeFetchText(raw, { fetch: doFetch, timeoutMs: 15_000, maxBytes: 2_000_000 });
   if (FEED_TYPES.test(page.contentType) && parseFeed(page.text).length) return { kind: "rss", key: page.url, how: "feed" };
   if (!/html/.test(page.contentType)) throw new Error("That address isn't a web page or a feed.");
-  const advertised = [...page.text.matchAll(/<link\b[^>]*>/gi)]
+  const advertised = [...page.text.matchAll(/<link\b[^<>]*>/gi)]
     .map((m) => m[0])
     .filter((tag) => /rel=["']?alternate/i.test(tag) && /type=["']?application\/(rss|atom)\+xml/i.test(tag))
     .map((tag) => tag.match(/href=["']([^"']+)["']/i)?.[1])
@@ -134,7 +177,7 @@ export function extractArticleLinks(html: string, pageUrl: string): string[] {
   const page = new URL(pageUrl);
   const prefix = page.pathname.replace(/\/$/, "");
   const out: string[] = [];
-  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"'#]+)["']/gi)) {
+  for (const m of html.matchAll(/<a\b[^<>]*href=["']([^"'#]+)["']/gi)) {
     let url: URL;
     try {
       url = new URL(decodeEntities(m[1]!), page);
@@ -188,11 +231,11 @@ interface AtomEntry {
 }
 
 function parseAtom(xml: string): AtomEntry[] {
-  const tag = (block: string, name: string) => decodeEntities(block.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, "i"))?.[1]?.trim() ?? "");
-  return (xml.match(/<entry[\s>][\s\S]*?<\/entry>/gi) ?? []).slice(0, 40).map((block) => ({
+  const tag = (block: string, name: string) => decodeEntities(innerOf(block, name).trim());
+  return blocksOf(xml, "entry", 40).map((block) => ({
     id: tag(block, "id"),
     title: stripTags(tag(block, "title")),
-    link: block.match(/<link[^>]+href=["']([^"']+)["']/i)?.[1] ?? null,
+    link: block.match(/<link[^<>]+href=["']([^"']+)["']/i)?.[1] ?? null,
     updated: tag(block, "updated"),
     content: stripTags(tag(block, "content")),
   }));

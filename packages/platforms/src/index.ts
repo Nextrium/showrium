@@ -308,16 +308,19 @@ export interface PostEngagement {
   comments: { externalId: string; author: string; text: string }[];
 }
 
+// Reply text is shown as plain text (React escapes it), never as HTML.
+// Any leftover < or > is dropped, and &amp; is decoded last so "&amp;lt;" stays "&lt;".
 const plain = (html: string) =>
   html
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/p>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&amp;/g, "&")
+    .replace(/<[^<>]*>/g, "")
+    .replace(/[<>]/g, "")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
     .trim();
 const count = (n: unknown) => (typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0);
 
