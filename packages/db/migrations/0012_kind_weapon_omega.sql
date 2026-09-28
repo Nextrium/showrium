@@ -1,0 +1,1 @@
+ALTER TABLE `context_item` ADD `media_key` text;

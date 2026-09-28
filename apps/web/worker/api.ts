@@ -20,6 +20,7 @@ import { contentApi } from "./content-api.js";
 import { videoApi } from "./video-api.js";
 import { autonomyApi } from "./autonomy-api.js";
 import { businessApi } from "./business-api.js";
+import { materialApi } from "./material-api.js";
 import { authProviders, signupMode } from "./env.js";
 import { apiError, canManageKeys, requirePrincipal, type AppEnv } from "./principal.js";
 
@@ -435,6 +436,7 @@ api.route("/", connectionsApi);
 api.route("/", videoApi);
 api.route("/", autonomyApi);
 api.route("/", businessApi);
+api.route("/", materialApi);
 
 api.doc31("/openapi.json", {
   openapi: "3.1.0",

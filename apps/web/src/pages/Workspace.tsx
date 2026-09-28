@@ -14,9 +14,11 @@ import { SourcesPage } from "./workspace/Sources";
 import { StudioPage } from "./workspace/Studio";
 import { TeamPage } from "./workspace/Team";
 import { VoicePage } from "./workspace/Voice";
+import { WelcomePage } from "./workspace/Welcome";
 
 const PAGES: Record<string, () => React.ReactNode> = {
   "/app": () => <AppHome />,
+  "/app/welcome": () => <WelcomePage />,
   "/app/new": () => <CreatePage />,
   "/app/posts": () => <DraftsPage />,
   "/app/drafts": () => <DraftsPage />, // old address

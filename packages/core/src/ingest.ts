@@ -63,7 +63,9 @@ export function parseFeed(xml: string): IngestedItem[] {
     // Feeds are outside input: keep only web links (never javascript: or data: URLs).
     const link = /^https?:\/\//i.test(rawLink) ? rawLink.slice(0, 2000) : null;
     const title = stripTags(pick(block, "title"));
-    const body = stripTags(pick(block, "content:encoded") || pick(block, "description") || pick(block, "content") || pick(block, "summary"));
+    const body = stripTags(
+      pick(block, "content:encoded") || pick(block, "description") || pick(block, "content") || pick(block, "summary") || pick(block, "media:description") || pick(block, "itunes:summary"),
+    );
     const guid = pick(block, "guid") || pick(block, "id") || link || title;
     if (!title && !body) continue;
     items.push({ externalId: guid ? `rss:${guid.slice(0, 300)}` : null, title: title.slice(0, 300), body: clip(body || title), url: link || null });

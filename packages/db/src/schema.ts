@@ -264,7 +264,7 @@ export const source = sqliteTable(
   (t) => [uniqueIndex("source_org_kind_key_uq").on(t.orgId, t.kind, t.key)],
 );
 
-export const CONTEXT_KINDS = ["manual", "url", "github_release", "github_activity", "rss_item", "voice"] as const;
+export const CONTEXT_KINDS = ["manual", "url", "github_release", "github_activity", "rss_item", "voice", "photo", "document", "prompt"] as const;
 export const contextItem = sqliteTable(
   "context_item",
   {
@@ -277,6 +277,8 @@ export const contextItem = sqliteTable(
     url: text("url"),
     /** Dedup key from the source (release id, feed guid). */
     externalId: text("external_id"),
+    /** Uploaded photo or document in the private R2 bucket (orgs/<org>/uploads/<id>), if any. */
+    mediaKey: text("media_key"),
     createdAt: createdAt(),
   },
   (t) => [index("context_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("context_org_external_uq").on(t.orgId, t.externalId)],

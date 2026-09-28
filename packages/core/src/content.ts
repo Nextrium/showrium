@@ -1,6 +1,6 @@
 // Persona, context items, drafts and the compose pipeline. Every function takes orgId and
 // filters by it: tenant isolation lives here, never in the caller.
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import {
   brief,
   contextItem,
@@ -300,4 +300,23 @@ export async function updateDraft(db: Db, orgId: string, id: string, patch: { te
     .set(set)
     .where(and(eq(draft.orgId, orgId), eq(draft.id, id), inArray(draft.status, ["draft", "approved", "failed", "discarded", "scheduled"])));
   return getDraft(db, orgId, id);
+}
+
+/** An uploaded photo or document, turned into text, as material to write from. */
+export async function addUploadedContext(db: Db, orgId: string, input: { kind: "photo" | "document"; title: string; body: string; mediaKey: string | null }) {
+  const [row] = await db
+    .insert(contextItem)
+    .values({ id: newId("ctx"), orgId, kind: input.kind, title: input.title.slice(0, 300), body: input.body.slice(0, 20_000), mediaKey: input.mediaKey })
+    .returning({ id: contextItem.id, title: contextItem.title });
+  return row!;
+}
+
+/** Uploads today (per workspace), to cap image reading cost. */
+export async function uploadsToday(db: Db, orgId: string, now = new Date()) {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const rows = await db
+    .select({ id: contextItem.id })
+    .from(contextItem)
+    .where(and(eq(contextItem.orgId, orgId), inArray(contextItem.kind, ["photo", "document"]), gte(contextItem.createdAt, start)));
+  return rows.length;
 }

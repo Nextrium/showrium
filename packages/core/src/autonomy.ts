@@ -24,7 +24,7 @@ import { addContextItems, compose, getOrgPlan, markSourceChecked, updateDraft } 
 import { allowedAutopilotLevel, getUsage, PLAN_FEATURES, PLAN_LIMITS } from "./plans.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
-import { ingestFeed, ingestGithubActivity, ingestWatchedPage } from "./ingest.js";
+import { ingestFeed, ingestGithubActivity, ingestWatchedPage, resolveBlogSource } from "./ingest.js";
 import { recordAudit } from "./orgs.js";
 import { API_PUBLISH_PLATFORMS, scheduleDraft } from "./publishing.js";
 
@@ -34,19 +34,19 @@ const DAY = 24 * HOUR;
 // --- Sources -> ideas ------------------------------------------------------------------
 
 /** Cheap, deterministic scoring (no AI): releases and launches rank above ordinary articles. */
-export function scoreIdea(kind: string, title: string): { score: number; reason: string } {
+export function scoreIdea(kind: string, title: string, label?: string): { score: number; reason: string } {
   let score = kind === "github_release" ? 70 : kind === "github_activity" ? 60 : kind === "rss_item" ? 50 : 40;
   if (/\bv?\d+\.\d+(\.\d+)?\b/.test(title)) score += 10;
   if (/\b(launch|launched|release|released|ship|shipped|announce|introducing|new)\b/i.test(title)) score += 10;
-  const what = kind === "github_release" ? "New release" : kind === "github_activity" ? "Your work" : kind === "rss_item" ? "New article" : "New material";
+  const what = label ?? (kind === "github_release" ? "New release" : kind === "github_activity" ? "Your work" : kind === "rss_item" ? "New post" : "New material");
   return { score: Math.min(100, score), reason: `${what}: ${title || "untitled"}`.slice(0, 200) };
 }
 
-export async function createIdeas(db: Db, orgId: string, kind: string, items: { id: string; title: string }[]) {
+export async function createIdeas(db: Db, orgId: string, kind: string, items: { id: string; title: string }[], label?: string) {
   if (!items.length) return 0;
   // Sources list newest first; a small step down per position keeps that order among equal scores.
   const rows = items.map((i, n) => {
-    const { score, reason } = scoreIdea(kind, i.title);
+    const { score, reason } = scoreIdea(kind, i.title, label);
     return { id: newId("idea"), orgId, contextItemId: i.id, reason, score: Math.max(0, score - Math.min(n, 9)) };
   });
   let added = 0;
@@ -54,6 +54,14 @@ export async function createIdeas(db: Db, orgId: string, kind: string, items: { 
     added += (await db.insert(idea).values(part).onConflictDoNothing({ target: [idea.orgId, idea.contextItemId] }).returning({ id: idea.id })).length;
   }
   return added;
+}
+
+/** What an item from this source is, for the idea's reason line. */
+function sourceLabel(key: string, kind: string): string | undefined {
+  if (kind !== "rss_item") return undefined;
+  if (/youtube\.com|youtu\.be/i.test(key)) return "New video";
+  if (/podcast|anchor\.fm|buzzsprout|libsyn|podbean|transistor|simplecast|megaphone|spreaker|acast/i.test(key)) return "New episode";
+  return "New article";
 }
 
 /** Fetches one source, stores new items and turns them into ideas. Used by "Sync now" and the cron job. */
@@ -72,14 +80,28 @@ export async function syncSource(
       batches.push({ kind: "rss_item", items: watched.items });
       await db.update(source).set({ seen: watched.seen }).where(eq(source.id, src.id));
     } else {
-      batches.push({ kind: "rss_item", items: await ingestFeed(src.key, opts.fetch) });
+      let items: Awaited<ReturnType<typeof ingestFeed>>;
+      try {
+        items = await ingestFeed(src.key, opts.fetch);
+      } catch (error) {
+        if (!(error instanceof Error && /Unsupported content type|HTTP 404/.test(error.message))) throw error;
+        const resolved = await resolveBlogSource(src.key, opts.fetch);
+        const fixed = { ...src, kind: resolved.kind, key: resolved.key, seen: [] as string[] };
+        try {
+          await db.update(source).set({ kind: fixed.kind, key: fixed.key, seen: [] }).where(eq(source.id, src.id));
+        } catch {
+          throw new Error(`This address is already connected as ${resolved.key}. Remove one of them.`);
+        }
+        return syncSource(db, fixed, opts);
+      }
+      batches.push({ kind: "rss_item", items });
     }
     let added = 0;
     let ideas = 0;
     for (const b of batches) {
       const rows = await addContextItems(db, src.orgId, b.kind, b.items, src.id);
       added += rows.length;
-      ideas += await createIdeas(db, src.orgId, b.kind, rows);
+      ideas += await createIdeas(db, src.orgId, b.kind, rows, sourceLabel(src.key, b.kind));
     }
     await markSourceChecked(db, src.orgId, src.id, null);
     return { added, ideas, error: null };

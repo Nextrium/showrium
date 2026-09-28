@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api, timeAgo, useApi } from "../../lib";
 import { Link } from "../../ui/Link";
 import { Alert, Badge, Button, Empty, Icon, PageHeader, Panel, type IconName } from "../../ui/kit";
+import { UploadForm } from "../../components/UploadForm";
 
 type Source = { id: string; kind: "github_repo" | "rss" | "page"; key: string; lastCheckedAt: string | null; lastError: string | null };
 type ContextItem = { id: string; kind: string; title: string; body: string; url: string | null; createdAt: string };
@@ -21,16 +22,16 @@ const CATALOG: { group: string; items: CatalogItem[] }[] = [
     group: "For writers and creators",
     items: [
       { id: "rss", name: "Blog, newsletter or website", body: "Paste the page that lists your posts. Showrium finds its feed, or watches the page for new articles.", icon: "globe", kind: "rss", placeholder: "https://example.com/blog", label: "Address" },
-      { id: "youtube", name: "YouTube channel", body: "Each new video becomes posts that point people to it.", icon: "play" },
-      { id: "podcast", name: "Podcast", body: "New episodes, with the key moments pulled out.", icon: "voice" },
+      { id: "youtube", name: "YouTube channel", body: "Each new video becomes posts that point people to it.", icon: "play", kind: "rss", placeholder: "https://www.youtube.com/@yourchannel", label: "Channel address" },
+      { id: "podcast", name: "Podcast", body: "New episodes become posts. Paste your show’s RSS feed or website (from Spotify for Podcasters, Buzzsprout, Transistor…).", icon: "voice", kind: "rss", placeholder: "https://feeds.example.com/show.xml", label: "Feed or website" },
     ],
   },
   {
     group: "For everyday moments",
     items: [
       { id: "note", name: "Notes, links and voice", body: "Write a line, paste a link, or record a voice note from New post.", icon: "edit" },
-      { id: "prompt", name: "Daily prompt", body: "A short question each day, matched to what you do.", icon: "comment" },
-      { id: "photos", name: "Photos and documents", body: "A photo of your work, a whiteboard, slides or a PDF.", icon: "photo" },
+      { id: "prompt", name: "Daily prompt", body: "A short question each day on Home, matched to what you do. Answer in a sentence.", icon: "comment" },
+      { id: "photos", name: "Photos and documents", body: "A photo of your work, a whiteboard, slides or a PDF. Showrium reads it for you.", icon: "photo" },
     ],
   },
 ];
@@ -114,6 +115,15 @@ export function SourcesPage() {
   const { data: usage } = useApi<Usage>("/usage");
   const [adding, setAdding] = useState<CatalogItem | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  // /app/sources?add=github (from onboarding) opens that form straight away.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("add");
+    if (!id) return;
+    window.history.replaceState(null, "", "/app/sources");
+    if (id === "photos") setUploading(true);
+    else setAdding(CATALOG.flatMap((g) => g.items).find((i) => i.id === id && i.kind) ?? null);
+  }, []);
   const count = sources.data?.data.length ?? 0;
   const limit = usage?.sources.limit;
   const full = limit !== undefined && count >= limit;
@@ -135,6 +145,20 @@ export function SourcesPage() {
         <h2 className="font-sans text-base font-semibold tracking-normal">Add a source</h2>
         {full && <Alert tone="warn">Your plan’s {limit} source{limit === 1 ? " is" : "s are"} in use. Remove one, or upgrade in Billing.</Alert>}
         {notice && <Alert tone="ok">{notice}</Alert>}
+        {uploading && (
+          <div className="flex flex-col gap-3 rounded-2xl border border-accent bg-accent-soft p-4">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold">Upload a photo or document</span>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setUploading(false)}>Close</Button>
+            </div>
+            <UploadForm
+              onUploaded={(item) => {
+                setUploading(false);
+                setNotice(`Added “${item.title}”. It’s in your ideas and in the material below.`);
+              }}
+            />
+          </div>
+        )}
         {adding && (
           <AddForm
             item={adding}
@@ -151,7 +175,7 @@ export function SourcesPage() {
               <span className="text-[11.5px] font-semibold uppercase tracking-[0.08em] text-muted">{g.group}</span>
               <ul className="m-0 flex list-none flex-col gap-1 p-0">
                 {g.items.map((item) => {
-                  const available = Boolean(item.kind) || item.id === "note" || item.id === "mcp";
+                  const available = true;
                   const inner = (
                     <>
                       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-raised text-accent-ink"><Icon name={item.icon} size={17} /></span>
@@ -168,6 +192,10 @@ export function SourcesPage() {
                         <button type="button" disabled={full} onClick={() => { setNotice(null); setAdding(item); }} className={`${cls} cursor-pointer bg-transparent hover:border-line-strong hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-60`}>{inner}</button>
                       ) : item.id === "note" ? (
                         <Link to="/app/new" className={`${cls} no-underline hover:border-line-strong hover:bg-sunken`}>{inner}</Link>
+                      ) : item.id === "prompt" ? (
+                        <Link to="/app" className={`${cls} no-underline hover:border-line-strong hover:bg-sunken`}>{inner}</Link>
+                      ) : item.id === "photos" ? (
+                        <button type="button" onClick={() => { setNotice(null); setUploading(true); setAdding(null); }} className={`${cls} cursor-pointer bg-transparent hover:border-line-strong hover:bg-sunken`}>{inner}</button>
                       ) : item.id === "mcp" ? (
                         <Link to="/app/settings" className={`${cls} no-underline hover:border-line-strong hover:bg-sunken`}>{inner}</Link>
                       ) : (

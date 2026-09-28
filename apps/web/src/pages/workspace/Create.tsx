@@ -5,6 +5,7 @@ import { DraftCard } from "./Drafts";
 import { MODES, usePlatforms, type Draft, type Persona, type Platform } from "./shared";
 import { PageHeader } from "../../ui/kit";
 import { QUICK_KEY } from "./Home";
+import { UploadForm } from "../../components/UploadForm";
 
 /** Text typed on Home's "What did you work on?" box carries over once. */
 function takeQuickNote(): string {
@@ -34,7 +35,7 @@ export function CreatePage() {
   const platforms = usePlatforms();
   const [quick] = useState(takeQuickNote);
   const quickIsLink = /^https?:\/\/\S+$/.test(quick);
-  const [input, setInput] = useState<"text" | "link" | "voice">(quickIsLink ? "link" : "text");
+  const [input, setInput] = useState<"text" | "link" | "voice" | "file">(quickIsLink ? "link" : "text");
   const [contextId, setContextId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("context"));
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("build_in_public");
   const [chosen, setChosen] = useState<Platform[]>([]);
@@ -134,9 +135,9 @@ export function CreatePage() {
       <section className="card">
         <h3>1. What do you want to share?</h3>
         <div className="tabs small" role="tablist">
-          {(["text", "link", "voice"] as const).map((k) => (
+          {(["text", "link", "voice", "file"] as const).map((k) => (
             <button key={k} role="tab" aria-selected={input === k} className={`tab${input === k ? " active" : ""}`} onClick={() => setInput(k)}>
-              {k === "text" ? "Write or paste" : k === "link" ? "From a link" : "Voice note"}
+              {k === "text" ? "Write or paste" : k === "link" ? "From a link" : k === "voice" ? "Voice note" : "Photo or document"}
             </button>
           ))}
         </div>
@@ -160,6 +161,15 @@ export function CreatePage() {
             </button>
             <label>Or upload audio<input id="ctx-audio" type="file" accept="audio/*" onChange={(e) => e.target.files?.[0] && void sendAudio(e.target.files[0])} /></label>
           </div>
+        )}
+        {input === "file" && (
+          <UploadForm
+            compact
+            onUploaded={(item) => {
+              setContextId(item.id);
+              contexts.reload();
+            }}
+          />
         )}
         {contexts.data && contexts.data.data.length > 0 && (
           <label>

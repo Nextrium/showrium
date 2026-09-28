@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { authClient, navigate, useApi } from "../../lib";
+import { DailyPrompt } from "../../components/DailyPrompt";
+import { authClient, navigate, useApi, useRedirect } from "../../lib";
 import { planLabel } from "../../shell/AppShell";
 import { Link } from "../../ui/Link";
 import { Badge, Button, Dot, Empty, Icon, LinkButton, Meter, PageHeader, Panel } from "../../ui/kit";
@@ -68,6 +69,8 @@ export function AppHome() {
   const ready = waiting.filter((d) => d.issues.length === 0).length;
   const upNext = [...(scheduled?.data ?? [])].sort((a, b) => (a.scheduledAt ?? "").localeCompare(b.scheduledAt ?? "")).slice(0, 3);
   const firstName = session?.user.name?.split(/\s+/)[0] ?? "";
+  // First visit: a short welcome sets up voice, platforms and sources.
+  useRedirect("/app/welcome", Boolean(persona && !persona.persona));
 
   return (
     <>
@@ -96,6 +99,7 @@ export function AppHome() {
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="flex min-w-0 flex-col gap-5">
           <QuickCreate persona={persona?.persona ?? null} />
+          {persona?.persona && <DailyPrompt />}
           <div className="grid gap-5 md:grid-cols-2">
             <Panel title="Up next" id="upnext" action={<Link to="/app/posts" className="text-[13.5px] no-underline">All posts →</Link>}>
               {upNext.length === 0 ? (
