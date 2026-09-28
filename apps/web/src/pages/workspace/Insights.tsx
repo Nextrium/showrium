@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, formatDate, useApi } from "../../lib";
 import { MODES, type Draft, type Persona, type Platform } from "./shared";
+import { PageHeader } from "../../ui/kit";
 
 type Idea = { id: string; reason: string; score: number; title: string; body: string; url: string | null; createdAt: string };
-type Autopilot = { level: "coach" | "drafts" | "batch" | "autopilot"; mode: string; platforms: Platform[]; postsPerWeek: number; publishHourUtc: number; lastRunAt: string | null };
 type Theme = { label: string; kind: string; count: number; examples: string[]; suggestion: string };
 type Insight = { id: string; themes: Theme[]; basedOn: number; createdAt: string } | null;
 type Analytics = {
@@ -15,13 +15,6 @@ type Analytics = {
   aiCostUsdThisMonth: number;
   newIdeas: number;
 };
-
-const LEVELS = [
-  { id: "coach", label: "Coach", hint: "Ideas only. You decide what to write." },
-  { id: "drafts", label: "Drafts", hint: "Showrium writes posts from your best ideas. You approve each one." },
-  { id: "batch", label: "Batch", hint: "Posts are written for you; approve them all in one tap in Drafts." },
-  { id: "autopilot", label: "Autopilot", hint: "Clean posts are scheduled to your connected accounts. You can cancel any time before they go out. Never X, never replies." },
-] as const;
 
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
 
@@ -51,8 +44,6 @@ function Ideas({ platforms }: { platforms: Platform[] }) {
 
   return (
     <section className="card">
-      <h3>Ideas</h3>
-      <p className="note">Post-worthy moments found in your sources (checked every few hours) and in what your audience asks.</p>
       <label>
         Write them as
         <select value={mode} onChange={(e) => setMode(e.target.value)}>
@@ -76,73 +67,6 @@ function Ideas({ platforms }: { platforms: Platform[] }) {
       </ul>
       {message && <p className="note" role="status">{message}</p>}
       {error && <p className="error" role="alert">{error}</p>}
-    </section>
-  );
-}
-
-function AutopilotCard({ persona }: { persona: Persona | null }) {
-  const { data, reload } = useApi<Autopilot>("/autopilot");
-  const [form, setForm] = useState<Autopilot | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (data) setForm(data);
-  }, [data]);
-  if (!form) return null;
-
-  const offset = -new Date().getTimezoneOffset() / 60;
-  const localHour = (form.publishHourUtc + offset + 24) % 24;
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSaved(false);
-    try {
-      const { lastRunAt: _ignored, ...body } = form;
-      await api("/autopilot", { method: "PUT", body: JSON.stringify(body) });
-      setSaved(true);
-      reload();
-    } catch (err) {
-      setError(errorText(err, "Couldn't save."));
-    }
-  };
-  const toggle = (p: Platform) => setForm({ ...form, platforms: form.platforms.includes(p) ? form.platforms.filter((x) => x !== p) : [...form.platforms, p] });
-
-  return (
-    <section className="card">
-      <h3>How much Showrium does for you</h3>
-      <form className="form" onSubmit={save}>
-        <fieldset className="fieldset">
-          {LEVELS.map((l) => (
-            <label key={l.id} className="check">
-              <input type="radio" name="level" checked={form.level === l.id} disabled={l.id === "autopilot" && persona?.monetizationSafe} onChange={() => setForm({ ...form, level: l.id })} />
-              <span><strong>{l.label}</strong> <span className="note">{l.hint}</span></span>
-            </label>
-          ))}
-        </fieldset>
-        {persona?.monetizationSafe && <p className="note">Monetization-safe mode is on, so every post needs your approval and full autopilot is off.</p>}
-        {form.level !== "coach" && (
-          <>
-            <fieldset className="fieldset">
-              <legend>Platforms</legend>
-              {(persona?.platforms ?? []).map((p) => (
-                <label key={p} className="check"><input type="checkbox" checked={form.platforms.includes(p)} onChange={() => toggle(p)} /> {p}</label>
-              ))}
-            </fieldset>
-            <div className="row">
-              <label>Style<select value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>{MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</select></label>
-              <label>Ideas per week<input type="number" min={1} max={14} value={form.postsPerWeek} onChange={(e) => setForm({ ...form, postsPerWeek: Number(e.target.value) })} /></label>
-              {form.level === "autopilot" && (
-                <label>Post at (UTC hour)<input type="number" min={0} max={23} value={form.publishHourUtc} onChange={(e) => setForm({ ...form, publishHourUtc: Number(e.target.value) })} /></label>
-              )}
-            </div>
-            {form.level === "autopilot" && <p className="note">That's about {String(localHour).padStart(2, "0")}:00 your time. Only posts with no warnings are scheduled; everything else waits in Drafts.</p>}
-          </>
-        )}
-        <button className="button">Save</button>
-        {data?.lastRunAt && <p className="note">Last run {formatDate(data.lastRunAt)}.</p>}
-        {saved && <p className="note" role="status">Saved.</p>}
-        {error && <p className="error" role="alert">{error}</p>}
-      </form>
     </section>
   );
 }
@@ -264,16 +188,22 @@ function Audience({ onIdea }: { onIdea: () => void }) {
   );
 }
 
-export function InsightsPage() {
+export function IdeasPage() {
   const { data } = useApi<{ persona: Persona | null }>("/persona");
-  const persona = data?.persona ?? null;
-  const [ideasVersion, setIdeasVersion] = useState(0);
   return (
     <div className="dash">
-      <Ideas key={ideasVersion} platforms={persona?.platforms ?? []} />
+      <PageHeader title="Ideas" subtitle="Post-worthy moments from your sources and from what your audience asks." />
+      <Ideas platforms={data?.persona?.platforms ?? []} />
+    </div>
+  );
+}
+
+export function InsightsPage() {
+  return (
+    <div className="dash">
+      <PageHeader title="Insights" subtitle="How your posts are doing, and what your audience is saying." />
       <Stats />
-      <Audience onIdea={() => setIdeasVersion((v) => v + 1)} />
-      <AutopilotCard persona={persona} />
+      <Audience onIdea={() => undefined} />
     </div>
   );
 }

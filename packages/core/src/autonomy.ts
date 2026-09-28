@@ -24,7 +24,7 @@ import { addContextItems, compose, getOrgPlan, markSourceChecked, updateDraft } 
 import { allowedAutopilotLevel, getUsage, PLAN_FEATURES, PLAN_LIMITS } from "./plans.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
-import { ingestFeed, ingestGithubReleases } from "./ingest.js";
+import { ingestFeed, ingestGithubActivity } from "./ingest.js";
 import { recordAudit } from "./orgs.js";
 import { API_PUBLISH_PLATFORMS, scheduleDraft } from "./publishing.js";
 
@@ -35,10 +35,10 @@ const DAY = 24 * HOUR;
 
 /** Cheap, deterministic scoring (no AI): releases and launches rank above ordinary articles. */
 export function scoreIdea(kind: string, title: string): { score: number; reason: string } {
-  let score = kind === "github_release" ? 70 : kind === "rss_item" ? 50 : 40;
+  let score = kind === "github_release" ? 70 : kind === "github_activity" ? 60 : kind === "rss_item" ? 50 : 40;
   if (/\bv?\d+\.\d+(\.\d+)?\b/.test(title)) score += 10;
   if (/\b(launch|launched|release|released|ship|shipped|announce|introducing|new)\b/i.test(title)) score += 10;
-  const what = kind === "github_release" ? "New release" : kind === "rss_item" ? "New article" : "New material";
+  const what = kind === "github_release" ? "New release" : kind === "github_activity" ? "Your work" : kind === "rss_item" ? "New article" : "New material";
   return { score: Math.min(100, score), reason: `${what}: ${title || "untitled"}`.slice(0, 200) };
 }
 
@@ -60,15 +60,25 @@ export async function createIdeas(db: Db, orgId: string, kind: string, items: { 
 export async function syncSource(
   db: Db,
   src: typeof source.$inferSelect,
-  opts: { githubToken?: string | undefined; fetch?: FetchLike | undefined } = {},
+  opts: { fetch?: FetchLike | undefined; now?: Date } = {},
 ): Promise<{ added: number; ideas: number; error: string | null }> {
   try {
-    const items = src.kind === "github_repo" ? await ingestGithubReleases(src.key, { token: opts.githubToken, fetch: opts.fetch }) : await ingestFeed(src.key, opts.fetch);
-    const kind = src.kind === "github_repo" ? "github_release" : "rss_item";
-    const added = await addContextItems(db, src.orgId, kind, items, src.id);
-    const ideas = await createIdeas(db, src.orgId, kind, added);
+    const batches: { kind: "github_release" | "github_activity" | "rss_item"; items: Awaited<ReturnType<typeof ingestFeed>> }[] = [];
+    if (src.kind === "github_repo") {
+      const gh = await ingestGithubActivity(src.key, { fetch: opts.fetch, ...(opts.now ? { now: opts.now } : {}) });
+      batches.push({ kind: "github_release", items: gh.releases }, { kind: "github_activity", items: gh.activity });
+    } else {
+      batches.push({ kind: "rss_item", items: await ingestFeed(src.key, opts.fetch) });
+    }
+    let added = 0;
+    let ideas = 0;
+    for (const b of batches) {
+      const rows = await addContextItems(db, src.orgId, b.kind, b.items, src.id);
+      added += rows.length;
+      ideas += await createIdeas(db, src.orgId, b.kind, rows);
+    }
     await markSourceChecked(db, src.orgId, src.id, null);
-    return { added: added.length, ideas, error: null };
+    return { added, ideas, error: null };
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 300) : "Sync failed.";
     await markSourceChecked(db, src.orgId, src.id, message);
@@ -77,7 +87,7 @@ export async function syncSource(
 }
 
 /** Cron: checks the sources that have waited longest (at most every 6 hours each). */
-export async function runSourcePolling(db: Db, opts: { githubToken?: string | undefined; fetch?: FetchLike | undefined } = {}, now = new Date(), limit = 2) {
+export async function runSourcePolling(db: Db, opts: { fetch?: FetchLike | undefined } = {}, now = new Date(), limit = 2) {
   const due = await db
     .select()
     .from(source)
@@ -225,7 +235,7 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   // Full autopilot schedules only clean posts (no errors, no warnings) to connected accounts.
   // Everything else waits in Drafts for the user. Replies are never automated.
   // Ideas from audience comments are shaped by strangers' text, so they always wait for the user.
-  if (s.level === "autopilot" && !p.safe && (best.kind === "github_release" || best.kind === "rss_item")) {
+  if (s.level === "autopilot" && !p.safe && (best.kind === "github_release" || best.kind === "github_activity" || best.kind === "rss_item")) {
     const conns = await db
       .select({ id: connection.id, platform: connection.platform })
       .from(connection)
@@ -507,4 +517,11 @@ export async function getAnalytics(db: Db, orgId: string, now = new Date()) {
     aiCostUsdThisMonth: Number(cost[0]?.micro ?? 0) / 1_000_000,
     newIdeas: Number(ideas[0]?.n ?? 0),
   };
+}
+
+/** Counts for navigation badges: drafts waiting and new ideas. Cheap (two counts). */
+export async function getSummary(db: Db, orgId: string) {
+  const [drafts] = await db.select({ n: sql<number>`count(*)` }).from(draft).where(and(eq(draft.orgId, orgId), eq(draft.status, "draft")));
+  const [ideas] = await db.select({ n: sql<number>`count(*)` }).from(idea).where(and(eq(idea.orgId, orgId), eq(idea.status, "new")));
+  return { drafts: Number(drafts?.n ?? 0), ideas: Number(ideas?.n ?? 0) };
 }

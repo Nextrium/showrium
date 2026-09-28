@@ -31,6 +31,8 @@ export interface Env {
   TIKTOK_SANDBOX_CLIENT_SECRET?: string;
   /** "true" on preview: use the TikTok sandbox app. */
   TIKTOK_USE_SANDBOX?: string;
+  /** Post images (R2, private). */
+  MEDIA?: R2Bucket;
   /** Phase 4 premium video vendors (secrets; unset until contracts exist). */
   HEYGEN_API_KEY?: string;
   VEO_API_KEY?: string;

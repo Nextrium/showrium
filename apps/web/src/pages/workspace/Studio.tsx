@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, formatDate, orgHeaders, useApi } from "../../lib";
 import { canvasSize, decodeAudio, drawFrame, play, sceneTotal, type Timeline } from "../../video/render";
 import type { Draft } from "./shared";
+import { PageHeader } from "../../ui/kit";
 
 type Video = { id: string; timeline: Timeline; revisions: number; createdAt: string };
 type Connection = { id: string; platform: string; handle: string; status: string };
@@ -136,6 +137,7 @@ export function StudioPage() {
   const candidates = (drafts.data?.data ?? []).filter((d) => d.status !== "discarded");
   return (
     <div className="dash">
+      <PageHeader title="Video" subtitle="Turn a post into a short explainer with captions and a voice-over, made on your device." />
       <section className="card">
         <h3>Make a video</h3>
         <p className="note">Turn a post into a short explainer with captions and an AI voice-over. It's made on your device, so it's quick and free to render.</p>

@@ -3,6 +3,19 @@ import { Link } from "../../App";
 import { api, useApi } from "../../lib";
 import { DraftCard } from "./Drafts";
 import { MODES, usePlatforms, type Draft, type Persona, type Platform } from "./shared";
+import { PageHeader } from "../../ui/kit";
+import { QUICK_KEY } from "./Home";
+
+/** Text typed on Home's "What did you work on?" box carries over once. */
+function takeQuickNote(): string {
+  try {
+    const v = sessionStorage.getItem(QUICK_KEY) ?? "";
+    sessionStorage.removeItem(QUICK_KEY);
+    return v.trim();
+  } catch {
+    return "";
+  }
+}
 
 type ContextItem = { id: string; kind: string; title: string; body: string; url: string | null; createdAt: string };
 
@@ -19,7 +32,9 @@ export function CreatePage() {
   const { data: personaData } = useApi<{ persona: Persona | null }>("/persona");
   const contexts = useApi<{ data: ContextItem[] }>("/contexts");
   const platforms = usePlatforms();
-  const [input, setInput] = useState<"text" | "link" | "voice">("text");
+  const [quick] = useState(takeQuickNote);
+  const quickIsLink = /^https?:\/\/\S+$/.test(quick);
+  const [input, setInput] = useState<"text" | "link" | "voice">(quickIsLink ? "link" : "text");
   const [contextId, setContextId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("context"));
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("build_in_public");
   const [chosen, setChosen] = useState<Platform[]>([]);
@@ -36,7 +51,7 @@ export function CreatePage() {
 
   if (personaData && !persona) {
     return (
-      <section className="card">
+      <section className="card max-w-xl">
         <h3>First, your voice</h3>
         <p className="note">Tell Showrium a little about you, so posts sound like you and only go where you already are.</p>
         <Link to="/app/voice" className="button">Set up my voice</Link>
@@ -115,6 +130,7 @@ export function CreatePage() {
 
   return (
     <div className="dash">
+      <PageHeader title="New post" subtitle="One input becomes a post for each platform you choose, in your voice." />
       <section className="card">
         <h3>1. What do you want to share?</h3>
         <div className="tabs small" role="tablist">
@@ -127,13 +143,13 @@ export function CreatePage() {
         {input === "text" && (
           <form className="form" onSubmit={(e) => { e.preventDefault(); void addText(e.currentTarget); }}>
             <label>Title (optional)<input id="ctx-title" name="title" maxLength={300} /></label>
-            <label>Your notes, update or idea<textarea id="ctx-body" name="body" required minLength={10} maxLength={20000} rows={6} /></label>
+            <label>Your notes, update or idea<textarea id="ctx-body" name="body" required minLength={10} maxLength={20000} rows={6} defaultValue={quickIsLink ? "" : quick} /></label>
             <button className="button secondary" disabled={Boolean(busy)}>Use this</button>
           </form>
         )}
         {input === "link" && (
           <form className="form" onSubmit={(e) => { e.preventDefault(); void addLink(e.currentTarget); }}>
-            <label>Link to a blog post, article or page<input id="ctx-url" name="url" type="url" required placeholder="https://" /></label>
+            <label>Link to a blog post, article or page<input id="ctx-url" name="url" type="url" required placeholder="https://" defaultValue={quickIsLink ? quick : ""} /></label>
             <button className="button secondary" disabled={Boolean(busy)}>Read it</button>
           </form>
         )}

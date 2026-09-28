@@ -15,7 +15,7 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
   const { data } = useApi<{ data: Connection[] }>("/connections");
   // Loaded ahead of time so "Post it myself" is a plain link: opening a tab after an await
   // is treated as an unrequested popup and blocked by browsers.
-  const { data: intent } = useApi<{ url: string | null }>(`/drafts/${draft.id}/intent`);
+  const { data: intent } = useApi<{ url: string | null }>(`/drafts/${draft.id}/intent`, { live: false });
   const postUrl = intent ? intent.url ?? OPEN_APP[draft.platform] ?? null : null;
   const accounts = (data?.data ?? []).filter((c) => c.platform === draft.platform && c.status === "active");
   const [connectionId, setConnectionId] = useState<string>("");

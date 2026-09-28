@@ -72,7 +72,7 @@ export async function resolveMembership(
 
 export async function getOrg(db: Db, orgId: string) {
   const [row] = await db
-    .select({ id: org.id, name: org.name, slug: org.slug, plan: org.plan })
+    .select({ id: org.id, name: org.name, slug: org.slug, plan: org.plan, fullAccess: org.fullAccess })
     .from(org)
     .where(eq(org.id, orgId));
   return row ?? null;

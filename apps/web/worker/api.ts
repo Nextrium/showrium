@@ -123,7 +123,7 @@ function platformAdmin(c: { get: (k: "principal") => import("./principal.js").Pr
 }
 
 const OrgSchema = z
-  .object({ id: z.string(), name: z.string(), slug: z.string(), plan: z.string() })
+  .object({ id: z.string(), name: z.string(), slug: z.string(), plan: z.string(), fullAccess: z.boolean() })
   .openapi("Workspace");
 
 api.openapi(

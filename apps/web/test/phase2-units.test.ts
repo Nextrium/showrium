@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkFacts, lintPost, xWeightedLength, graphemeCount } from "@nextrium/policy";
-import { assertSafeUrl, can, decodeEntities, ingestGithubReleases, parseFeed, stripTags, UnsafeUrlError } from "@nextrium/core";
+import { assertSafeUrl, can, decodeEntities, ingestGithubActivity, parseFeed, stripTags, UnsafeUrlError } from "@nextrium/core";
 import { AllProvidersFailedError, checkVariants, extractJson, fakeProvider, generateStructured, type Provider } from "@nextrium/llm";
 import { z } from "zod";
 
@@ -81,18 +81,25 @@ describe("feed and page parsing", () => {
     expect(stripTags("<p>Hi</p><script>alert(1)</script><style>x{}</style>&amp;")).toBe("Hi\n&");
     expect(decodeEntities("&#x1F600;&#65;&unknown;")).toBe("😀A&unknown;");
   });
-  it("reads GitHub releases and skips drafts, with friendly errors", async () => {
-    const ok = async () =>
-      new Response(JSON.stringify([
-        { id: 1, name: "v1", tag_name: "v1.0.0", body: "Notes", html_url: "https://github.com/a/b/releases/1", draft: false },
-        { id: 2, name: "wip", tag_name: "v2", body: "", html_url: "", draft: true },
-      ]));
-    const items = await ingestGithubReleases("a/b", { fetch: ok });
-    expect(items).toHaveLength(1);
-    expect(items[0]!.externalId).toBe("gh:a/b:1");
-    await expect(ingestGithubReleases("a/b", { fetch: async () => new Response("", { status: 404 }) })).rejects.toThrow(/not found/);
-    await expect(ingestGithubReleases("a/b", { fetch: async () => new Response("", { status: 403 }) })).rejects.toThrow(/rate limit/);
-    await expect(ingestGithubReleases("../etc", { fetch: ok })).rejects.toThrow(/owner\/repository/);
+  it("reads public GitHub activity from feeds: releases, and commits grouped by finished day", async () => {
+    const atom = (entries: string) => new Response(`<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">${entries}</feed>`, { headers: { "Content-Type": "application/atom+xml" } });
+    const feeds = async (url: string) =>
+      url.endsWith("/releases.atom")
+        ? atom(`<entry><id>tag:github.com,2008:Repository/1/v1.0.0</id><updated>2026-09-20T10:00:00Z</updated><link rel="alternate" href="https://github.com/a/b/releases/tag/v1.0.0"/><title>v1.0.0</title><content type="html">&lt;p&gt;Notes&lt;/p&gt;</content></entry>`)
+        : atom(`
+          <entry><id>c1</id><updated>2026-09-27T09:00:00Z</updated><title>Today’s work in progress</title></entry>
+          <entry><id>c2</id><updated>2026-09-26T18:00:00Z</updated><title>Merge pull request #12 from a/teams</title></entry>
+          <entry><id>c3</id><updated>2026-09-26T11:00:00Z</updated><title>Add team invites</title></entry>
+          <entry><id>c4</id><updated>2026-09-25T11:00:00Z</updated><title>Fix typo</title></entry>`);
+    const out = await ingestGithubActivity("a/b", { fetch: feeds, now: new Date("2026-09-27T12:00:00Z") });
+    expect(out.releases.map((r) => r.externalId)).toEqual(["gh-release:a/b:v1.0.0"]);
+    expect(out.releases[0]!.body).toContain("Notes");
+    // Today is left for later; each finished day becomes one item.
+    expect(out.activity.map((a) => a.externalId)).toEqual(["gh-day:a/b:2026-09-26", "gh-day:a/b:2026-09-25"]);
+    expect(out.activity[0]!.title).toBe("2 commits, 1 merged pull request on a/b (2026-09-26)");
+    await expect(ingestGithubActivity("a/b", { fetch: async () => new Response("", { status: 404 }) })).rejects.toThrow(/public/);
+    await expect(ingestGithubActivity("a/b", { fetch: async () => new Response("", { status: 429 }) })).rejects.toThrow(/slow down/);
+    await expect(ingestGithubActivity("../etc", { fetch: feeds })).rejects.toThrow(/owner\/repository/);
   });
 });
 

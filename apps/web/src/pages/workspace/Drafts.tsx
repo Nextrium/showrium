@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, useApi } from "../../lib";
 import { PublishControls } from "./Publish";
 import { IssueList, type Draft } from "./shared";
+import { Button, Empty, Icon, LinkButton, PageHeader, Panel } from "../../ui/kit";
 
 const LABELS: Record<string, string> = {
   linkedin: "LinkedIn", x: "X", instagram: "Instagram", facebook: "Facebook", threads: "Threads",
@@ -75,39 +76,75 @@ export function DraftCard({ draft, onChange }: { draft: Draft; onChange: (d: Dra
   );
 }
 
+const TABS = [
+  ["draft", "Drafts"],
+  ["approved", "Approved"],
+  ["scheduled", "Scheduled"],
+  ["published", "Published"],
+  ["failed", "Failed"],
+  ["discarded", "Discarded"],
+] as const;
+
 export function DraftsPage() {
   const [status, setStatus] = useState<string>("draft");
   const { data, reload } = useApi<{ data: Draft[] }>(`/drafts?status=${status}`);
+  const { data: counts } = useApi<{ statuses: Record<string, number> }>("/analytics");
   const [bulk, setBulk] = useState<string | null>(null);
-  const ready = (data?.data ?? []).filter((d) => d.status === "draft" && d.issues.length === 0);
+  const [busy, setBusy] = useState(false);
+  const drafts = status === "draft" ? data?.data ?? [] : [];
+  const ready = drafts.filter((d) => d.issues.length === 0);
+  const toCheck = drafts.length - ready.length;
 
-  // Batch approval: approves every draft without errors in one tap (at most 50 at a time).
+  // Batch approval: approves every draft with no warnings in one tap (at most 50 at a time).
   const approveAll = async () => {
-    setBulk("Approving…");
+    setBusy(true);
+    setBulk(null);
     try {
       const out = await api<{ approved: string[]; skipped: { reason: string }[] }>("/drafts/bulk-approve", { method: "POST", body: JSON.stringify({ ids: ready.slice(0, 50).map((d) => d.id) }) });
       setBulk(`Approved ${out.approved.length}.${out.skipped.length ? ` Skipped ${out.skipped.length}: ${out.skipped[0]!.reason}` : ""}`);
       reload();
     } catch (err) {
       setBulk(err instanceof Error ? err.message : "Couldn't approve.");
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <div className="dash">
-      <div className="tabs small caps">
-        {["draft", "approved", "scheduled", "published", "failed", "discarded"].map((s) => (
-          <button key={s} className={`tab${s === status ? " active" : ""}`} onClick={() => setStatus(s)}>{s}</button>
+      <PageHeader title="Posts" subtitle="Everything you’ve written: waiting, scheduled, or out in the world." actions={<LinkButton to="/app/new" variant="inverse" icon="plus">New post</LinkButton>} />
+      <div className="tabs" role="tablist" aria-label="Post status">
+        {TABS.map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={id === status} className="tab" onClick={() => setStatus(id)}>
+            {label}
+            {counts && <span className="ml-2 rounded-full bg-raised px-2 font-mono text-[11.5px] text-ink-2">{counts.statuses[id] ?? 0}</span>}
+          </button>
         ))}
       </div>
-      {status === "draft" && ready.length > 1 && (
-        <div className="row">
-          <button className="button" disabled={bulk === "Approving…"} onClick={approveAll}>Approve all {Math.min(50, ready.length)} posts with no warnings</button>
-          {bulk && <span className="note" role="status">{bulk}</span>}
+      {status === "draft" && drafts.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line-strong bg-raised px-4 py-3.5">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-ok-soft text-ok"><Icon name="check" strokeWidth={2.2} /></span>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="font-semibold">{ready.length} of {drafts.length} draft{drafts.length === 1 ? " is" : "s are"} ready to approve</span>
+            <span className="text-[13.5px] text-muted">{toCheck ? `${toCheck} ${toCheck === 1 ? "has" : "have"} something to check first, so ${toCheck === 1 ? "it’s" : "they’re"} left out of one-tap approval.` : "None have warnings."}</span>
+          </div>
+          {ready.length > 0 && <Button disabled={busy} onClick={approveAll}>{busy ? "Approving…" : `Approve ${Math.min(50, ready.length)}`}</Button>}
         </div>
       )}
-      {data?.data.length === 0 && <p className="note">Nothing here yet.</p>}
-      {data?.data.map((d) => <DraftCard key={d.id} draft={d} onChange={() => reload()} />)}
+      {bulk && <p className="note" role="status">{bulk}</p>}
+      {data?.data.length === 0 && (
+        <Panel>
+          <Empty
+            icon="posts"
+            title={`No ${TABS.find(([id]) => id === status)![1].toLowerCase()} posts`}
+            body={status === "draft" ? "Write something new, or turn an idea into posts." : "Posts move here as you approve, schedule and publish them."}
+            action={status === "draft" ? <LinkButton to="/app/new" size="sm">New post</LinkButton> : undefined}
+          />
+        </Panel>
+      )}
+      <div className="grid gap-4 xl:grid-cols-2">
+        {data?.data.map((d) => <DraftCard key={d.id} draft={d} onChange={() => reload()} />)}
+      </div>
     </div>
   );
 }

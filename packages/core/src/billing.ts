@@ -206,7 +206,7 @@ export async function getSubscription(db: Db, orgId: string) {
   return row ?? null;
 }
 
-export async function setOrgPlan(db: Db, orgId: string, plan: Plan, meta: { actorUserId?: string | null; reason: string }) {
+export async function setOrgPlan(db: Db, orgId: string, plan: Exclude<Plan, "staff">, meta: { actorUserId?: string | null; reason: string }) {
   const [row] = await db.update(org).set({ plan }).where(eq(org.id, orgId)).returning({ id: org.id });
   if (row)
     await recordAudit(db, {

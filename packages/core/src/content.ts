@@ -27,6 +27,7 @@ import { checkFacts, hasErrors, lintPost, type LintIssue } from "@nextrium/polic
 import { getBalance, InsufficientCreditsError, postCreditTxn } from "./credits.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
+import { recordAudit } from "./orgs.js";
 import type { IngestedItem } from "./ingest.js";
 import { addUsage, CREDITS_PER_EXTRA_POST, getUsage, PLAN_LIMITS, type Plan } from "./plans.js";
 
@@ -125,9 +126,26 @@ export class ComposeError extends Error {
   }
 }
 
+/** The plan that applies: the paid plan, or the staff tier when a platform admin granted full access. */
 export async function getOrgPlan(db: Db, orgId: string): Promise<Plan> {
-  const [row] = await db.select({ plan: org.plan }).from(org).where(eq(org.id, orgId));
+  const [row] = await db.select({ plan: org.plan, fullAccess: org.fullAccess }).from(org).where(eq(org.id, orgId));
+  if (row?.fullAccess) return "staff";
   return (row?.plan ?? "free") as Plan;
+}
+
+/** Platform admins only (checked by the caller): grant or remove full access for a workspace. Audited. */
+export async function setFullAccess(db: Db, orgId: string, input: { full: boolean; note: string; actorUserId: string }) {
+  const [row] = await db
+    .update(org)
+    .set(input.full ? { fullAccess: true, fullAccessNote: input.note, fullAccessBy: input.actorUserId, fullAccessAt: new Date() } : { fullAccess: false, fullAccessNote: null, fullAccessBy: null, fullAccessAt: null })
+    .where(eq(org.id, orgId))
+    .returning({ id: org.id });
+  if (row) await recordAudit(db, { orgId, actorUserId: input.actorUserId, action: input.full ? "access.granted" : "access.removed", target: orgId, meta: { note: input.note } });
+  return Boolean(row);
+}
+
+export async function listFullAccess(db: Db) {
+  return db.select({ id: org.id, name: org.name, note: org.fullAccessNote, at: org.fullAccessAt }).from(org).where(eq(org.fullAccess, true)).orderBy(desc(org.fullAccessAt)).limit(200);
 }
 
 export async function compose(

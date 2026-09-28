@@ -15,7 +15,6 @@ import {
   getUsage,
   GITHUB_REPO_RE,
   ingestFeed,
-  ingestGithubReleases,
   ingestUrl,
   listContextItems,
   listDrafts,
@@ -263,7 +262,7 @@ contentApi.openapi(
     const { orgId } = c.get("principal");
     const src = await getSource(c.get("db"), orgId, c.req.valid("param").id);
     if (!src) return c.json(apiError("not_found", "No such source in this workspace."), 404);
-    const out = await syncSource(c.get("db"), src, { githubToken: c.env.GITHUB_TOKEN });
+    const out = await syncSource(c.get("db"), src);
     return c.json({ added: out.added, error: out.error }, 200);
   },
 );

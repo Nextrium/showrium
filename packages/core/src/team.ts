@@ -49,7 +49,7 @@ export async function listMembers(db: Db, orgId: string) {
 /** Workspaces the user belongs to (for the switcher). */
 export async function listWorkspaces(db: Db, userId: string) {
   return db
-    .select({ id: org.id, name: org.name, plan: org.plan, role: membership.role, personal: org.personalOwnerUserId })
+    .select({ id: org.id, name: org.name, plan: org.plan, fullAccess: org.fullAccess, role: membership.role, personal: org.personalOwnerUserId })
     .from(membership)
     .innerJoin(org, eq(org.id, membership.orgId))
     .where(eq(membership.userId, userId))

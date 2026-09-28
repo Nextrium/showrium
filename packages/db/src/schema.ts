@@ -79,6 +79,11 @@ export const org = sqliteTable("org", {
   // Deliberately no foreign key: SQLite can't add ON DELETE rules to an existing table, and a
   // plain reference would block deleting the user. Account deletion removes the personal org.
   personalOwnerUserId: text("personal_owner_user_id").unique(),
+  /** Full access granted by a platform admin (staff, testers, partners). Overrides plan limits with the staff tier. */
+  fullAccess: integer("full_access", { mode: "boolean" }).notNull().default(false),
+  fullAccessNote: text("full_access_note"),
+  fullAccessBy: text("full_access_by"),
+  fullAccessAt: integer("full_access_at", { mode: "timestamp_ms" }),
   createdAt: createdAt(),
 });
 
@@ -256,7 +261,7 @@ export const source = sqliteTable(
   (t) => [uniqueIndex("source_org_kind_key_uq").on(t.orgId, t.kind, t.key)],
 );
 
-export const CONTEXT_KINDS = ["manual", "url", "github_release", "rss_item", "voice"] as const;
+export const CONTEXT_KINDS = ["manual", "url", "github_release", "github_activity", "rss_item", "voice"] as const;
 export const contextItem = sqliteTable(
   "context_item",
   {

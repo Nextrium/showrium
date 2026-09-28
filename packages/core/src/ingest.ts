@@ -78,29 +78,83 @@ export async function ingestFeed(url: string, doFetch?: FetchLike): Promise<Inge
 
 export const GITHUB_REPO_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 
-/** Latest published releases of a public GitHub repository. */
-export async function ingestGithubReleases(repo: string, opts: { fetch?: FetchLike | undefined; token?: string | undefined } = {}): Promise<IngestedItem[]> {
-  if (!GITHUB_REPO_RE.test(repo)) throw new Error("Use the form owner/repository.");
-  const doFetch = opts.fetch ?? fetch;
-  const res = await doFetch(`https://api.github.com/repos/${repo}/releases?per_page=5`, {
-    headers: {
-      "User-Agent": "Showrium",
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
-    },
-    signal: AbortSignal.timeout(10_000),
+// --- GitHub: public feeds (no API token, no API rate limit) ---------------------------------------
+
+interface AtomEntry {
+  id: string;
+  title: string;
+  link: string | null;
+  updated: string;
+  content: string;
+}
+
+function parseAtom(xml: string): AtomEntry[] {
+  const tag = (block: string, name: string) => decodeEntities(block.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, "i"))?.[1]?.trim() ?? "");
+  return (xml.match(/<entry[\s>][\s\S]*?<\/entry>/gi) ?? []).slice(0, 40).map((block) => ({
+    id: tag(block, "id"),
+    title: stripTags(tag(block, "title")),
+    link: block.match(/<link[^>]+href=["']([^"']+)["']/i)?.[1] ?? null,
+    updated: tag(block, "updated"),
+    content: stripTags(tag(block, "content")),
+  }));
+}
+
+export class GithubSourceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GithubSourceError";
+  }
+}
+
+async function githubFeed(path: string, doFetch?: FetchLike) {
+  try {
+    const page = await safeFetchText(`https://github.com/${path}`, { fetch: doFetch, accept: "application/atom+xml", allowedTypes: /xml|atom/, maxBytes: 2_000_000 });
+    return parseAtom(page.text);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/404/.test(message)) throw new GithubSourceError("We couldn't read this repository. Check the name, and that it's public.");
+    if (/429|403/.test(message)) throw new GithubSourceError("GitHub asked us to slow down. We'll check again automatically.");
+    throw new GithubSourceError("GitHub didn't respond. We'll check again automatically.");
+  }
+}
+
+/**
+ * What happened in a public repository: each release, plus one item per finished day of commits
+ * (so people who never publish releases still get ideas). Today's commits are gathered once the day
+ * is over (UTC), so a day's work is one post-worthy moment rather than many small ones.
+ */
+export async function ingestGithubActivity(repo: string, opts: { fetch?: FetchLike | undefined; now?: Date } = {}) {
+  if (!GITHUB_REPO_RE.test(repo)) throw new GithubSourceError("Use the form owner/repository.");
+  const [releases, commits] = await Promise.all([githubFeed(`${repo}/releases.atom`, opts.fetch), githubFeed(`${repo}/commits.atom`, opts.fetch)]);
+  const releaseItems: IngestedItem[] = releases.slice(0, 5).map((r) => {
+    const tagName = r.link?.split("/").pop() ?? r.title;
+    return { externalId: `gh-release:${repo}:${tagName}`.slice(0, 300), title: `${repo} ${r.title}`.slice(0, 300), body: clip(`Release ${r.title} of ${repo}.\n\n${r.content}`.trim()), url: r.link };
   });
-  if (res.status === 404) throw new Error("Repository not found, or it's private.");
-  if (res.status === 403 || res.status === 429) throw new Error("GitHub's rate limit was reached. Try again later.");
-  if (!res.ok) throw new Error(`GitHub answered with HTTP ${res.status}.`);
-  const releases = (await res.json()) as { id: number; name: string | null; tag_name: string; body: string | null; html_url: string; draft: boolean }[];
-  return releases
-    .filter((r) => !r.draft)
-    .map((r) => ({
-      externalId: `gh:${repo}:${r.id}`,
-      title: `${repo} ${r.name || r.tag_name}`.slice(0, 300),
-      body: clip(`Release ${r.tag_name} of ${repo}.\n\n${r.body ?? ""}`.trim()),
-      url: r.html_url,
-    }));
+
+  const today = (opts.now ?? new Date()).toISOString().slice(0, 10);
+  const byDay = new Map<string, AtomEntry[]>();
+  for (const c of commits) {
+    const day = c.updated.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day >= today) continue;
+    byDay.set(day, [...(byDay.get(day) ?? []), c]);
+  }
+  const activityItems: IngestedItem[] = [...byDay.entries()].slice(0, 7).map(([day, list]) => {
+    const merged = list.filter((c) => /^Merge pull request/i.test(c.title)).length;
+    const summary = `${list.length} commit${list.length === 1 ? "" : "s"}${merged ? `, ${merged} merged pull request${merged === 1 ? "" : "s"}` : ""}`;
+    return {
+      externalId: `gh-day:${repo}:${day}`,
+      title: `${summary} on ${repo} (${day})`,
+      body: clip(
+        `Work on ${repo} on ${day}: ${summary}.\n\n${list
+          .map((c) => {
+            // The feed's content repeats the commit title before the details.
+            const details = (c.content.startsWith(c.title) ? c.content.slice(c.title.length) : c.content).trim();
+            return `- ${c.title}${details ? `: ${details.replace(/\s+/g, " ").slice(0, 300)}` : ""}`;
+          })
+          .join("\n")}`,
+      ),
+      url: `https://github.com/${repo}/commits`,
+    };
+  });
+  return { releases: releaseItems, activity: activityItems };
 }

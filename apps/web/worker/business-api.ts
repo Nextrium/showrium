@@ -28,6 +28,8 @@ import {
   recordAudit,
   removeMember,
   revokeTeamInvite,
+  setFullAccess,
+  listFullAccess,
   setOrgPlan,
   TeamError,
   verifySignature,
@@ -73,6 +75,7 @@ businessApi.openapi(
       200: json(
         z.object({
           plan: z.string(),
+          fullAccess: z.boolean(),
           features: z.object({ autopilot: z.string(), insights: z.boolean(), seats: z.number() }),
           subscription: z.object({ provider: z.string(), plan: z.string(), interval: z.string(), status: z.string(), currentPeriodEnd: z.string().nullable() }).nullable(),
           catalog: z.array(z.object({ item: ItemSchema, usdCents: z.number(), providers: z.array(z.enum(["paystack", "lemonsqueezy"])) })),
@@ -96,6 +99,7 @@ businessApi.openapi(
     return c.json(
       {
         plan,
+        fullAccess: plan === "staff",
         features: PLAN_FEATURES[plan],
         subscription: sub ? { provider: sub.provider, plan: sub.plan, interval: sub.interval, status: sub.status, currentPeriodEnd: sub.currentPeriodEnd?.toISOString() ?? null } : null,
         catalog: items.map((i) => ({ ...i, providers: providersFor(cfg, i.item) })),
@@ -412,14 +416,14 @@ businessApi.openapi(
     path: "/admin/orgs",
     tags: ["Admin"],
     request: { query: z.object({ email: z.email().max(320) }) },
-    responses: { 200: json(z.object({ data: z.array(z.object({ id: z.string(), name: z.string(), plan: z.string(), role: z.string() })) })), ...errs },
+    responses: { 200: json(z.object({ data: z.array(z.object({ id: z.string(), name: z.string(), plan: z.string(), fullAccess: z.boolean(), role: z.string() })) })), ...errs },
   }),
   async (c) => {
     if (!platformAdmin(c)) return c.json(apiError("forbidden", "Only Showrium staff can look up workspaces."), 403);
     const db = c.get("db");
     const userId = await findUserIdByEmail(db, c.req.valid("query").email);
     if (!userId) return c.json({ data: [] }, 200);
-    return c.json({ data: (await listWorkspaces(db, userId)).map((w) => ({ id: w.id, name: w.name, plan: w.plan, role: w.role })) }, 200);
+    return c.json({ data: (await listWorkspaces(db, userId)).map((w) => ({ id: w.id, name: w.name, plan: w.plan, fullAccess: w.fullAccess, role: w.role })) }, 200);
   },
 );
 
@@ -437,5 +441,39 @@ businessApi.openapi(
     const { plan, note } = c.req.valid("json");
     const ok = await setOrgPlan(c.get("db"), c.req.valid("param").id, plan, { actorUserId: admin.userId, reason: `admin: ${note}` });
     return ok ? c.body(null, 204) : c.json(apiError("not_found", "No such workspace."), 404);
+  },
+);
+
+// Full access: platform admins grant it to specific workspaces (their own, testers, partners).
+// Plans still limit everyone else. Quality never differs; only quantity and capabilities do.
+businessApi.openapi(
+  createRoute({
+    method: "put",
+    path: "/admin/orgs/{id}/access",
+    tags: ["Admin"],
+    request: { params: z.object({ id: z.string() }), ...body(z.object({ full: z.boolean(), note: z.string().trim().min(3).max(200) })) },
+    responses: { 204: { description: "Changed" }, ...errs },
+  }),
+  async (c) => {
+    const admin = platformAdmin(c);
+    if (!admin) return c.json(apiError("forbidden", "Only Showrium staff can grant access."), 403);
+    const { full, note } = c.req.valid("json");
+    const ok = await setFullAccess(c.get("db"), c.req.valid("param").id, { full, note, actorUserId: admin.userId });
+    return ok ? c.body(null, 204) : c.json(apiError("not_found", "No such workspace."), 404);
+  },
+);
+
+businessApi.use("/admin/access", requirePrincipal);
+businessApi.openapi(
+  createRoute({
+    method: "get",
+    path: "/admin/access",
+    tags: ["Admin"],
+    responses: { 200: json(z.object({ data: z.array(z.object({ id: z.string(), name: z.string(), note: z.string().nullable(), at: z.string().nullable() })) })), ...errs },
+  }),
+  async (c) => {
+    if (!platformAdmin(c)) return c.json(apiError("forbidden", "Only Showrium staff can see access grants."), 403);
+    const rows = await listFullAccess(c.get("db"));
+    return c.json({ data: rows.map((r) => ({ id: r.id, name: r.name, note: r.note, at: r.at?.toISOString() ?? null })) }, 200);
   },
 );

@@ -1,67 +1,50 @@
-import { Link } from "../App";
-import { authClient, currentOrgId, switchWorkspace, useApi, useRedirect } from "../lib";
+import { authClient, useRedirect } from "../lib";
+import { AppShell } from "../shell/AppShell";
+import { Loading } from "../ui/kit";
+import { AuditPage } from "./workspace/Audit";
+import { AutomationPage } from "./workspace/Automation";
+import { BillingPage } from "./workspace/Billing";
+import { ConnectionsPage } from "./workspace/Connections";
 import { CreatePage } from "./workspace/Create";
 import { DraftsPage } from "./workspace/Drafts";
+import { AppHome } from "./workspace/Home";
+import { IdeasPage, InsightsPage } from "./workspace/Insights";
+import { SettingsPage } from "./workspace/Settings";
 import { SourcesPage } from "./workspace/Sources";
-import { VoicePage } from "./workspace/Voice";
-import { Dashboard } from "./Dashboard";
-import { ConnectionsPage } from "./workspace/Connections";
 import { StudioPage } from "./workspace/Studio";
-import { InsightsPage } from "./workspace/Insights";
+import { TeamPage } from "./workspace/Team";
+import { VoicePage } from "./workspace/Voice";
 
-const TABS = [
-  { path: "/app", label: "Create" },
-  { path: "/app/drafts", label: "Drafts" },
-  { path: "/app/studio", label: "Video" },
-  { path: "/app/sources", label: "Sources" },
-  { path: "/app/accounts", label: "Accounts" },
-  { path: "/app/insights", label: "Insights" },
-  { path: "/app/voice", label: "Voice" },
-  { path: "/app/settings", label: "Settings" },
-];
-
-function WorkspaceSwitcher() {
-  const { data } = useApi<{ data: { id: string; name: string; role: string }[] }>("/workspaces");
-  if (!data || data.data.length < 2) return null;
-  const current = currentOrgId() ?? data.data[0]!.id;
-  return (
-    <label className="switcher">
-      Workspace
-      <select value={current} onChange={(e) => switchWorkspace(e.target.value)}>
-        {data.data.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.role})</option>)}
-      </select>
-    </label>
-  );
-}
+const PAGES: Record<string, () => React.ReactNode> = {
+  "/app": () => <AppHome />,
+  "/app/new": () => <CreatePage />,
+  "/app/posts": () => <DraftsPage />,
+  "/app/drafts": () => <DraftsPage />, // old address
+  "/app/ideas": () => <IdeasPage />,
+  "/app/studio": () => <StudioPage />,
+  "/app/insights": () => <InsightsPage />,
+  "/app/sources": () => <SourcesPage />,
+  "/app/accounts": () => <ConnectionsPage />,
+  "/app/voice": () => <VoicePage />,
+  "/app/automation": () => <AutomationPage />,
+  "/app/team": () => <TeamPage />,
+  "/app/billing": () => <BillingPage />,
+  "/app/settings": () => <SettingsPage />,
+  "/app/audit": () => <AuditPage />,
+};
 
 export function Workspace({ path }: { path: string }) {
   const { data: session, isPending } = authClient.useSession();
   const signedOut = !isPending && !session;
   useRedirect("/signin", signedOut);
   if (signedOut) return null;
-  if (isPending) return <p className="note">Loading…</p>;
-
-  const page =
-    path === "/app/drafts" ? <DraftsPage /> :
-    path === "/app/studio" ? <StudioPage /> :
-    path === "/app/sources" ? <SourcesPage /> :
-    path === "/app/accounts" ? <ConnectionsPage /> :
-    path === "/app/insights" ? <InsightsPage /> :
-    path === "/app/voice" ? <VoicePage /> :
-    path === "/app/settings" ? <Dashboard /> :
-    <CreatePage />;
-
-  return (
-    <div className="dash">
-      <WorkspaceSwitcher />
-      <nav className="tabs" aria-label="Workspace">
-        {TABS.map((t) => (
-          <Link key={t.path} to={t.path} className={`tab${path === t.path ? " active" : ""}`}>
-            {t.label}
-          </Link>
-        ))}
-      </nav>
-      {page}
-    </div>
-  );
+  if (isPending) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-bg">
+        <Loading label="Opening your workspace…" />
+      </div>
+    );
+  }
+  const page = PAGES[path.replace(/\/$/, "") || "/app"] ?? PAGES["/app"]!;
+  return <AppShell path={path}>{page()}</AppShell>;
 }

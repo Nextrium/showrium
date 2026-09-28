@@ -9,6 +9,8 @@ export const PLAN_LIMITS = {
   creator: { posts: 400, xApiPosts: 50, videos: 40, sources: 5 },
   pro: { posts: 600, xApiPosts: 100, videos: 60, sources: 15 },
   team: { posts: 2000, xApiPosts: 300, videos: 150, sources: 50 },
+  // Full access granted by a platform admin. Still capped: AI and X posts cost real money.
+  staff: { posts: 5000, xApiPosts: 300, videos: 500, sources: 50 },
 } as const;
 export type Plan = keyof typeof PLAN_LIMITS;
 export const CREDITS_PER_EXTRA_POST = 1;
@@ -59,6 +61,7 @@ export const PLAN_FEATURES = {
   creator: { autopilot: "autopilot", insights: true, seats: 1 },
   pro: { autopilot: "autopilot", insights: true, seats: 3 },
   team: { autopilot: "autopilot", insights: true, seats: 25 },
+  staff: { autopilot: "autopilot", insights: true, seats: 50 },
 } as const satisfies Record<Plan, { autopilot: "coach" | "batch" | "autopilot"; insights: boolean; seats: number }>;
 
 const LEVEL_ORDER = ["coach", "drafts", "batch", "autopilot"] as const;

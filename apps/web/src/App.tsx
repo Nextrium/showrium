@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { APP_ORIGIN, authClient, isWebsite, navigate, usePath } from "./lib";
+import { APP_ORIGIN, authClient, isWebsite, usePath } from "./lib";
+import { Link } from "./ui/Link";
 import { Home } from "./pages/Home";
 import { Invite } from "./pages/Invite";
 import { Join } from "./pages/Join";
@@ -7,28 +7,7 @@ import { Privacy, Terms } from "./pages/Legal";
 import { SignIn } from "./pages/SignIn";
 import { Workspace } from "./pages/Workspace";
 
-export function Link({ to, children, className }: { to: string; children: ReactNode; className?: string }) {
-  if (/^https?:/.test(to)) {
-    return (
-      <a href={to} className={className}>
-        {children}
-      </a>
-    );
-  }
-  return (
-    <a
-      href={to}
-      className={className}
-      onClick={(e) => {
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-        e.preventDefault();
-        navigate(to);
-      }}
-    >
-      {children}
-    </a>
-  );
-}
+export { Link } from "./ui/Link";
 
 // Session cookies belong to app.showrium.com, so the website doesn't check sign-in state.
 function WebsiteNav() {
@@ -82,8 +61,9 @@ function Footer() {
 
 export function App() {
   const path = usePath();
+  // The signed-in app has its own full-screen shell (sidebar, tab bar), not the website frame.
+  if (path === "/app" || path.startsWith("/app/")) return <Workspace path={path} />;
   const page =
-    path === "/app" || path.startsWith("/app/") ? <Workspace path={path} /> :
     path === "/signin" ? <SignIn /> :
     path === "/invite" ? <Invite /> :
     path === "/join" ? <Join /> :

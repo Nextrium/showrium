@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { api, formatDate, useApi } from "../../lib";
+import { PageHeader } from "../../ui/kit";
 
 type Connection = { id: string; platform: string; handle: string; status: "active" | "needs_reconnect"; createdAt: string };
 type List = { data: Connection[]; available: string[] };
@@ -52,6 +53,7 @@ export function ConnectionsPage() {
   const available = data?.available ?? [];
   return (
     <div className="dash">
+      <PageHeader title="Accounts" subtitle="The social accounts Showrium can post to. Tokens are encrypted, and you can disconnect at any time." />
       {notice && <p className="note" role="status">{notice}</p>}
       <section className="card">
         <h3>Connected accounts</h3>
