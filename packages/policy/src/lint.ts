@@ -1,6 +1,6 @@
 // Lints a post for one platform. Errors block publishing; warnings are shown to the user.
 import type { Platform } from "@nextrium/db";
-import { PLATFORM_RULES } from "./rules.js";
+import { MAX_THREAD_PARTS, PLATFORM_RULES } from "./rules.js";
 
 export interface LintIssue {
   code: "too_long" | "empty" | "too_many_hashtags" | "has_link" | "needs_media" | "placeholder" | "control_chars" | "unverified_fact";
@@ -46,8 +46,8 @@ export function countFor(platform: Platform, text: string): number {
   return method === "x_weighted" ? xWeightedLength(text) : method === "graphemes" ? graphemeCount(text) : text.length;
 }
 
-export function lintPost(platform: Platform, text: string, opts: { hasMedia?: boolean } = {}): LintIssue[] {
-  const rule = PLATFORM_RULES[platform];
+export function lintPost(platform: Platform, text: string, opts: { hasMedia?: boolean; maxLength?: number } = {}): LintIssue[] {
+  const rule = { ...PLATFORM_RULES[platform], ...(opts.maxLength ? { maxLength: opts.maxLength } : {}) };
   const issues: LintIssue[] = [];
   const trimmed = text.trim();
   if (!trimmed) return [{ code: "empty", severity: "error", message: "The post is empty." }];
@@ -77,6 +77,28 @@ export function lintPost(platform: Platform, text: string, opts: { hasMedia?: bo
   if (CONTROL_RE.test(trimmed)) {
     issues.push({ code: "control_chars", severity: "error", message: "The post contains hidden control or direction-override characters." });
   }
+  return issues;
+}
+
+/**
+ * A thread: each part is checked on its own (messages say which part), plus the thread as a whole.
+ * Media and link checks apply to the first part only (that's what people see first).
+ */
+export function lintThread(platform: Platform, parts: string[], opts: { hasMedia?: boolean; maxLength?: number } = {}): LintIssue[] {
+  if (!parts.length || parts.every((p) => !p.trim())) return [{ code: "empty", severity: "error", message: "The thread is empty." }];
+  const issues: LintIssue[] = [];
+  if (parts.length > MAX_THREAD_PARTS) issues.push({ code: "too_long", severity: "error", message: `Threads can have up to ${MAX_THREAD_PARTS} parts; this has ${parts.length}.` });
+  parts.forEach((part, i) => {
+    if (!part.trim()) {
+      issues.push({ code: "empty", severity: "error", message: `Part ${i + 1} is empty.` });
+      return;
+    }
+    for (const issue of lintPost(platform, part, i === 0 ? opts : { ...opts, hasMedia: true })) {
+      if (i > 0 && issue.code === "has_link") continue;
+      if (issues.some((x) => x.code === issue.code && x.code !== "too_long")) continue; // one message per kind is enough
+      issues.push({ ...issue, message: `Part ${i + 1}: ${issue.message}` });
+    }
+  });
   return issues;
 }
 

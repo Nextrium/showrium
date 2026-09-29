@@ -108,7 +108,7 @@ autonomyApi.openapi(
     method: "post",
     path: "/ideas/{id}/compose",
     tags: ["Autonomy"],
-    request: { params: z.object({ id: z.string() }), ...body(z.object({ mode: z.enum(CONTENT_MODES), platforms: z.array(z.enum(PLATFORMS)).min(1).max(PLATFORMS.length) })) },
+    request: { params: z.object({ id: z.string() }), ...body(z.object({ mode: z.enum(CONTENT_MODES), platforms: z.array(z.enum(PLATFORMS)).min(1).max(PLATFORMS.length), thread: z.boolean().optional() })) },
     responses: { 201: json(z.object({ briefId: z.string(), drafts: z.array(z.any()) }), "Drafts created"), 402: json(Err, "Out of posts"), 503: json(Err, "AI unavailable"), ...errs },
   }),
   async (c) => {

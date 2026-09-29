@@ -1593,6 +1593,7 @@ export interface paths {
                         /** @enum {string} */
                         mode: "smile" | "teach" | "expert_take" | "build_in_public" | "promote";
                         platforms: ("linkedin" | "x" | "instagram" | "facebook" | "threads" | "bluesky" | "mastodon" | "tiktok" | "youtube_shorts")[];
+                        thread?: boolean;
                     };
                 };
             };
@@ -1918,6 +1919,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         text?: string;
+                        parts?: string[];
                         /** @enum {string} */
                         status?: "draft" | "approved" | "discarded";
                     };
@@ -4261,6 +4263,7 @@ export interface paths {
                         /** @enum {string} */
                         mode: "smile" | "teach" | "expert_take" | "build_in_public" | "promote";
                         platforms: ("linkedin" | "x" | "instagram" | "facebook" | "threads" | "bluesky" | "mastodon" | "tiktok" | "youtube_shorts")[];
+                        thread?: boolean;
                     };
                 };
             };
@@ -7857,6 +7860,8 @@ export interface components {
             externalUrl: string | null;
             lastError: string | null;
             createdAt: string;
+            parts: string[] | null;
+            partsPosted: number;
             source?: {
                 mode: string;
                 kind: string | null;
@@ -7873,6 +7878,7 @@ export interface components {
             /** @enum {string} */
             status: "active" | "needs_reconnect";
             createdAt: string;
+            longPosts: boolean;
         };
         Video: {
             id: string;

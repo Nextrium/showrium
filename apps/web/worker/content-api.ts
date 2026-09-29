@@ -303,6 +303,9 @@ const DraftSchema = z
     externalUrl: z.string().nullable(),
     lastError: z.string().nullable(),
     createdAt: z.string(),
+    /** A thread's parts in order (null for a single post), and how many have been posted. */
+    parts: z.array(z.string()).nullable(),
+    partsPosted: z.number(),
     // Where the post came from (the material it was written from). Included on reads.
     source: z
       .object({ mode: z.string(), kind: z.string().nullable(), title: z.string().nullable(), url: z.string().nullable(), contextItemId: z.string().nullable() })
@@ -323,6 +326,8 @@ export const toDraft = (d: DraftRow) => ({
   externalUrl: d.externalUrl,
   lastError: d.lastError,
   createdAt: d.createdAt.toISOString(),
+  parts: d.parts ?? null,
+  partsPosted: d.postedParts?.length ?? 0,
 });
 
 contentApi.openapi(
@@ -330,7 +335,7 @@ contentApi.openapi(
     method: "post",
     path: "/compose",
     tags: ["Content"],
-    request: body(z.object({ contextItemId: z.string(), mode: z.enum(CONTENT_MODES), platforms: z.array(z.enum(PLATFORMS)).min(1).max(PLATFORMS.length) })),
+    request: body(z.object({ contextItemId: z.string(), mode: z.enum(CONTENT_MODES), platforms: z.array(z.enum(PLATFORMS)).min(1).max(PLATFORMS.length), thread: z.boolean().optional() })),
     responses: {
       201: json(z.object({ briefId: z.string(), model: z.string(), angle: z.string(), drafts: z.array(DraftSchema) }), "Drafts created"),
       402: json(Err, "Out of posts and credits"),
@@ -398,18 +403,19 @@ contentApi.openapi(
     method: "patch",
     path: "/drafts/{id}",
     tags: ["Content"],
-    request: { params: z.object({ id: z.string() }), ...body(z.object({ text: z.string().trim().min(1).max(10000).optional(), status: z.enum(["draft", "approved", "discarded"]).optional() })) },
+    request: { params: z.object({ id: z.string() }), ...body(z.object({ text: z.string().trim().min(1).max(30000).optional(), parts: z.array(z.string().max(30000)).min(1).max(20).optional(), status: z.enum(["draft", "approved", "discarded"]).optional() })) },
     responses: { 200: json(z.object({ draft: DraftSchema })), 409: json(Err, "Invalid state change"), ...errs },
   }),
   async (c) => {
     const patch = c.req.valid("json");
-    if (patch.text !== undefined && denied(c, "content.write")) return c.json(forbidden("edit posts"), 403);
+    if ((patch.text !== undefined || patch.parts !== undefined) && denied(c, "content.write")) return c.json(forbidden("edit posts"), 403);
     if (patch.status === "approved" && denied(c, "draft.approve")) return c.json(forbidden("approve posts"), 403);
     if (patch.status && patch.status !== "approved" && denied(c, "content.write")) return c.json(forbidden("change posts"), 403);
     const principal = c.get("principal");
     try {
       const updated = await updateDraft(c.get("db"), principal.orgId, c.req.valid("param").id, {
         ...(patch.text !== undefined ? { text: patch.text } : {}),
+        ...(patch.parts !== undefined ? { parts: patch.parts } : {}),
         ...(patch.status ? { status: patch.status } : {}),
       });
       if (!updated) return c.json(apiError("not_found", "No such post in this workspace."), 404);

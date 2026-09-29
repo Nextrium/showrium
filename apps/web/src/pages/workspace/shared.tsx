@@ -15,6 +15,8 @@ export type Draft = {
   externalUrl: string | null;
   lastError: string | null;
   createdAt: string;
+  parts?: string[] | null;
+  partsPosted?: number;
   source?: { mode: string; kind: string | null; title: string | null; url: string | null; contextItemId: string | null } | null;
 };
 export type Persona = {

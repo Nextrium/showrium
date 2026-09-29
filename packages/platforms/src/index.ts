@@ -13,6 +13,8 @@ export interface TokenSet {
 export interface Account {
   accountId: string;
   handle: string;
+  /** X only: the account's subscription ("None", "Basic", "Premium", "PremiumPlus"). */
+  subscription?: string | undefined;
 }
 export interface OAuthConfig {
   clientId: string;
@@ -22,6 +24,15 @@ export interface OAuthConfig {
 export interface PublishResult {
   externalId: string;
   url: string | null;
+  /** Bluesky: the record's content hash, needed to reply to it (threads). */
+  cid?: string | undefined;
+}
+/** For threads: the post to reply to, and the first post of the thread (Bluesky needs both). */
+export interface ReplyTo {
+  id: string;
+  cid?: string | undefined;
+  rootId?: string | undefined;
+  rootCid?: string | undefined;
 }
 
 export class PlatformError extends Error {
@@ -81,15 +92,17 @@ export const x = {
     return { accessToken: t.access_token, refreshToken: t.refresh_token ?? refreshToken, expiresAt: expiry(t.expires_in) };
   },
   async account(tokens: TokenSet, doFetch: FetchLike = fetch): Promise<Account> {
-    const res = await request("X", doFetch, "https://api.x.com/2/users/me", { headers: { Authorization: `Bearer ${tokens.accessToken}` } });
-    const { data } = (await res.json()) as { data: { id: string; username: string } };
-    return { accountId: data.id, handle: `@${data.username}` };
+    // subscription_type tells us whether long posts (up to 25,000 characters) are allowed.
+    const res = await request("X", doFetch, "https://api.x.com/2/users/me?user.fields=subscription_type", { headers: { Authorization: `Bearer ${tokens.accessToken}` } });
+    const { data } = (await res.json()) as { data: { id: string; username: string; subscription_type?: string } };
+    const subscription = typeof data.subscription_type === "string" && /^[A-Za-z]{1,20}$/.test(data.subscription_type) ? data.subscription_type : "None";
+    return { accountId: data.id, handle: `@${data.username}`, subscription };
   },
-  async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch): Promise<PublishResult> {
+  async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo): Promise<PublishResult> {
     const res = await request("X", doFetch, "https://api.x.com/2/tweets", {
       method: "POST",
       headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, ...(replyTo ? { reply: { in_reply_to_tweet_id: replyTo.id } } : {}) }),
     });
     const { data } = (await res.json()) as { data: { id: string } };
     return { externalId: data.id, url: `https://x.com/${account.handle.replace(/^@/, "")}/status/${data.id}` };
@@ -227,11 +240,11 @@ export const mastodon = {
     const a = (await res.json()) as { id: string; acct: string };
     return { accountId: a.id, handle: `@${a.acct}@${instance}` };
   },
-  async publish(instance: string, tokens: TokenSet, text: string, idempotencyKey: string, doFetch: FetchLike = fetch): Promise<PublishResult> {
+  async publish(instance: string, tokens: TokenSet, text: string, idempotencyKey: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo): Promise<PublishResult> {
     const res = await request("Mastodon", doFetch, `https://${instance}/api/v1/statuses`, {
       method: "POST",
       headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify({ status: text, visibility: "public" }),
+      body: JSON.stringify({ status: text, visibility: "public", ...(replyTo ? { in_reply_to_id: replyTo.id } : {}) }),
     });
     const s = (await res.json()) as { id: string; url?: string };
     return { externalId: s.id, url: s.url ?? null };
@@ -261,20 +274,24 @@ export const bluesky = {
     const s = (await res.json()) as { accessJwt: string; did: string; handle: string };
     return { accessJwt: s.accessJwt, account: { accountId: s.did, handle: `@${s.handle}` } };
   },
-  async publish(service: string, accessJwt: string, account: Account, text: string, doFetch: FetchLike = fetch): Promise<PublishResult> {
+  async publish(service: string, accessJwt: string, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo): Promise<PublishResult> {
     const facets = blueskyLinkFacets(text);
+    const reply =
+      replyTo?.cid && replyTo.rootId && replyTo.rootCid
+        ? { reply: { root: { uri: replyTo.rootId, cid: replyTo.rootCid }, parent: { uri: replyTo.id, cid: replyTo.cid } } }
+        : {};
     const res = await request("Bluesky", doFetch, `${service}/xrpc/com.atproto.repo.createRecord`, {
       method: "POST",
       headers: { Authorization: `Bearer ${accessJwt}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         repo: account.accountId,
         collection: "app.bsky.feed.post",
-        record: { $type: "app.bsky.feed.post", text, createdAt: new Date().toISOString(), ...(facets.length ? { facets } : {}) },
+        record: { $type: "app.bsky.feed.post", text, createdAt: new Date().toISOString(), ...(facets.length ? { facets } : {}), ...reply },
       }),
     });
-    const r = (await res.json()) as { uri: string };
+    const r = (await res.json()) as { uri: string; cid?: string };
     const rkey = r.uri.split("/").pop() ?? "";
-    return { externalId: r.uri, url: `https://bsky.app/profile/${account.handle.replace(/^@/, "")}/post/${rkey}` };
+    return { externalId: r.uri, cid: r.cid, url: `https://bsky.app/profile/${account.handle.replace(/^@/, "")}/post/${rkey}` };
   },
 };
 

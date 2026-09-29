@@ -322,6 +322,10 @@ export const draft = sqliteTable(
     externalPostId: text("external_post_id"),
     externalUrl: text("external_url"),
     lastError: text("last_error"),
+    /** A thread: the parts in order (null for a single post). `text` holds them joined, for search and display. */
+    parts: text("parts", { mode: "json" }).$type<string[] | null>(),
+    /** Thread parts already posted (in order), so a retry continues instead of posting twice. */
+    postedParts: text("posted_parts", { mode: "json" }).$type<{ id: string; cid?: string | undefined; url: string | null }[] | null>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

@@ -199,7 +199,7 @@ export class IdeaError extends Error {
 }
 
 /** Writes posts from an idea. The idea is claimed first, so two clicks (or the cron) can't draft it twice. */
-export async function composeIdea(db: Db, providers: Provider[], input: { orgId: string; ideaId: string; mode: ContentMode; platforms: Platform[] }) {
+export async function composeIdea(db: Db, providers: Provider[], input: { orgId: string; ideaId: string; mode: ContentMode; platforms: Platform[]; thread?: boolean | undefined }) {
   const [claimed] = await db
     .update(idea)
     .set({ status: "drafted", draftedAt: new Date() })
@@ -210,7 +210,7 @@ export async function composeIdea(db: Db, providers: Provider[], input: { orgId:
     throw exists ? new IdeaError("idea_used", "This idea was already used or dismissed.") : new IdeaError("not_found", "No such idea in this workspace.");
   }
   try {
-    return await compose(db, providers, { orgId: input.orgId, contextItemId: claimed.contextItemId, mode: input.mode, platforms: input.platforms });
+    return await compose(db, providers, { orgId: input.orgId, contextItemId: claimed.contextItemId, mode: input.mode, platforms: input.platforms, ...(input.thread ? { thread: true } : {}) });
   } catch (error) {
     await db.update(idea).set({ status: "new", draftedAt: null }).where(eq(idea.id, input.ideaId));
     throw error;

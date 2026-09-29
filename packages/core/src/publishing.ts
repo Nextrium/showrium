@@ -1,8 +1,8 @@
 // Connected accounts and publishing. Tokens are decrypted only here, just before use.
 import { and, asc, eq, gt, inArray, lte } from "drizzle-orm";
 import { connection, draft, mastodonApp, oauthState, persona, type ConnectionPlatform, type Db } from "@nextrium/db";
-import { bluesky, linkedin, mastodon, PlatformError, tiktok, x, type Account, type FetchLike, type OAuthConfig, type TokenSet } from "@nextrium/platforms";
-import { hasErrors } from "@nextrium/policy";
+import { bluesky, linkedin, mastodon, PlatformError, tiktok, x, type Account, type FetchLike, type OAuthConfig, type ReplyTo, type TokenSet } from "@nextrium/platforms";
+import { hasErrors, X_LONG_SUBSCRIPTIONS, xWeightedLength } from "@nextrium/policy";
 import { postCreditTxn, InsufficientCreditsError } from "./credits.js";
 import { decryptJson, encryptJson, pkceChallenge, randomToken } from "./crypto.js";
 import { newId } from "./ids.js";
@@ -127,27 +127,49 @@ async function freshTokens(deps: PublishDeps, conn: typeof connection.$inferSele
   return tokens;
 }
 
-async function sendToPlatform(deps: PublishDeps, conn: typeof connection.$inferSelect, text: string, draftId: string) {
+type SendCache = { bluesky?: { service: string; accessJwt: string; account: Account } };
+
+async function sendToPlatform(deps: PublishDeps, conn: typeof connection.$inferSelect, text: string, idempotencyKey: string, replyTo?: ReplyTo, cache: SendCache = {}) {
   const account = { accountId: conn.accountId, handle: conn.handle };
   const key = aad(conn.orgId, conn.platform, conn.accountId);
   switch (conn.platform) {
-    case "x":
+    case "x": {
+      const tokens = await freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, key));
+      return x.publish(tokens, account, text, deps.fetch, replyTo);
+    }
     case "linkedin": {
       const tokens = await freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, key));
-      return (conn.platform === "x" ? x : linkedin).publish(tokens, account, text, deps.fetch);
+      return linkedin.publish(tokens, account, text, deps.fetch);
     }
     case "mastodon": {
       const { tokens } = await decryptJson<OAuthSecret>(deps.key, conn.secret, key);
-      return mastodon.publish(conn.meta.instance!, tokens, text, draftId, deps.fetch);
+      return mastodon.publish(conn.meta.instance!, tokens, text, idempotencyKey, deps.fetch, replyTo);
     }
     case "bluesky": {
-      const s = await decryptJson<BlueskySecret>(deps.key, conn.secret, key);
-      const service = conn.meta.service ?? "https://bsky.social";
-      const session = await bluesky.session(service, s.identifier, s.appPassword, deps.fetch);
-      return bluesky.publish(service, session.accessJwt, session.account, text, deps.fetch);
+      // One session per publish, reused across a thread's parts.
+      if (!cache.bluesky) {
+        const s = await decryptJson<BlueskySecret>(deps.key, conn.secret, key);
+        const service = conn.meta.service ?? "https://bsky.social";
+        const session = await bluesky.session(service, s.identifier, s.appPassword, deps.fetch);
+        cache.bluesky = { service, accessJwt: session.accessJwt, account: session.account };
+      }
+      const b = cache.bluesky;
+      return bluesky.publish(b.service, b.accessJwt, b.account, text, deps.fetch, replyTo);
     }
     default:
       throw new PublishError("not_supported", "Publishing to this platform arrives with video support.");
+  }
+}
+
+/** Before a long X post: confirm the account still has a subscription that allows it (one read). */
+async function confirmXLong(deps: PublishDeps, conn: typeof connection.$inferSelect) {
+  const tokens = await freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, aad(conn.orgId, conn.platform, conn.accountId)));
+  const acct = await x.account(tokens, deps.fetch);
+  if (acct.subscription !== conn.meta.subscription) {
+    await deps.db.update(connection).set({ meta: { ...conn.meta, subscription: acct.subscription ?? "None" }, updatedAt: new Date() }).where(eq(connection.id, conn.id));
+  }
+  if (!X_LONG_SUBSCRIPTIONS.includes(acct.subscription ?? "")) {
+    throw new PublishError("has_errors", "Your X account doesn't have Premium any more, so posts must be 280 characters or fewer. Shorten this post or make it a thread.");
   }
 }
 
@@ -176,17 +198,25 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     .returning({ id: draft.id });
   if (!claimed) throw new PublishError("conflict", "This post is already being published.");
 
-  // X charges per API post: plan allowance first, then credits (links cost more).
-  let charged = 0;
+  // A thread posts its parts as a chain of replies. Parts already posted (from an earlier try) are skipped.
+  const isThread = Boolean(d.parts && d.parts.length > 1);
+  const parts = isThread ? d.parts! : [d.text];
+  let posted = isThread ? [...(d.postedParts ?? [])] : [];
+  const startAt = posted.length;
+  const remaining = parts.slice(startAt);
+
+  // X charges per API post: plan allowance first, then credits (links cost more). Each part is a post.
+  const partCharge: number[] = remaining.map(() => 0);
   if (conn.platform === "x") {
     const plan = await getOrgPlan(db, input.orgId);
-    const { overage } = await addUsage(db, input.orgId, "xApiPosts", 1, PLAN_LIMITS[plan].xApiPosts);
-    if (overage > 0) {
-      charged = /https?:\/\//i.test(d.text) ? CREDITS_PER_X_API_POST_WITH_LINK : CREDITS_PER_X_API_POST;
+    const { overage } = await addUsage(db, input.orgId, "xApiPosts", remaining.length, PLAN_LIMITS[plan].xApiPosts);
+    for (let i = remaining.length - overage; i < remaining.length; i++) partCharge[i] = /https?:\/\//i.test(remaining[i]!) ? CREDITS_PER_X_API_POST_WITH_LINK : CREDITS_PER_X_API_POST;
+    const charged = partCharge.reduce((a, b) => a + b, 0);
+    if (charged > 0) {
       try {
-        await postCreditTxn(db, { orgId: input.orgId, kind: "spend", amount: -charged, idempotencyKey: `x-post:${d.id}`, description: "X post via API" });
+        await postCreditTxn(db, { orgId: input.orgId, kind: "spend", amount: -charged, idempotencyKey: `x-post:${d.id}:${startAt}`, description: remaining.length > 1 ? `X thread via API (${remaining.length} posts)` : "X post via API" });
       } catch (error) {
-        await addUsage(db, input.orgId, "xApiPosts", -1, PLAN_LIMITS[plan].xApiPosts);
+        await addUsage(db, input.orgId, "xApiPosts", -remaining.length, PLAN_LIMITS[plan].xApiPosts);
         await db.update(draft).set({ status: d.status, updatedAt: new Date() }).where(eq(draft.id, d.id));
         if (error instanceof InsufficientCreditsError) throw new PublishError("insufficient_credits", `Posting to X through the API needs ${charged} credits. Use tap-to-post (free) or add credits.`);
         throw error;
@@ -194,23 +224,47 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     }
   }
 
+  const cache: SendCache = {};
   try {
-    const result = await sendToPlatform(deps, conn, d.text, d.id);
+    if (conn.platform === "x" && !isThread && xWeightedLength(d.text) > 280) await confirmXLong(deps, conn);
+    let result: { externalId: string; url: string | null };
+    if (!isThread) {
+      result = await sendToPlatform(deps, conn, d.text, d.id, undefined, cache);
+    } else {
+      for (let i = startAt; i < parts.length; i++) {
+        const prev = posted[i - 1];
+        const root = posted[0];
+        const replyTo = prev && root ? { id: prev.id, cid: prev.cid, rootId: root.id, rootCid: root.cid } : undefined;
+        const r = await sendToPlatform(deps, conn, parts[i]!, `${d.id}:${i}`, replyTo, cache);
+        posted = [...posted, { id: r.externalId, cid: r.cid, url: r.url }];
+        await db.update(draft).set({ postedParts: posted, updatedAt: new Date() }).where(eq(draft.id, d.id));
+      }
+      result = { externalId: posted[0]!.id, url: posted[0]!.url };
+    }
     await db
       .update(draft)
       .set({ status: "published", publishedAt: new Date(), externalPostId: result.externalId, externalUrl: result.url, publishMethod: "api", lastError: null, updatedAt: new Date() })
       .where(eq(draft.id, d.id));
-    await recordAudit(db, { orgId: input.orgId, actorUserId: input.actorUserId ?? null, action: "draft.published", target: d.id, meta: { platform: conn.platform } });
+    await recordAudit(db, { orgId: input.orgId, actorUserId: input.actorUserId ?? null, action: "draft.published", target: d.id, meta: { platform: conn.platform, parts: parts.length } });
     return { status: "published" as const, url: result.url };
   } catch (error) {
-    const message = error instanceof PlatformError || error instanceof PublishError ? error.message : "Publishing failed unexpectedly.";
-    if (!(error instanceof PlatformError)) console.error("publish failed", error);
+    const base = error instanceof PlatformError || error instanceof PublishError ? error.message : "Publishing failed unexpectedly.";
+    const message = isThread && posted.length > 0 ? `Posted ${posted.length} of ${parts.length} parts. ${base} Try again to post the rest.` : base;
+    if (!(error instanceof PlatformError) && !(error instanceof PublishError)) console.error("publish failed", error);
     await db.update(draft).set({ status: "failed", lastError: message, updatedAt: new Date() }).where(eq(draft.id, d.id));
     if (error instanceof PlatformError && error.kind === "auth") {
       await db.update(connection).set({ status: "needs_reconnect", updatedAt: new Date() }).where(eq(connection.id, conn.id));
     }
-    if (charged > 0) {
-      await postCreditTxn(db, { orgId: input.orgId, kind: "refund", amount: charged, idempotencyKey: `x-refund:${d.id}:${Date.now()}`, description: "Refund: X post failed" }).catch(() => undefined);
+    // Give back the allowance and credits for the parts that didn't go out.
+    if (conn.platform === "x") {
+      const sentNow = posted.length - startAt;
+      const unsent = remaining.length - sentNow;
+      const refund = partCharge.slice(sentNow).reduce((a, b) => a + b, 0);
+      const plan = await getOrgPlan(db, input.orgId);
+      if (unsent > 0) await addUsage(db, input.orgId, "xApiPosts", -unsent, PLAN_LIMITS[plan].xApiPosts).catch(() => undefined);
+      if (refund > 0) {
+        await postCreditTxn(db, { orgId: input.orgId, kind: "refund", amount: refund, idempotencyKey: `x-refund:${d.id}:${Date.now()}`, description: "Refund: X post failed" }).catch(() => undefined);
+      }
     }
     throw new PublishError("platform_error", message);
   }

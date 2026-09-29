@@ -32,13 +32,16 @@ function fakeReply(user: string): string {
   const repair = user.match(/^Rewrite this (\w+) post/);
   if (repair) return JSON.stringify({ text: "A shorter version that fits." });
   const ids = (user.match(/Platform ids: ([^.]+)\./)?.[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const threaded = (user.match(/For ([a-z_, ]+): write a thread\./)?.[1] ?? "").split(",").map((s) => s.trim());
+  const parts = ["Retries used to fail silently. Here's what we changed.", "Each retry now waits a little longer than the last.", "A small random delay stops every client retrying at once."];
   return JSON.stringify({
     angle: "What changed and why it matters",
     key_points: ["The main change", "Why it helps"],
-    variants: ids.map((platform) => ({
-      platform,
-      text: platform === "x" ? "Shipped a small improvement today. It makes retries safer." : `A ${platform} post about the change, in the user's voice.`,
-    })),
+    variants: ids.map((platform) =>
+      threaded.includes(platform)
+        ? { platform, text: parts.join("\n\n"), parts }
+        : { platform, text: platform === "x" ? "Shipped a small improvement today. It makes retries safer." : `A ${platform} post about the change, in the user's voice.` },
+    ),
   });
 }
 

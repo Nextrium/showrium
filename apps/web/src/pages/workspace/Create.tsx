@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "../../App";
 import { api, useApi } from "../../lib";
-import { DraftCard } from "./Drafts";
+import { DraftCard, THREAD_PLATFORMS } from "./Drafts";
 import { MODES, usePlatforms, type Draft, type Persona, type Platform } from "./shared";
 import { PageHeader } from "../../ui/kit";
 import { QUICK_KEY } from "./Home";
@@ -39,6 +39,7 @@ export function CreatePage() {
   const [contextId, setContextId] = useState<string | null>(() => new URLSearchParams(window.location.search).get("context"));
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("build_in_public");
   const [chosen, setChosen] = useState<Platform[]>([]);
+  const [thread, setThread] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -123,11 +124,12 @@ export function CreatePage() {
 
   const generate = () =>
     run("Writing your posts…", async () => {
-      const out = await api<{ drafts: Draft[] }>("/compose", { method: "POST", body: JSON.stringify({ contextItemId: contextId, mode, platforms: chosen }) });
+      const out = await api<{ drafts: Draft[] }>("/compose", { method: "POST", body: JSON.stringify({ contextItemId: contextId, mode, platforms: chosen, thread: thread && threadable.length > 0 }) });
       setDrafts(out.drafts);
     });
 
   const selected = contexts.data?.data.find((c) => c.id === contextId);
+  const threadable = chosen.filter((p) => THREAD_PLATFORMS.includes(p));
 
   return (
     <div className="dash">
@@ -203,6 +205,12 @@ export function CreatePage() {
             </label>
           ))}
         </div>
+        {threadable.length > 0 && (
+          <label className="check">
+            <input type="checkbox" checked={thread} onChange={(e) => setThread(e.target.checked)} />
+            Write as a thread on {threadable.map((p) => platforms.find((x) => x.id === p)?.label ?? p).join(", ")}
+          </label>
+        )}
         <button className="button" onClick={generate} disabled={!contextId || !chosen.length || Boolean(busy)}>
           {busy ?? `Write ${chosen.length} post${chosen.length === 1 ? "" : "s"}`}
         </button>

@@ -49,11 +49,22 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
       setMessage(`Scheduled for ${new Date(when).toLocaleString()}.`);
       onChange({ ...draft, status: "scheduled", scheduledAt: new Date(when).toISOString() });
     });
+  const parts = draft.parts && draft.parts.length > 1 ? draft.parts : null;
+  const [copiedPart, setCopiedPart] = useState<number | null>(null);
   const tapToPost = () => {
     // Runs synchronously inside the click, alongside the link opening in a new tab.
-    navigator.clipboard.writeText(draft.text).catch(() => undefined);
+    navigator.clipboard.writeText(parts ? parts[0]! : draft.text).catch(() => undefined);
     setOpened(true);
-    setMessage(intent?.url ? "Opened with your post filled in. Post it there, then mark it as posted." : "Your post is copied. Paste it in the app, then mark it as posted.");
+    setMessage(
+      parts
+        ? "The first part is ready to post. Then reply to it with each part below, in order."
+        : intent?.url
+          ? "Opened with your post filled in. Post it there, then mark it as posted."
+          : "Your post is copied. Paste it in the app, then mark it as posted.",
+    );
+  };
+  const copyPart = (i: number) => {
+    navigator.clipboard.writeText(parts![i]!).then(() => setCopiedPart(i)).catch(() => setError("Couldn't copy. Select the text and copy it yourself."));
   };
   const markPosted = () =>
     act(async () => {
@@ -72,6 +83,16 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
         )}
         {opened && <button className="button secondary" disabled={busy} onClick={markPosted}>I've posted it</button>}
       </div>
+      {opened && parts && (
+        <ol className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Thread parts to post as replies">
+          {parts.slice(1).map((part, n) => (
+            <li key={n} className="flex items-center justify-between gap-3 rounded-xl border border-line px-3 py-2">
+              <span className="min-w-0 flex-1 truncate text-[13.5px]"><strong className="font-semibold">Reply {n + 1}:</strong> {part}</span>
+              <button type="button" className="button secondary" onClick={() => copyPart(n + 1)}>{copiedPart === n + 1 ? "Copied" : "Copy"}</button>
+            </li>
+          ))}
+        </ol>
+      )}
       {canApi && (
         <div className="row">
           {accounts.length > 1 && (
@@ -83,7 +104,7 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
             </label>
           )}
           <button className="button secondary" disabled={busy} onClick={publishNow}>
-            Publish now{draft.platform === "x" ? " (uses X credits)" : ""}
+            Publish {parts ? `thread (${parts.length} parts)` : "now"}{draft.platform === "x" ? " (uses X credits)" : ""}
           </button>
           <label>
             Or schedule

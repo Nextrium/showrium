@@ -55,33 +55,68 @@ export function DraftCard({ draft, onChange }: { draft: Draft; onChange: (d: Dra
   );
 }
 
-/** Edit, approve, discard, copy and publish one post. */
+/** Platforms where a post can be a thread (a chain of replies). */
+export const THREAD_PLATFORMS = ["x", "bluesky", "threads", "mastodon"];
+
+/** Splits one post into thread parts: by paragraph, then by sentence when a paragraph is too long. */
+export function splitIntoParts(text: string, limit: number): string[] {
+  const parts: string[] = [];
+  for (const para of text.split(/\n[ \t]*\n/).map((p) => p.trim()).filter(Boolean)) {
+    if (para.length <= limit) {
+      parts.push(para);
+      continue;
+    }
+    let cur = "";
+    for (const sentence of para.match(/[^.!?]+[.!?]*/g) ?? [para]) {
+      if (cur && (cur + sentence).trim().length > limit) {
+        parts.push(cur.trim());
+        cur = "";
+      }
+      cur += sentence;
+    }
+    if (cur.trim()) parts.push(cur.trim());
+  }
+  return parts.length ? parts : [text];
+}
+
+/** Edit, approve, discard, copy and publish one post or thread. */
 function PostEditor({ draft, onChange }: { draft: Draft; onChange?: (d: Draft) => void }) {
   const platforms = usePlatforms();
-  const limit = platforms.find((p) => p.id === draft.platform)?.maxLength;
+  const { data: conns } = useApi<{ data: { platform: string; status: string; longPosts: boolean }[] }>("/connections");
+  const xLong = draft.platform === "x" && Boolean(conns?.data.some((c) => c.platform === "x" && c.status === "active" && c.longPosts));
+  const partLimit = platforms.find((p) => p.id === draft.platform)?.maxLength;
+  const limit = xLong ? 25_000 : partLimit;
   const [text, setText] = useState(draft.text);
+  const [parts, setParts] = useState<string[] | null>(draft.parts && draft.parts.length > 1 ? draft.parts : null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const locked = draft.status === "published" || draft.status === "publishing";
-  const dirty = text !== draft.text;
+  const serverParts = draft.parts && draft.parts.length > 1 ? draft.parts : null;
+  const dirty = parts ? JSON.stringify(parts) !== JSON.stringify(serverParts) : serverParts !== null || text !== draft.text;
+  const threadable = THREAD_PLATFORMS.includes(draft.platform);
+  const label = PLATFORM_LABELS[draft.platform] ?? draft.platform;
 
   // A fresh copy from the server (after an action elsewhere) replaces the text unless it's being edited.
   useEffect(() => {
-    if (!dirty) setText(draft.text);
+    if (!dirty) {
+      setText(draft.text);
+      setParts(serverParts);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.text]);
+  }, [draft.text, JSON.stringify(draft.parts)]);
   useEffect(() => {
     setUnsaved(`post:${draft.id}`, dirty);
     return () => setUnsaved(`post:${draft.id}`, false);
   }, [dirty, draft.id]);
 
-  const patch = async (body: { text?: string; status?: string }) => {
+  const patch = async (body: { text?: string; parts?: string[]; status?: string }) => {
     setBusy(true);
     setError(null);
     try {
       const out = await api<{ draft: Draft }>(`/drafts/${draft.id}`, { method: "PATCH", body: JSON.stringify(body) });
       setText(out.draft.text);
+      setParts(out.draft.parts && out.draft.parts.length > 1 ? out.draft.parts : null);
       onChange?.({ ...out.draft, source: draft.source ?? null });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't update the post.");
@@ -89,10 +124,11 @@ function PostEditor({ draft, onChange }: { draft: Draft; onChange?: (d: Draft) =
       setBusy(false);
     }
   };
+  const save = () => (parts ? patch({ parts }) : patch({ text }));
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(parts ? parts.join("\n\n") : text);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -100,31 +136,90 @@ function PostEditor({ draft, onChange }: { draft: Draft; onChange?: (d: Draft) =
     }
   };
 
-  const over = limit !== undefined && text.length > limit;
+  const setPart = (i: number, value: string) => setParts((cur) => (cur ? cur.map((p, n) => (n === i ? value : p)) : cur));
+  const movePart = (i: number, by: -1 | 1) =>
+    setParts((cur) => {
+      if (!cur || i + by < 0 || i + by >= cur.length) return cur;
+      const next = [...cur];
+      [next[i], next[i + by]] = [next[i + by]!, next[i]!];
+      return next;
+    });
+  const removePart = (i: number) => setParts((cur) => (cur && cur.length > 2 ? cur.filter((_, n) => n !== i) : cur));
+  const counter = (value: string, max: number | undefined) => (
+    <span className={max !== undefined && value.length > max ? "font-semibold text-danger" : ""}>
+      {value.length.toLocaleString()}
+      {max ? ` / ${max.toLocaleString()}` : ""}
+    </span>
+  );
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-2">
-        <textarea
-          aria-label={`${PLATFORM_LABELS[draft.platform] ?? draft.platform} post`}
-          value={text}
-          rows={Math.min(18, Math.max(6, Math.ceil(text.length / 60) + text.split("\n").length))}
-          onChange={(e) => setText(e.target.value)}
-          disabled={locked}
-        />
-        <div className="flex flex-wrap items-center justify-between gap-2 text-[12.5px] text-muted">
-          <span className={over ? "font-semibold text-danger" : ""}>
-            {text.length.toLocaleString()}
-            {limit ? ` / ${limit.toLocaleString()}` : ""} characters
-          </span>
-          <span>AI-assisted draft{dirty ? " · unsaved edits" : ""}</span>
+      {parts ? (
+        <ol className="m-0 flex list-none flex-col gap-3 p-0" aria-label={`${label} thread`}>
+          {parts.map((part, i) => (
+            <li key={i} className="flex flex-col gap-1.5 rounded-xl border border-line bg-sunken p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[11.5px] uppercase tracking-[0.1em] text-muted">
+                  Part {i + 1} of {parts.length}
+                  {draft.partsPosted && i < draft.partsPosted ? " · posted" : ""}
+                </span>
+                {!locked && (
+                  <span className="flex gap-1">
+                    <Button size="sm" variant="ghost" aria-label={`Move part ${i + 1} up`} disabled={i === 0} onClick={() => movePart(i, -1)}>↑</Button>
+                    <Button size="sm" variant="ghost" aria-label={`Move part ${i + 1} down`} disabled={i === parts.length - 1} onClick={() => movePart(i, 1)}>↓</Button>
+                    <Button size="sm" variant="ghost" aria-label={`Remove part ${i + 1}`} disabled={parts.length <= 2} onClick={() => removePart(i)}>✕</Button>
+                  </span>
+                )}
+              </div>
+              <textarea aria-label={`${label} thread, part ${i + 1}`} value={part} rows={Math.min(8, Math.max(3, Math.ceil(part.length / 60)))} onChange={(e) => setPart(i, e.target.value)} disabled={locked} />
+              <span className="text-[12.5px] text-muted">{counter(part, partLimit)} characters</span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <textarea
+            aria-label={`${label} post`}
+            value={text}
+            rows={Math.min(18, Math.max(6, Math.ceil(text.length / 60) + text.split("\n").length))}
+            onChange={(e) => setText(e.target.value)}
+            disabled={locked}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[12.5px] text-muted">
+            <span>
+              {counter(text, limit)} characters{xLong ? " · X Premium: long posts on" : ""}
+            </span>
+            <span>AI-assisted draft{dirty ? " · unsaved edits" : ""}</span>
+          </div>
         </div>
-      </div>
+      )}
+      {!locked && threadable && (
+        <div className="flex flex-wrap gap-2">
+          {parts ? (
+            <>
+              <Button size="sm" variant="secondary" disabled={parts.length >= 20} onClick={() => setParts((cur) => (cur ? [...cur, ""] : cur))} icon="plus">Add a part</Button>
+              <Button size="sm" variant="ghost" onClick={() => { setText(parts.join("\n\n")); setParts(null); }}>Make it one post</Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                const split = splitIntoParts(text, partLimit ?? 280).slice(0, 20);
+                setParts(split.length > 1 ? split : [...split, ""]);
+              }}
+            >
+              Split into a thread
+            </Button>
+          )}
+        </div>
+      )}
       <IssueList issues={draft.issues} />
       {error && <Alert>{error}</Alert>}
       {!locked && (
         <div className="flex flex-wrap gap-2">
           {dirty && (
-            <Button variant="secondary" disabled={busy} onClick={() => patch({ text })}>
+            <Button variant="secondary" disabled={busy} onClick={save}>
               Save edits
             </Button>
           )}

@@ -99,6 +99,13 @@
       "when": 1790650419369,
       "tag": "0013_gifted_celestials",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1790653144200,
+      "tag": "0014_curious_thundra",
+      "breakpoints": true
     }
   ]
 }

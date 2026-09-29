@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, formatDate, navigate, timeAgo, useApi } from "../../lib";
 import { MODES, usePlatforms, type Draft, type Persona, type Platform } from "./shared";
-import { PLATFORM_LABELS, SOURCE_KINDS } from "./Drafts";
-import { Alert, Button, Chip, Empty, Icon, LinkButton, Loading, PageHeader } from "../../ui/kit";
+import { PLATFORM_LABELS, SOURCE_KINDS, THREAD_PLATFORMS } from "./Drafts";
+import { Alert, Button, Chip, Empty, Icon, LinkButton, Loading, PageHeader, Switch } from "../../ui/kit";
 import { DetailPanel, ListItem, SectionLabel, Split, StatStrip, Tag, useQueryParams } from "../../ui/split";
 
 type IdeaStatus = "new" | "drafted" | "dismissed";
@@ -36,6 +36,7 @@ function IdeaDetail({ id, persona }: { id: string; persona: Persona | null }) {
   const platforms = usePlatforms().filter((p) => persona?.platforms.includes(p.id));
   const [mode, setMode] = useState<string>("build_in_public");
   const [chosen, setChosen] = useState<Platform[]>(persona?.platforms ?? []);
+  const [thread, setThread] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   useEffect(() => {
@@ -65,7 +66,7 @@ function IdeaDetail({ id, persona }: { id: string; persona: Persona | null }) {
   };
   const write = () =>
     act("write", async () => {
-      const out = await api<{ drafts: Draft[] }>(`/ideas/${idea.id}/compose`, { method: "POST", body: JSON.stringify({ mode, platforms: chosen }) });
+      const out = await api<{ drafts: Draft[] }>(`/ideas/${idea.id}/compose`, { method: "POST", body: JSON.stringify({ mode, platforms: chosen, thread: thread && chosen.some((p) => THREAD_PLATFORMS.includes(p)) }) });
       // Straight to the new posts, so it's clear where they went.
       if (out.drafts[0]) navigate(`/app/posts?id=${out.drafts[0].id}`);
     });
@@ -120,6 +121,12 @@ function IdeaDetail({ id, persona }: { id: string; persona: Persona | null }) {
                   ))}
                 </div>
               </div>
+              {chosen.some((p) => THREAD_PLATFORMS.includes(p)) && (
+                <label className="flex items-center justify-between gap-3 text-[13.5px] font-medium text-ink-2">
+                  Write as a thread on {chosen.filter((p) => THREAD_PLATFORMS.includes(p)).map((p) => PLATFORM_LABELS[p] ?? p).join(", ")}
+                  <Switch label="Write as a thread" on={thread} onChange={setThread} />
+                </label>
+              )}
               <div className="flex flex-wrap gap-2">
                 <Button disabled={Boolean(busy) || !chosen.length} onClick={write} icon="edit">
                   {busy === "write" ? "Writing…" : `Write ${chosen.length} post${chosen.length === 1 ? "" : "s"}`}

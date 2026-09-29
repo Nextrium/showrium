@@ -33,11 +33,23 @@ const PLATFORM_GUIDE: Record<Platform, string> = {
   youtube_shorts: "YouTube Shorts: a 30-45 second spoken script. Start with 'TITLE:' (under 90 characters), then the spoken lines. No links.",
 };
 
+/** Long X post, when the author's X account has a subscription that allows it. */
+const X_LONG_GUIDE = "X (the author has X Premium, so long posts are allowed): 600-2,000 characters. The first line must work on its own: only the first 280 characters show before \"Show more\". NO links or URLs.";
+
+/** Thread guidance: parts, each within the platform's limit. */
+const THREAD_GUIDE: Partial<Record<Platform, string>> = {
+  x: "X thread: 3-6 parts in \"parts\", each at most 260 characters, NO links.",
+  bluesky: "Bluesky thread: 3-6 parts in \"parts\", each at most 280 characters.",
+  threads: "Threads thread: 3-6 parts in \"parts\", each at most 450 characters.",
+  mastodon: "Mastodon thread: 3-6 parts in \"parts\", each at most 450 characters.",
+};
+export const THREADABLE = Object.keys(THREAD_GUIDE) as Platform[];
+
 export const ComposeSchema = z.object({
   angle: z.string().min(1).max(400),
   key_points: z.array(z.string().max(300)).min(1).max(6),
   variants: z
-    .array(z.object({ platform: z.enum(PLATFORMS), text: z.string().min(1).max(6000) }))
+    .array(z.object({ platform: z.enum(PLATFORMS), text: z.string().min(1).max(30000), parts: z.array(z.string().min(1).max(30000)).min(1).max(20).optional() }))
     .min(1)
     .max(PLATFORMS.length),
 });
@@ -64,27 +76,32 @@ export function composeSystemPrompt(persona: PersonaInput): string {
   ].join("\n");
 }
 
-export function composeUserPrompt(input: { mode: ContentMode; platforms: Platform[]; contextTitle: string; contextBody: string }): string {
+export function composeUserPrompt(input: { mode: ContentMode; platforms: Platform[]; contextTitle: string; contextBody: string; thread?: Platform[]; xLong?: boolean }): string {
+  const thread = new Set((input.thread ?? []).filter((p) => THREADABLE.includes(p)));
+  const guide = (p: Platform) => (thread.has(p) ? THREAD_GUIDE[p]! : p === "x" && input.xLong ? X_LONG_GUIDE : PLATFORM_GUIDE[p]);
   return [
     `Mode: ${input.mode}. ${MODE_GUIDE[input.mode]}`,
     "",
     "Write one post for each of these platforms:",
-    ...input.platforms.map((p) => `- ${PLATFORM_GUIDE[p]}`),
+    ...input.platforms.map((p) => `- ${guide(p)}`),
+    ...(thread.size
+      ? ["", `For ${[...thread].join(", ")}: write a thread. Put the parts in order in "parts" (the first part is the hook and must make people want the rest), and set "text" to the parts joined with blank lines. Don't number the parts.`]
+      : []),
     "",
     "<context>",
     input.contextTitle ? `Title: ${input.contextTitle}` : "",
     input.contextBody,
     "</context>",
     "",
-    'Return JSON: {"angle": string, "key_points": string[], "variants": [{"platform": one of the platform ids above, "text": string}]}.',
+    'Return JSON: {"angle": string, "key_points": string[], "variants": [{"platform": one of the platform ids above, "text": string, "parts"?: string[]}]}.',
     `Platform ids: ${input.platforms.join(", ")}. Include exactly one variant per platform.`,
   ].join("\n");
 }
 
-export function repairUserPrompt(platform: Platform, text: string, problem: string): string {
+export function repairUserPrompt(platform: Platform, text: string, problem: string, guide?: string): string {
   return [
     `Rewrite this ${platform} post so it fixes the problem: ${problem}`,
-    PLATFORM_GUIDE[platform],
+    guide ?? PLATFORM_GUIDE[platform],
     "Keep the meaning and the voice. Do not add facts.",
     "<post>",
     text,
@@ -93,7 +110,7 @@ export function repairUserPrompt(platform: Platform, text: string, problem: stri
   ].join("\n");
 }
 
-export const RepairSchema = z.object({ text: z.string().min(1).max(6000) });
+export const RepairSchema = z.object({ text: z.string().min(1).max(30000) });
 
 const HASHTAG = /^#[\p{L}_][\p{L}\p{N}_]*[.,!?]*$/u;
 

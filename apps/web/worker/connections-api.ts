@@ -22,6 +22,7 @@ import {
   UnsafeUrlError,
   type PublishDeps,
 } from "@nextrium/core";
+import { X_LONG_SUBSCRIPTIONS } from "@nextrium/policy";
 import { bluesky, intentUrl, linkedin, mastodon, PlatformError, tiktok, x, type OAuthConfig } from "@nextrium/platforms";
 import type { Env } from "./env.js";
 import { publishingPaused } from "./env.js";
@@ -74,7 +75,7 @@ const notConfigured = () => apiError("not_configured", "Connecting accounts isn'
 // --- List and remove ----------------------------------------------------------------
 
 const ConnectionSchema = z
-  .object({ id: z.string(), platform: z.enum(CONNECTION_PLATFORMS), handle: z.string(), status: z.enum(["active", "needs_reconnect"]), createdAt: z.string() })
+  .object({ id: z.string(), platform: z.enum(CONNECTION_PLATFORMS), handle: z.string(), status: z.enum(["active", "needs_reconnect"]), createdAt: z.string(), longPosts: z.boolean() })
   .openapi("Connection");
 
 connectionsApi.openapi(
@@ -91,7 +92,7 @@ connectionsApi.openapi(
     const available = encryption
       ? CONNECTION_PLATFORMS.filter((p) => (p === "bluesky" || p === "mastodon" ? true : Boolean(cfg[p as "x" | "linkedin" | "tiktok"])))
       : [];
-    return c.json({ data: rows.map((r) => ({ id: r.id, platform: r.platform, handle: r.handle, status: r.status, createdAt: r.createdAt.toISOString() })), available }, 200);
+    return c.json({ data: rows.map((r) => ({ id: r.id, platform: r.platform, handle: r.handle, status: r.status, createdAt: r.createdAt.toISOString(), longPosts: r.platform === "x" && X_LONG_SUBSCRIPTIONS.includes(r.meta.subscription ?? "") })), available }, 200);
   },
 );
 
@@ -184,7 +185,9 @@ connectionsApi.get("/connections/:platform/callback", async (c) => {
       tokens = await adapter.exchange(cfg, code, row.codeVerifier);
       account = await adapter.account(tokens);
     }
-    await saveConnection(deps, { orgId: row.orgId, platform, account, secret: { tokens }, expiresAt: tokens.expiresAt, meta: row.meta, userId: p.userId });
+    // X: remember the subscription, so long posts are offered only to Premium accounts.
+    const meta = platform === "x" ? { ...row.meta, subscription: account.subscription ?? "None" } : row.meta;
+    await saveConnection(deps, { orgId: row.orgId, platform, account, secret: { tokens }, expiresAt: tokens.expiresAt, meta, userId: p.userId });
     return done(`connected=${platform}`);
   } catch (error) {
     console.error("connection callback failed", platform, error instanceof Error ? error.message : error);
@@ -322,7 +325,9 @@ connectionsApi.openapi(
     if (!d) return c.json(apiError("not_found", "No such post in this workspace."), 404);
     const conns = await listConnections(c.get("db"), p.orgId);
     const instance = conns.find((x) => x.platform === "mastodon")?.meta.instance;
-    return c.json({ url: intentUrl(d.platform, d.text, instance ? { mastodonInstance: instance } : {}) }, 200);
+    // A thread opens with its first part; the page lists the rest to post as replies.
+    const first = d.parts && d.parts.length > 1 ? d.parts[0]! : d.text;
+    return c.json({ url: intentUrl(d.platform, first, instance ? { mastodonInstance: instance } : {}) }, 200);
   },
 );
 

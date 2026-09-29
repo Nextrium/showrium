@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { api, formatDate, useApi } from "../../lib";
 import { PageHeader } from "../../ui/kit";
 
-type Connection = { id: string; platform: string; handle: string; status: "active" | "needs_reconnect"; createdAt: string };
+type Connection = { id: string; platform: string; handle: string; status: "active" | "needs_reconnect"; createdAt: string; longPosts?: boolean };
 type List = { data: Connection[]; available: string[] };
 
 const NAMES: Record<string, string> = { x: "X", linkedin: "LinkedIn", tiktok: "TikTok", bluesky: "Bluesky", mastodon: "Mastodon" };
@@ -64,7 +64,7 @@ export function ConnectionsPage() {
               {data?.data.map((c) => (
                 <tr key={c.id}>
                   <td>{NAMES[c.platform] ?? c.platform}</td>
-                  <td>{c.handle}</td>
+                  <td>{c.handle}{c.longPosts ? <span className="note"> · X Premium: long posts</span> : null}</td>
                   <td className="muted">{c.status === "needs_reconnect" ? "Needs reconnecting" : `Connected ${formatDate(c.createdAt)}`}</td>
                   <td className="num"><button className="button danger" onClick={() => disconnect(c.id)}>Disconnect</button></td>
                 </tr>

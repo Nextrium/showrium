@@ -29,3 +29,11 @@ export const PLATFORM_RULES: Record<Platform, PlatformRule> = {
   tiktok: { label: "TikTok", maxLength: 2200, countMethod: "chars", maxHashtags: 5, links: "warn", requiresMedia: "video", publishPath: "draft_inbox", aiLabel: "Set the AIGC label on realistic AI content." },
   youtube_shorts: { label: "YouTube Shorts", maxLength: 5000, countMethod: "chars", maxHashtags: 3, links: "ok", requiresMedia: "video", publishPath: "draft_inbox", aiLabel: "Set containsSyntheticMedia for realistic AI content." },
 };
+
+/** Platforms where a post can be a thread (a chain of replies to itself). */
+export const THREAD_PLATFORMS: Platform[] = ["x", "bluesky", "threads", "mastodon"];
+export const MAX_THREAD_PARTS = 20;
+/** X Premium (any tier with long posts) raises the X limit to 25,000 characters. */
+export const X_LONG_MAX = 25_000;
+/** X subscription types (from users/me) that include long posts. */
+export const X_LONG_SUBSCRIPTIONS = ["Basic", "Premium", "PremiumPlus"];

@@ -3,6 +3,7 @@
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import {
   brief,
+  connection,
   contextItem,
   draft,
   org,
@@ -24,7 +25,7 @@ import {
   RepairSchema,
   type Provider,
 } from "@nextrium/llm";
-import { checkFacts, hasErrors, lintPost, type LintIssue } from "@nextrium/policy";
+import { checkFacts, hasErrors, lintPost, lintThread, THREAD_PLATFORMS, X_LONG_MAX, X_LONG_SUBSCRIPTIONS, type LintIssue } from "@nextrium/policy";
 import { getBalance, InsufficientCreditsError, postCreditTxn } from "./credits.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
@@ -149,12 +150,27 @@ export async function listFullAccess(db: Db) {
   return db.select({ id: org.id, name: org.name, note: org.fullAccessNote, at: org.fullAccessAt }).from(org).where(eq(org.fullAccess, true)).orderBy(desc(org.fullAccessAt)).limit(200);
 }
 
+/** Whether any connected X account in the workspace can post long (Premium) posts. */
+export async function xLongAllowed(db: Db, orgId: string): Promise<boolean> {
+  const rows = await db.select({ meta: connection.meta }).from(connection).where(and(eq(connection.orgId, orgId), eq(connection.platform, "x"), eq(connection.status, "active")));
+  return rows.some((r) => X_LONG_SUBSCRIPTIONS.includes(r.meta.subscription ?? ""));
+}
+
+/** Lint a post or a thread with the workspace's limits (X Premium raises the X limit). */
+export function lintDraft(platform: Platform, text: string, parts: string[] | null | undefined, xLong: boolean): LintIssue[] {
+  const opts = platform === "x" && xLong && !parts ? { maxLength: X_LONG_MAX } : {};
+  return parts ? lintThread(platform, parts, opts) : lintPost(platform, text, opts);
+}
+
+export const joinParts = (parts: string[]) => parts.map((p) => p.trim()).join("\n\n");
+
 export async function compose(
   db: Db,
   providers: Provider[],
-  input: { orgId: string; contextItemId: string; mode: ContentMode; platforms: Platform[] },
+  input: { orgId: string; contextItemId: string; mode: ContentMode; platforms: Platform[]; thread?: boolean | undefined },
 ) {
   const platforms = [...new Set(input.platforms)];
+  const threadFor = input.thread ? platforms.filter((p) => THREAD_PLATFORMS.includes(p)) : [];
   if (!platforms.length) throw new ComposeError("no_platforms", "Choose at least one platform.");
   const who = await getPersona(db, input.orgId);
   if (!who) throw new ComposeError("persona_required", "Set up your voice first, so posts sound like you.");
@@ -173,11 +189,12 @@ export async function compose(
   }
 
   const system = composeSystemPrompt(who);
+  const xLong = platforms.includes("x") && (await xLongAllowed(db, input.orgId));
   let result;
   try {
     result = await generateStructured(
       providers,
-      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: ctx.title, contextBody: ctx.body }), maxTokens: 6000 },
+      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: ctx.title, contextBody: ctx.body, thread: threadFor, xLong }), maxTokens: 8000 },
       ComposeSchema,
       (out) => checkVariants(out, platforms),
     );
@@ -187,10 +204,34 @@ export async function compose(
   }
 
   let cost = result.costMicroUsd;
-  const variants: { platform: Platform; text: string; issues: LintIssue[] }[] = [];
+  const variants: { platform: Platform; text: string; parts: string[] | null; issues: LintIssue[] }[] = [];
+  const source = `${ctx.title}
+${ctx.body}`;
   for (const v of result.data.variants.filter((x) => platforms.includes(x.platform))) {
+    // Threads: each part cleaned and checked; one repair attempt for up to 3 parts that are too long.
+    const wanted = threadFor.includes(v.platform) ? (v.parts ?? []).map(cleanPost).filter(Boolean) : [];
+    if (wanted.length > 1) {
+      const parts = wanted.slice(0, 20);
+      let repairs = 0;
+      for (let i = 0; i < parts.length && repairs < 3; i++) {
+        const partIssues = lintPost(v.platform, parts[i]!);
+        if (!hasErrors(partIssues)) continue;
+        repairs++;
+        try {
+          const fixed = await generateStructured(providers, { system, user: repairUserPrompt(v.platform, parts[i]!, partIssues.filter((x) => x.severity === "error").map((x) => x.message).join(" ")), maxTokens: 1000 }, RepairSchema);
+          cost += fixed.costMicroUsd;
+          const t = cleanPost(fixed.data.text);
+          if (!hasErrors(lintPost(v.platform, t))) parts[i] = t;
+        } catch {
+          // The issue stays visible on that part.
+        }
+      }
+      const text = joinParts(parts);
+      variants.push({ platform: v.platform, text, parts, issues: [...lintThread(v.platform, parts), ...checkFacts(text, source)] });
+      continue;
+    }
     let text = cleanPost(v.text);
-    let issues = lintPost(v.platform, text);
+    let issues = lintDraft(v.platform, text, null, xLong);
     // One repair attempt for hard errors (too long, placeholders); otherwise keep and show the issue.
     if (hasErrors(issues)) {
       try {
@@ -201,7 +242,7 @@ export async function compose(
         );
         cost += fixed.costMicroUsd;
         const fixedText = cleanPost(fixed.data.text);
-        const fixedIssues = lintPost(v.platform, fixedText);
+        const fixedIssues = lintDraft(v.platform, fixedText, null, xLong);
         if (!hasErrors(fixedIssues)) {
           text = fixedText;
           issues = fixedIssues;
@@ -210,12 +251,11 @@ export async function compose(
         // Keep the original; the error stays visible to the user.
       }
     }
-    variants.push({ platform: v.platform, text, issues: [...issues, ...checkFacts(text, `${ctx.title}
-${ctx.body}`)] });
+    variants.push({ platform: v.platform, text, parts: null, issues: [...issues, ...checkFacts(text, source)] });
   }
 
   const briefId = newId("brf");
-  const rows = variants.map((v) => ({ id: newId("drf"), orgId: input.orgId, briefId, platform: v.platform, text: v.text, issues: v.issues }));
+  const rows = variants.map((v) => ({ id: newId("drf"), orgId: input.orgId, briefId, platform: v.platform, text: v.text, parts: v.parts, issues: v.issues }));
   await db.batch([
     db.insert(brief).values({
       id: briefId,
@@ -292,14 +332,20 @@ export class DraftStateError extends Error {
   }
 }
 
-export async function updateDraft(db: Db, orgId: string, id: string, patch: { text?: string; status?: DraftStatus }) {
+export async function updateDraft(db: Db, orgId: string, id: string, patch: { text?: string; parts?: string[] | null; status?: DraftStatus }) {
   const current = await getDraft(db, orgId, id);
   if (!current) return null;
   if (current.status === "published" || current.status === "publishing") throw new DraftStateError("Published posts can't be edited here.");
   const set: Partial<typeof draft.$inferInsert> = { updatedAt: new Date() };
-  if (patch.text !== undefined) {
-    set.text = patch.text;
-    set.issues = lintPost(current.platform, patch.text);
+  if (patch.parts !== undefined || patch.text !== undefined) {
+    // Parts (a thread) win over text; sending text alone makes it a single post again.
+    const parts = patch.parts && patch.parts.length > 1 ? patch.parts.map((p) => p.trim()) : null;
+    if (parts && !THREAD_PLATFORMS.includes(current.platform)) throw new DraftStateError("This platform doesn't support threads.");
+    const text = parts ? joinParts(parts) : patch.parts?.length === 1 ? patch.parts[0]!.trim() : (patch.text ?? current.text);
+    set.text = text;
+    set.parts = parts;
+    set.postedParts = null;
+    set.issues = lintDraft(current.platform, text, parts, current.platform === "x" && (await xLongAllowed(db, orgId)));
     set.aiGenerated = true; // Still AI-assisted even after human edits.
   }
   if (patch.status && patch.status !== current.status) {
