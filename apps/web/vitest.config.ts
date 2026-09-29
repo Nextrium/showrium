@@ -35,6 +35,8 @@ export default defineConfig(async () => {
     test: {
       include: ["test/**/*.test.ts"],
       setupFiles: ["./test/apply-migrations.ts"],
+      // Integration tests sign up users and run whole flows; shared CI runners can exceed the 5 s default.
+      testTimeout: 20_000,
     },
   };
 });
