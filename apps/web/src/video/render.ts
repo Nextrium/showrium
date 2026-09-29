@@ -51,8 +51,14 @@ function drawLines(ctx: CanvasRenderingContext2D, lines: string[], x: number, y:
 /** Captions: the narration in chunks of up to 6 words, spread evenly over the video. */
 export function captionAt(narration: string, fraction: number): string {
   const words = narration.trim().split(/\s+/).filter(Boolean);
+  // Even chunks of at most 6 words (13 words → 5, 4, 4), so no caption is a single stray word.
+  const count = Math.ceil(words.length / 6);
   const chunks: string[] = [];
-  for (let i = 0; i < words.length; i += 6) chunks.push(words.slice(i, i + 6).join(" "));
+  for (let c = 0, i = 0; c < count; c++) {
+    const size = Math.ceil((words.length - i) / (count - c));
+    chunks.push(words.slice(i, i + size).join(" "));
+    i += size;
+  }
   if (!chunks.length) return "";
   return chunks[Math.min(chunks.length - 1, Math.floor(Math.max(0, Math.min(0.9999, fraction)) * chunks.length))]!;
 }
@@ -116,7 +122,7 @@ export function drawFrame(ctx: CanvasRenderingContext2D, t: Timeline, tMs: numbe
       ctx.fillText("“", pad - 8 * u, y - 60 * u);
       y += 70 * u;
       body(scene.body, 50, THEME.fg);
-      if (scene.attribution) body(`— ${scene.attribution}`, 32);
+      if (scene.attribution) body(scene.attribution, 32);
       break;
     case "bullets": {
       if (scene.heading) heading(scene.heading, 56);
@@ -156,23 +162,66 @@ export function drawFrame(ctx: CanvasRenderingContext2D, t: Timeline, tMs: numbe
   ctx.fillStyle = THEME.accent;
   ctx.fillRect(0, 0, W * Math.min(1, tMs / totalMs), 8 * u);
   const caption = captionAt(t.narration, tMs / totalMs);
-  if (caption) {
-    ctx.font = `600 ${36 * u}px ${BODY}`;
-    const lines = wrap(ctx, caption, maxW);
-    const lh = 48 * u;
-    const top = H - pad * 2.2 - lines.length * lh;
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(pad - 16 * u, top - 12 * u, maxW + 32 * u, lines.length * lh + 24 * u);
-    ctx.fillStyle = "#FFFFFF";
-    drawLines(ctx, lines, pad, top, lh);
-  }
+  if (caption) drawCaption(ctx, caption, W, H, u, pad, maxW);
 }
 
+/**
+ * Captions as outlined white text, centred near the bottom: readable on any background without
+ * a black box over the video (the owner's request). A dark outline plus a soft shadow does the work.
+ */
+export function drawCaption(ctx: CanvasRenderingContext2D, caption: string, W: number, H: number, u: number, pad: number, maxW: number) {
+  ctx.save();
+  ctx.font = `700 ${40 * u}px ${BODY}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.lineJoin = "round";
+  const lines = wrap(ctx, caption, maxW);
+  const lh = 54 * u;
+  const top = H - pad * 2.2 - lines.length * lh;
+  lines.forEach((line, i) => {
+    const y = top + i * lh;
+    ctx.shadowColor = "rgba(0,0,0,0.6)";
+    ctx.shadowBlur = 12 * u;
+    ctx.lineWidth = 8 * u;
+    ctx.strokeStyle = "rgba(10,14,24,0.95)";
+    ctx.strokeText(line, W / 2, y);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillText(line, W / 2, y);
+  });
+  ctx.restore();
+}
+
+/**
+ * The recording format. MP4 must carry AAC audio: asking for plain "video/mp4" makes Chrome write
+ * Opus inside MP4, which many players and apps play without sound (the owner's report). So:
+ * MP4 with AAC when available, then WebM (Opus is normal there), and plain MP4 only where WebM
+ * recording isn't available (Safari, whose MP4 uses AAC).
+ */
 export function pickMimeType(): string {
-  for (const type of ["video/mp4;codecs=avc1,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]) {
-    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(type)) return type;
+  if (typeof MediaRecorder === "undefined") return "video/webm";
+  const aacMp4 = ["video/mp4;codecs=avc1,mp4a.40.2", "video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4;codecs=avc1.4D401E,mp4a.40.2"];
+  for (const type of aacMp4) if (MediaRecorder.isTypeSupported(type)) return type;
+  for (const type of ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]) if (MediaRecorder.isTypeSupported(type)) return type;
+  return "video/mp4";
+}
+
+/** Loudest sample in the file's sound track (0 when silent or unreadable, null when it can't be checked). */
+export async function audioPeak(blob: Blob): Promise<number | null> {
+  const ctx = new AudioContext();
+  try {
+    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+    let peak = 0;
+    for (let c = 0; c < decoded.numberOfChannels; c++) {
+      const data = decoded.getChannelData(c);
+      for (let i = 0; i < data.length; i += 16) peak = Math.max(peak, Math.abs(data[i]!));
+    }
+    return peak;
+  } catch {
+    return null; // some browsers can't decode their own recordings; don't block the download
+  } finally {
+    void ctx.close();
   }
-  return "video/webm";
 }
 
 export async function decodeAudio(base64: string): Promise<AudioBuffer> {
@@ -188,18 +237,36 @@ export async function decodeAudio(base64: string): Promise<AudioBuffer> {
 /**
  * Plays the timeline on the canvas in real time; optionally records it (with the voice-over).
  * Returns the recorded Blob when `record` is true.
+ *
+ * Pass `audioContext` created in the click handler: browsers start an AudioContext made outside
+ * a user gesture as "suspended", and a suspended context records silence.
  */
 export async function play(
   canvas: HTMLCanvasElement,
   t: Timeline,
-  opts: { audio?: AudioBuffer | null; record?: boolean; onProgress?: (f: number) => void; signal?: AbortSignal },
+  opts: { audio?: AudioBuffer | null; audioContext?: AudioContext | null; record?: boolean; onProgress?: (f: number) => void; signal?: AbortSignal },
 ): Promise<Blob | null> {
   const ctx2d = canvas.getContext("2d")!;
+  const audioCtx = opts.audio ? (opts.audioContext ?? new AudioContext()) : null;
   await document.fonts?.ready;
   const totalMs = Math.max(sceneTotal(t), (opts.audio?.duration ?? 0) * 1000 + 600);
 
-  const audioCtx = opts.audio ? new AudioContext() : null;
   const dest = audioCtx?.createMediaStreamDestination();
+  if (audioCtx && audioCtx.state !== "running") await audioCtx.resume().catch(() => undefined);
+  if (audioCtx && audioCtx.state !== "running") {
+    throw new Error("The browser blocked the sound. Click the button again to record with the voice-over.");
+  }
+
+  let recorder: MediaRecorder | null = null;
+  const chunks: Blob[] = [];
+  if (opts.record) {
+    const stream = canvas.captureStream(30);
+    dest?.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
+    recorder = new MediaRecorder(stream, { mimeType: pickMimeType(), videoBitsPerSecond: 4_000_000, audioBitsPerSecond: 128_000 });
+    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    recorder.start(250);
+  }
+  // Start the voice-over only once recording is running, so its first words aren't cut off.
   if (audioCtx && opts.audio && dest) {
     const src = audioCtx.createBufferSource();
     src.buffer = opts.audio;
@@ -208,18 +275,9 @@ export async function play(
     src.start(audioCtx.currentTime + 0.3);
   }
 
-  let recorder: MediaRecorder | null = null;
-  const chunks: Blob[] = [];
-  if (opts.record) {
-    const stream = canvas.captureStream(30);
-    dest?.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
-    recorder = new MediaRecorder(stream, { mimeType: pickMimeType(), videoBitsPerSecond: 4_000_000 });
-    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    recorder.start(250);
-  }
-
-  // Frames are timed by the clock, not by animation frames: animation frames stop when the
-  // tab is hidden, which would stall a recording. Timers keep running (throttled) in the background.
+  // Frames are timed by the clock with a timer, not animation frames: animation frames stop
+  // whenever the window isn't being painted (behind another window, screen off), which would
+  // stall a recording. Timers keep running (throttled in background tabs).
   const started = performance.now();
   await new Promise<void>((resolve) => {
     const frame = () => {
@@ -227,18 +285,21 @@ export async function play(
       if (opts.signal?.aborted || elapsed >= totalMs) return resolve();
       drawFrame(ctx2d, t, elapsed, totalMs);
       opts.onProgress?.(elapsed / totalMs);
-      if (document.hidden) setTimeout(frame, 33);
-      else requestAnimationFrame(frame);
+      setTimeout(frame, 1000 / 30);
     };
     frame();
   });
   drawFrame(ctx2d, t, totalMs - 1, totalMs);
-  void audioCtx?.close();
 
-  if (!recorder) return null;
-  const rec = recorder;
-  const done = new Promise<void>((resolve) => (rec.onstop = () => resolve()));
-  rec.stop();
-  await done;
-  return new Blob(chunks, { type: rec.mimeType.split(";")[0] ?? "video/webm" });
+  let blob: Blob | null = null;
+  if (recorder) {
+    const rec = recorder;
+    const done = new Promise<void>((resolve) => (rec.onstop = () => resolve()));
+    rec.stop();
+    await done;
+    blob = new Blob(chunks, { type: rec.mimeType.split(";")[0] ?? "video/webm" });
+  }
+  // Close the sound only after the recorder has its last chunk (closing first can drop the tail).
+  if (audioCtx && !opts.audioContext) void audioCtx.close();
+  return blob;
 }

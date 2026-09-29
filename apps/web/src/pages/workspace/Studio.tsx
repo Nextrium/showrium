@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, formatDate, orgHeaders, useApi } from "../../lib";
-import { canvasSize, decodeAudio, drawFrame, play, sceneTotal, type Timeline } from "../../video/render";
+import { audioPeak, canvasSize, decodeAudio, drawFrame, play, sceneTotal, type Timeline } from "../../video/render";
 import type { Draft } from "./shared";
 import { PageHeader } from "../../ui/kit";
 
@@ -46,12 +46,35 @@ function Player({ video, onRevised }: { video: Video; onRevised: (v: Video) => v
       setAudio(await decodeAudio(out.audioBase64));
       setMessage("Voice-over added.");
     });
-  const preview = () => run("Playing…", async () => void (await play(canvas.current!, video.timeline, { audio, onProgress: setProgress })));
-  const record = () =>
-    run("Recording the video (plays in real time)…", async () => {
-      const blob = await play(canvas.current!, video.timeline, { audio, record: true, onProgress: setProgress });
-      if (blob) setFile({ blob, url: URL.createObjectURL(blob) });
+  // The sound context is created here, inside the click: browsers keep one made later silent.
+  const soundFor = () => (audio ? new AudioContext() : null);
+  const preview = () => {
+    const audioContext = soundFor();
+    return run("Playing…", async () => {
+      try {
+        await play(canvas.current!, video.timeline, { audio, audioContext, onProgress: setProgress });
+      } finally {
+        void audioContext?.close();
+      }
     });
+  };
+  const record = () => {
+    const audioContext = soundFor();
+    return run("Recording the video (plays in real time)…", async () => {
+      try {
+        const blob = await play(canvas.current!, video.timeline, { audio, audioContext, record: true, onProgress: setProgress });
+        if (!blob) return;
+        // With a voice-over, check the file really has sound before offering it.
+        if (audio && (await audioPeak(blob)) === 0) {
+          throw new Error("The video recorded without sound. Keep this tab in front and try again, or try Chrome or Edge.");
+        }
+        setFile({ blob, url: URL.createObjectURL(blob) });
+        if (!blob.type.includes("mp4")) setMessage("Your browser made a WebM file. Most apps take it; X needs MP4, which Chrome and Edge make.");
+      } finally {
+        void audioContext?.close();
+      }
+    });
+  };
   const revise = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
@@ -87,7 +110,7 @@ function Player({ video, onRevised }: { video: Video; onRevised: (v: Video) => v
             <button className="button" disabled={Boolean(busy)} onClick={record}>Make the video file</button>
           </div>
           {busy && <p className="note" role="status">{busy} {Math.round(progress * 100)}%</p>}
-          {busy?.startsWith("Recording") && <p className="note">Keep this tab open and visible while recording. Browsers slow down background tabs, which makes the video choppy.</p>}
+          {busy?.startsWith("Recording") && <p className="note">Keep this tab open while recording. It plays in real time, and switching to another tab can make the video choppy.</p>}
           {file && (
             <div className="row">
               <a className="button" href={file.url} download={`showrium-${video.id}.${ext}`}>Download ({(file.blob.size / 1e6).toFixed(1)} MB)</a>
