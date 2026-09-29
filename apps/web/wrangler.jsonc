@@ -64,7 +64,7 @@
       "vars": {
         "BETTER_AUTH_URL": "https://app.showrium.com",
         "SITE_URL": "https://showrium.com",
-        "AUTH_PASSWORD_ENABLED": "false",
+        "AUTH_PASSWORD_ENABLED": "true",
         "SIGNUP_MODE": "waitlist"
       },
       "observability": { "enabled": true }
@@ -94,7 +94,7 @@
       "vars": {
         "BETTER_AUTH_URL": "https://preview.showrium.com",
         "SITE_URL": "https://preview.showrium.com",
-        "AUTH_PASSWORD_ENABLED": "false",
+        "AUTH_PASSWORD_ENABLED": "true",
         "SIGNUP_MODE": "allowlist",
         "TIKTOK_USE_SANDBOX": "true"
       },

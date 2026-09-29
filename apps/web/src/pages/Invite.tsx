@@ -1,10 +1,44 @@
-import { useEffect, useState } from "react";
-import { api, authClient, useApi } from "../lib";
+import { useEffect, useState, type FormEvent } from "react";
+import { api, authClient, navigate, useApi } from "../lib";
+import { Alert, Button } from "../ui/kit";
 
-type Config = { auth: { github: boolean; google: boolean } };
+type Config = { auth: { password: boolean; github: boolean; google: boolean } };
+
+/** New account with email and password, allowed by the invite cookie set when the link was checked. */
+function EmailSignUp({ onError }: { onError: (message: string | null) => void }) {
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    setBusy(true);
+    onError(null);
+    const { error } = await authClient.signUp.email({ name: String(form.get("name")).trim(), email: String(form.get("email")).trim(), password: String(form.get("password")) });
+    setBusy(false);
+    if (error) onError(error.message ?? "Couldn't create the account. Check your details and try again.");
+    else navigate("/app/welcome");
+  };
+  return (
+    <form className="form" onSubmit={submit}>
+      <label>
+        Your name
+        <input name="name" required maxLength={80} autoComplete="name" />
+      </label>
+      <label>
+        Email
+        <input name="email" type="email" required autoComplete="email" />
+      </label>
+      <label>
+        Password (at least 10 characters)
+        <input name="password" type="password" required minLength={10} autoComplete="new-password" />
+      </label>
+      <Button disabled={busy}>{busy ? "Creating your account…" : "Create my account"}</Button>
+    </form>
+  );
+}
 
 export function Invite() {
   const { data: config } = useApi<Config>("/config");
+  const { data: session, isPending } = authClient.useSession();
   // Read once at first render (effects may run twice in development).
   const [token] = useState(() => new URLSearchParams(window.location.search).get("token"));
   const [state, setState] = useState<"checking" | "valid" | "invalid">("checking");
@@ -26,39 +60,62 @@ export function Invite() {
   }, [token]);
 
   const social = async (provider: "github" | "google") => {
-    const { error } = await authClient.signIn.social({ provider, callbackURL: "/app", errorCallbackURL: "/signin" });
+    setError(null);
+    const { error } = await authClient.signIn.social({ provider, callbackURL: "/app", newUserCallbackURL: "/app/welcome", errorCallbackURL: "/signin" });
     if (error) setError(error.message ?? "Couldn't start sign-in. Please try again.");
   };
+
+  const signOut = async () => {
+    await authClient.signOut();
+    // The invite stays valid on this device (its cookie is kept), so the options appear next.
+  };
+
+  const auth = config?.auth;
+  const social_ = auth && (auth.github || auth.google);
 
   return (
     <section className="auth">
       <h2>{state === "invalid" ? "This invite link doesn't work" : "You're invited to Showrium"}</h2>
-      {state === "checking" && <p className="note">Checking your invite…</p>}
-      {state === "valid" && (
+      {(state === "checking" || isPending) && state !== "invalid" && <p className="note">Checking your invite…</p>}
+
+      {state === "valid" && !isPending && session && (
         <>
-          <p className="note">Sign in to create your account. Your invite works with any email. It's valid for the next 30 minutes on this device.</p>
-          {config?.auth.github && (
-            <button className="button" onClick={() => social("github")}>
-              Continue with GitHub
-            </button>
-          )}
-          {config?.auth.google && (
-            <button className="button secondary" onClick={() => social("google")}>
-              Continue with Google
-            </button>
-          )}
-          {config && !config.auth.github && !config.auth.google && (
-            <a className="button" href="/signin">
-              Continue to sign up
-            </a>
-          )}
+          <p className="note">
+            You're signed in as <strong>{session.user.email}</strong>. This invite is for a new account, so sign out first to use it. Your current account isn't affected.
+          </p>
+          <Button onClick={signOut}>Sign out and use this invite</Button>
         </>
       )}
+
+      {state === "valid" && !isPending && !session && (
+        <>
+          <p className="note">Create your account in the way you prefer. You don't need GitHub or to be a developer. The invite works with any email for the next 30 minutes on this device.</p>
+          {auth?.google && (
+            <Button variant="secondary" onClick={() => social("google")}>
+              Continue with Google
+            </Button>
+          )}
+          {auth?.github && (
+            <Button variant="secondary" onClick={() => social("github")}>
+              Continue with GitHub
+            </Button>
+          )}
+          {auth?.password && (
+            <>
+              {social_ && <p className="divider">or with your email</p>}
+              <EmailSignUp onError={setError} />
+            </>
+          )}
+          {auth && !auth.password && !social_ && <p className="note">Sign-up isn't open in this environment yet.</p>}
+        </>
+      )}
+
       {state === "invalid" && (
         <p className="error" role="alert">
           {error ?? "This invite link is invalid, already used or expired."} The person who invited you can send a new one.
         </p>
       )}
+      {state !== "invalid" && error && <Alert>{error}</Alert>}
     </section>
   );
 }

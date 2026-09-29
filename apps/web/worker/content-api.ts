@@ -18,6 +18,8 @@ import {
   ingestUrl,
   listContextItems,
   listDrafts,
+  draftSources,
+  getDraft,
   listSources,
   markSourceChecked,
   PLAN_LIMITS,
@@ -300,6 +302,11 @@ const DraftSchema = z
     externalUrl: z.string().nullable(),
     lastError: z.string().nullable(),
     createdAt: z.string(),
+    // Where the post came from (the material it was written from). Included on reads.
+    source: z
+      .object({ mode: z.string(), kind: z.string().nullable(), title: z.string().nullable(), url: z.string().nullable(), contextItemId: z.string().nullable() })
+      .nullable()
+      .optional(),
   })
   .openapi("Draft");
 type DraftRow = Awaited<ReturnType<typeof listDrafts>>[number];
@@ -356,12 +363,32 @@ contentApi.openapi(
     method: "get",
     path: "/drafts",
     tags: ["Content"],
-    request: { query: z.object({ status: z.enum(DRAFT_STATUSES).optional() }) },
+    request: { query: z.object({ status: z.enum(DRAFT_STATUSES).optional(), briefId: z.string().max(64).optional() }) },
     responses: { 200: json(z.object({ data: z.array(DraftSchema) })), ...errs },
   }),
   async (c) => {
-    const { status } = c.req.valid("query");
-    return c.json({ data: (await listDrafts(c.get("db"), c.get("principal").orgId, status ? { status } : {})).map(toDraft) }, 200);
+    const { status, briefId } = c.req.valid("query");
+    const { orgId } = c.get("principal");
+    const rows = await listDrafts(c.get("db"), orgId, { ...(status ? { status } : {}), ...(briefId ? { briefId } : {}) });
+    const sources = await draftSources(c.get("db"), orgId, rows.map((d) => d.briefId));
+    return c.json({ data: rows.map((d) => ({ ...toDraft(d), source: d.briefId ? sources.get(d.briefId) ?? null : null })) }, 200);
+  },
+);
+
+contentApi.openapi(
+  createRoute({
+    method: "get",
+    path: "/drafts/{id}",
+    tags: ["Content"],
+    request: { params: z.object({ id: z.string() }) },
+    responses: { 200: json(z.object({ draft: DraftSchema })), ...errs },
+  }),
+  async (c) => {
+    const { orgId } = c.get("principal");
+    const d = await getDraft(c.get("db"), orgId, c.req.valid("param").id);
+    if (!d) return c.json(apiError("not_found", "No such post in this workspace."), 404);
+    const sources = await draftSources(c.get("db"), orgId, [d.briefId]);
+    return c.json({ draft: { ...toDraft(d), source: d.briefId ? sources.get(d.briefId) ?? null : null } }, 200);
   },
 );
 

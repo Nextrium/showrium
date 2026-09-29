@@ -20,7 +20,8 @@ function WebsiteNav() {
 
 function AppNav({ path }: { path: string }) {
   const { data: session } = authClient.useSession();
-  if (path === "/app" || path.startsWith("/app/")) return null;
+  // The invite page handles signed-in visitors itself: a dashboard link there would skip the invite.
+  if (path === "/app" || path.startsWith("/app/") || path === "/invite") return null;
   return session ? (
     <Link to="/app" className="button secondary">
       Open dashboard

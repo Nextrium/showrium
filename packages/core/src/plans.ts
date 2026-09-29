@@ -3,18 +3,20 @@ import { and, eq, sql } from "drizzle-orm";
 import { usageCounter, type Db } from "@nextrium/db";
 
 export const PLAN_LIMITS = {
-  free: { posts: 20, xApiPosts: 0, videos: 2, sources: 1 },
-  lite: { posts: 60, xApiPosts: 0, videos: 5, sources: 1 },
-  starter: { posts: 150, xApiPosts: 15, videos: 15, sources: 2 },
-  creator: { posts: 400, xApiPosts: 50, videos: 40, sources: 5 },
-  pro: { posts: 600, xApiPosts: 100, videos: 60, sources: 15 },
-  team: { posts: 2000, xApiPosts: 300, videos: 150, sources: 50 },
+  free: { posts: 20, xApiPosts: 0, videos: 2, sources: 1, uploadsPerDay: 3 },
+  lite: { posts: 60, xApiPosts: 0, videos: 5, sources: 1, uploadsPerDay: 8 },
+  starter: { posts: 150, xApiPosts: 15, videos: 15, sources: 2, uploadsPerDay: 15 },
+  creator: { posts: 400, xApiPosts: 50, videos: 40, sources: 5, uploadsPerDay: 30 },
+  pro: { posts: 600, xApiPosts: 100, videos: 60, sources: 15, uploadsPerDay: 50 },
+  team: { posts: 2000, xApiPosts: 300, videos: 150, sources: 50, uploadsPerDay: 50 },
   // Full access granted by a platform admin. Still capped: AI and X posts cost real money.
-  staff: { posts: 5000, xApiPosts: 300, videos: 500, sources: 50 },
+  staff: { posts: 5000, xApiPosts: 300, videos: 500, sources: 50, uploadsPerDay: 200 },
 } as const;
 export type Plan = keyof typeof PLAN_LIMITS;
 export const CREDITS_PER_EXTRA_POST = 1;
 export const CREDITS_PER_X_API_POST = 2;
+/** Photos and documents beyond the plan's daily uploads (reading an image costs real money). */
+export const CREDITS_PER_EXTRA_UPLOAD = 2;
 export const CREDITS_PER_X_API_POST_WITH_LINK = 25;
 
 export function currentPeriod(now = new Date()): string {

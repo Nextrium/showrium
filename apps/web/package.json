@@ -18,6 +18,7 @@
     "@nextrium/platforms": "workspace:*",
     "@nextrium/policy": "workspace:*",
     "better-auth": "1.7.6",
+    "heic-to": "1.5.2",
     "hono": "4.13.9",
     "react": "19.3.0",
     "react-dom": "19.3.0"

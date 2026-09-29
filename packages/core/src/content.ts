@@ -15,6 +15,7 @@ import {
 } from "@nextrium/db";
 import {
   checkVariants,
+  cleanPost,
   ComposeSchema,
   composeSystemPrompt,
   composeUserPrompt,
@@ -188,7 +189,7 @@ export async function compose(
   let cost = result.costMicroUsd;
   const variants: { platform: Platform; text: string; issues: LintIssue[] }[] = [];
   for (const v of result.data.variants.filter((x) => platforms.includes(x.platform))) {
-    let text = v.text.trim();
+    let text = cleanPost(v.text);
     let issues = lintPost(v.platform, text);
     // One repair attempt for hard errors (too long, placeholders); otherwise keep and show the issue.
     if (hasErrors(issues)) {
@@ -199,9 +200,10 @@ export async function compose(
           RepairSchema,
         );
         cost += fixed.costMicroUsd;
-        const fixedIssues = lintPost(v.platform, fixed.data.text.trim());
+        const fixedText = cleanPost(fixed.data.text);
+        const fixedIssues = lintPost(v.platform, fixedText);
         if (!hasErrors(fixedIssues)) {
-          text = fixed.data.text.trim();
+          text = fixedText;
           issues = fixedIssues;
         }
       } catch {
@@ -250,6 +252,23 @@ export async function listDrafts(db: Db, orgId: string, filter: { status?: Draft
   if (filter.status) conditions.push(eq(draft.status, filter.status));
   if (filter.briefId) conditions.push(eq(draft.briefId, filter.briefId));
   return db.select().from(draft).where(and(...conditions)).orderBy(desc(draft.createdAt)).limit(200);
+}
+
+export type DraftSource = { mode: string; kind: string | null; title: string | null; url: string | null; contextItemId: string | null };
+
+/** Where each draft came from (its brief's mode and material), keyed by brief id. */
+export async function draftSources(db: Db, orgId: string, briefIds: (string | null)[]): Promise<Map<string, DraftSource>> {
+  const ids = [...new Set(briefIds.filter((x): x is string => Boolean(x)))];
+  const out = new Map<string, DraftSource>();
+  for (const chunk of chunkRows(ids, 2)) {
+    const rows = await db
+      .select({ id: brief.id, mode: brief.mode, contextItemId: brief.contextItemId, kind: contextItem.kind, title: contextItem.title, url: contextItem.url })
+      .from(brief)
+      .leftJoin(contextItem, eq(contextItem.id, brief.contextItemId))
+      .where(and(eq(brief.orgId, orgId), inArray(brief.id, chunk)));
+    for (const r of rows) out.set(r.id, { mode: r.mode, kind: r.kind, title: r.title, url: r.url, contextItemId: r.contextItemId });
+  }
+  return out;
 }
 
 export async function getDraft(db: Db, orgId: string, id: string) {

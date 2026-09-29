@@ -1,28 +1,88 @@
-import { useState } from "react";
-import { api, useApi } from "../../lib";
+import { useEffect, useMemo, useState } from "react";
+import { api, formatDate, setUnsaved, timeAgo, useApi } from "../../lib";
 import { PublishControls } from "./Publish";
-import { IssueList, type Draft } from "./shared";
-import { Button, Empty, Icon, LinkButton, PageHeader, Panel } from "../../ui/kit";
+import { IssueList, MODES, usePlatforms, type Draft } from "./shared";
+import { Alert, Button, Empty, Icon, LinkButton, Loading, PageHeader, type IconName } from "../../ui/kit";
+import { DetailPanel, ListItem, SectionLabel, Split, StatStrip, Tag, useQueryParams } from "../../ui/split";
 
-const LABELS: Record<string, string> = {
+export const PLATFORM_LABELS: Record<string, string> = {
   linkedin: "LinkedIn", x: "X", instagram: "Instagram", facebook: "Facebook", threads: "Threads",
   bluesky: "Bluesky", mastodon: "Mastodon", tiktok: "TikTok", youtube_shorts: "YouTube Shorts",
 };
 
+/** What a post was written from, in plain words. */
+export const SOURCE_KINDS: Record<string, { label: string; icon: IconName }> = {
+  manual: { label: "Your note", icon: "edit" },
+  url: { label: "A link", icon: "link" },
+  github_release: { label: "GitHub release", icon: "git" },
+  github_activity: { label: "GitHub commits", icon: "git" },
+  rss_item: { label: "Article or video", icon: "sources" },
+  voice: { label: "Voice note", icon: "voice" },
+  photo: { label: "Your photo", icon: "photo" },
+  document: { label: "Your document", icon: "doc" },
+  prompt: { label: "Daily question", icon: "comment" },
+};
+
+const STATUSES = [
+  { id: "draft", label: "Drafts", tone: "accent" },
+  { id: "approved", label: "Approved", tone: "info" },
+  { id: "scheduled", label: "Scheduled", tone: "warn" },
+  { id: "published", label: "Published", tone: "ok" },
+  { id: "failed", label: "Failed", tone: "danger" },
+  { id: "discarded", label: "Discarded", tone: "neutral" },
+] as const;
+const statusTone = (s: string) => STATUSES.find((x) => x.id === s)?.tone ?? "neutral";
+const modeLabel = (m: string | undefined) => MODES.find((x) => x.id === m)?.label ?? null;
+const sourceTitle = (d: Draft) => d.source?.title || (d.source?.kind ? SOURCE_KINDS[d.source.kind]?.label : null) || "Written by you";
+
+function useWide() {
+  const [wide, setWide] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
+  useEffect(() => {
+    const m = window.matchMedia("(min-width: 1024px)");
+    const on = () => setWide(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
+/** A post as a card (used on New post, right after writing). */
 export function DraftCard({ draft, onChange }: { draft: Draft; onChange: (d: Draft) => void }) {
+  return (
+    <div className="rounded-[18px] border border-line bg-panel p-5">
+      <PostEditor draft={draft} onChange={onChange} />
+    </div>
+  );
+}
+
+/** Edit, approve, discard, copy and publish one post. */
+function PostEditor({ draft, onChange }: { draft: Draft; onChange?: (d: Draft) => void }) {
+  const platforms = usePlatforms();
+  const limit = platforms.find((p) => p.id === draft.platform)?.maxLength;
   const [text, setText] = useState(draft.text);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const locked = draft.status === "published" || draft.status === "publishing";
+  const dirty = text !== draft.text;
+
+  // A fresh copy from the server (after an action elsewhere) replaces the text unless it's being edited.
+  useEffect(() => {
+    if (!dirty) setText(draft.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.text]);
+  useEffect(() => {
+    setUnsaved(`post:${draft.id}`, dirty);
+    return () => setUnsaved(`post:${draft.id}`, false);
+  }, [dirty, draft.id]);
 
   const patch = async (body: { text?: string; status?: string }) => {
     setBusy(true);
     setError(null);
     try {
       const out = await api<{ draft: Draft }>(`/drafts/${draft.id}`, { method: "PATCH", body: JSON.stringify(body) });
-      onChange(out.draft);
       setText(out.draft.text);
+      onChange?.({ ...out.draft, source: draft.source ?? null });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't update the post.");
     } finally {
@@ -34,75 +94,177 @@ export function DraftCard({ draft, onChange }: { draft: Draft; onChange: (d: Dra
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      setCopied(false);
+      setError("Couldn't copy. Select the text and copy it yourself.");
     }
   };
 
+  const over = limit !== undefined && text.length > limit;
   return (
-    <article className="card">
-      <div className="dash-head">
-        <h3>{LABELS[draft.platform] ?? draft.platform}</h3>
-        <span className="chip">{draft.status}</span>
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-2">
+        <textarea
+          aria-label={`${PLATFORM_LABELS[draft.platform] ?? draft.platform} post`}
+          value={text}
+          rows={Math.min(18, Math.max(6, Math.ceil(text.length / 60) + text.split("\n").length))}
+          onChange={(e) => setText(e.target.value)}
+          disabled={locked}
+        />
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[12.5px] text-muted">
+          <span className={over ? "font-semibold text-danger" : ""}>
+            {text.length.toLocaleString()}
+            {limit ? ` / ${limit.toLocaleString()}` : ""} characters
+          </span>
+          <span>AI-assisted draft{dirty ? " · unsaved edits" : ""}</span>
+        </div>
       </div>
-      <textarea
-        aria-label={`${LABELS[draft.platform]} post`}
-        value={text}
-        rows={Math.min(14, Math.max(4, Math.ceil(text.length / 70)))}
-        onChange={(e) => setText(e.target.value)}
-        disabled={locked}
-      />
-      <p className="note">{text.length} characters · AI-assisted draft</p>
       <IssueList issues={draft.issues} />
-      {error && <p className="error" role="alert">{error}</p>}
+      {error && <Alert>{error}</Alert>}
       {!locked && (
-        <div className="row">
-          {text !== draft.text && <button className="button secondary" disabled={busy} onClick={() => patch({ text })}>Save edits</button>}
-          {draft.status !== "approved" && draft.status !== "scheduled" && (
-            <button className="button" disabled={busy || text !== draft.text} onClick={() => patch({ status: "approved" })}>Approve</button>
+        <div className="flex flex-wrap gap-2">
+          {dirty && (
+            <Button variant="secondary" disabled={busy} onClick={() => patch({ text })}>
+              Save edits
+            </Button>
+          )}
+          {draft.status !== "approved" && draft.status !== "scheduled" && draft.status !== "discarded" && (
+            <Button disabled={busy || dirty} title={dirty ? "Save your edits first" : undefined} onClick={() => patch({ status: "approved" })} icon="check">
+              Approve
+            </Button>
           )}
           {draft.status !== "discarded" ? (
-            <button className="button danger" disabled={busy} onClick={() => patch({ status: "discarded" })}>Discard</button>
+            <Button variant="danger" disabled={busy} onClick={() => patch({ status: "discarded" })}>
+              Discard
+            </Button>
           ) : (
-            <button className="button secondary" disabled={busy} onClick={() => patch({ status: "draft" })}>Restore</button>
+            <Button variant="secondary" disabled={busy} onClick={() => patch({ status: "draft" })}>
+              Restore
+            </Button>
           )}
-          <button className="button secondary" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+          <Button variant="ghost" onClick={copy}>{copied ? "Copied" : "Copy"}</Button>
         </div>
       )}
-      {(draft.status === "approved" || draft.status === "scheduled" || draft.status === "failed") && <PublishControls draft={draft} onChange={onChange} />}
-      {draft.externalUrl && <p className="note"><a href={draft.externalUrl} target="_blank" rel="noreferrer">View the post</a></p>}
-      {draft.lastError && <p className="error">{draft.lastError}</p>}
-    </article>
+      {(draft.status === "approved" || draft.status === "scheduled" || draft.status === "failed") && <PublishControls draft={draft} onChange={(d) => onChange?.(d)} />}
+      {draft.externalUrl && (
+        <a className="text-sm font-medium text-accent-ink" href={draft.externalUrl} target="_blank" rel="noreferrer">
+          View the published post ↗
+        </a>
+      )}
+      {draft.lastError && <Alert>{draft.lastError}</Alert>}
+    </div>
   );
 }
 
-const TABS = [
-  ["draft", "Drafts"],
-  ["approved", "Approved"],
-  ["scheduled", "Scheduled"],
-  ["published", "Published"],
-  ["failed", "Failed"],
-  ["discarded", "Discarded"],
-] as const;
+function PostDetail({ id, onSelect }: { id: string; onSelect: (id: string) => void }) {
+  const { data, error } = useApi<{ draft: Draft }>(`/drafts/${id}`);
+  const draft = data?.draft;
+  const { data: siblings } = useApi<{ data: Draft[] }>(draft?.briefId ? `/drafts?briefId=${encodeURIComponent(draft.briefId)}` : null);
+  if (error) return <DetailPanel><Alert>{error}</Alert></DetailPanel>;
+  if (!draft) return <DetailPanel><Loading /></DetailPanel>;
+  const kind = draft.source?.kind ? SOURCE_KINDS[draft.source.kind] : null;
+  const others = (siblings?.data ?? []).filter((d) => d.id !== draft.id);
+
+  return (
+    <DetailPanel>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h2 className="font-display text-[24px] font-semibold leading-tight">{PLATFORM_LABELS[draft.platform] ?? draft.platform}</h2>
+          <span className="font-mono text-[12.5px] text-muted">
+            Written {formatDate(draft.createdAt)}
+            {modeLabel(draft.source?.mode) ? ` · ${modeLabel(draft.source?.mode)}` : ""}
+            {draft.scheduledAt && draft.status === "scheduled" ? ` · posts ${formatDate(draft.scheduledAt)}` : ""}
+          </span>
+        </div>
+        <Tag tone={statusTone(draft.status)}>{draft.status}</Tag>
+      </div>
+
+      <section className="flex flex-col gap-2">
+        <SectionLabel>Written from</SectionLabel>
+        <div className="flex items-start gap-3 rounded-xl border border-line bg-sunken p-3.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-raised text-accent-ink"><Icon name={kind?.icon ?? "edit"} size={17} /></span>
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="font-mono text-[11.5px] uppercase tracking-[0.1em] text-muted">{kind?.label ?? "Your note"}</span>
+            <span className="text-[14.5px] font-medium text-ink [overflow-wrap:anywhere]">{sourceTitle(draft)}</span>
+            {draft.source?.url && (
+              <a className="text-[13.5px] font-medium text-accent-ink" href={draft.source.url} target="_blank" rel="noreferrer">
+                Open the source ↗
+              </a>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <SectionLabel>Post</SectionLabel>
+        <PostEditor key={draft.id} draft={draft} />
+      </section>
+
+      {others.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <SectionLabel>Also written from this</SectionLabel>
+          <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+            {others.map((o) => (
+              <li key={o.id}>
+                <button type="button" onClick={() => onSelect(o.id)} className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl border border-line px-3.5 py-2.5 text-left hover:bg-raised">
+                  <span className="flex min-w-0 flex-col">
+                    <span className="text-sm font-semibold">{PLATFORM_LABELS[o.platform] ?? o.platform}</span>
+                    <span className="truncate text-[13px] text-muted">{o.text.split("\n")[0]}</span>
+                  </span>
+                  <Tag tone={statusTone(o.status)}>{o.status}</Tag>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </DetailPanel>
+  );
+}
 
 export function DraftsPage() {
-  const [status, setStatus] = useState<string>("draft");
-  const { data, reload } = useApi<{ data: Draft[] }>(`/drafts?status=${status}`);
+  const [params, setParams] = useQueryParams();
+  const status = params.get("status") ?? "draft";
+  const selected = params.get("id");
+  const wide = useWide();
+  const { data, error } = useApi<{ data: Draft[] }>(`/drafts?status=${status}`);
   const { data: counts } = useApi<{ statuses: Record<string, number> }>("/analytics");
+  const [query, setQuery] = useState("");
+  const [platform, setPlatform] = useState("");
   const [bulk, setBulk] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const drafts = status === "draft" ? data?.data ?? [] : [];
-  const ready = drafts.filter((d) => d.issues.length === 0);
-  const toCheck = drafts.length - ready.length;
 
-  // Batch approval: approves every draft with no warnings in one tap (at most 50 at a time).
+  // Opened from a link to one post (?id=): show the tab that post is in.
+  const { data: linked } = useApi<{ draft: Draft }>(selected && !params.get("status") ? `/drafts/${selected}` : null, { live: false });
+  useEffect(() => {
+    if (linked && linked.draft.status !== status) setParams({ status: linked.draft.status });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linked]);
+
+  const all = data?.data ?? [];
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return all.filter((d) => (!platform || d.platform === platform) && (!q || d.text.toLowerCase().includes(q) || sourceTitle(d).toLowerCase().includes(q)));
+  }, [all, query, platform]);
+  const usedPlatforms = [...new Set(all.map((d) => d.platform))];
+  const ready = status === "draft" ? all.filter((d) => d.issues.length === 0) : [];
+  const detailId = selected ?? (wide ? shown[0]?.id ?? null : null);
+
+  // Posts written from the same material sit together under one heading.
+  const groups: { key: string; title: string; kind: string | null; items: Draft[] }[] = [];
+  for (const d of shown) {
+    const key = d.briefId ?? d.id;
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.items.push(d);
+    else groups.push({ key, title: sourceTitle(d), kind: d.source?.kind ?? null, items: [d] });
+  }
+
   const approveAll = async () => {
     setBusy(true);
     setBulk(null);
     try {
       const out = await api<{ approved: string[]; skipped: { reason: string }[] }>("/drafts/bulk-approve", { method: "POST", body: JSON.stringify({ ids: ready.slice(0, 50).map((d) => d.id) }) });
       setBulk(`Approved ${out.approved.length}.${out.skipped.length ? ` Skipped ${out.skipped.length}: ${out.skipped[0]!.reason}` : ""}`);
-      reload();
     } catch (err) {
       setBulk(err instanceof Error ? err.message : "Couldn't approve.");
     } finally {
@@ -110,41 +272,97 @@ export function DraftsPage() {
     }
   };
 
-  return (
-    <div className="dash">
-      <PageHeader title="Posts" subtitle="Everything you’ve written: waiting, scheduled, or out in the world." actions={<LinkButton to="/app/new" variant="inverse" icon="plus">New post</LinkButton>} />
-      <div className="tabs" role="tablist" aria-label="Post status">
-        {TABS.map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={id === status} className="tab" onClick={() => setStatus(id)}>
-            {label}
-            {counts && <span className="ml-2 rounded-full bg-raised px-2 font-mono text-[11.5px] text-ink-2">{counts.statuses[id] ?? 0}</span>}
-          </button>
-        ))}
-      </div>
-      {status === "draft" && drafts.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line-strong bg-raised px-4 py-3.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-ok-soft text-ok"><Icon name="check" strokeWidth={2.2} /></span>
+  const list = (
+    <div className="flex flex-col gap-3">
+      {status === "draft" && all.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-[18px] border border-line bg-panel px-4 py-3">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-ok-soft text-ok"><Icon name="check" size={16} strokeWidth={2.2} /></span>
           <div className="flex min-w-0 flex-1 flex-col">
-            <span className="font-semibold">{ready.length} of {drafts.length} draft{drafts.length === 1 ? " is" : "s are"} ready to approve</span>
-            <span className="text-[13.5px] text-muted">{toCheck ? `${toCheck} ${toCheck === 1 ? "has" : "have"} something to check first, so ${toCheck === 1 ? "it’s" : "they’re"} left out of one-tap approval.` : "None have warnings."}</span>
+            <span className="text-[14.5px] font-semibold">{ready.length} of {all.length} ready to approve</span>
+            <span className="text-[13px] text-muted">{all.length - ready.length ? `${all.length - ready.length} need a check first.` : "None have warnings."}</span>
           </div>
-          {ready.length > 0 && <Button disabled={busy} onClick={approveAll}>{busy ? "Approving…" : `Approve ${Math.min(50, ready.length)}`}</Button>}
+          {ready.length > 0 && <Button size="sm" disabled={busy} onClick={approveAll}>{busy ? "Approving…" : `Approve ${Math.min(50, ready.length)}`}</Button>}
         </div>
       )}
-      {bulk && <p className="note" role="status">{bulk}</p>}
-      {data?.data.length === 0 && (
-        <Panel>
+      {bulk && <Alert tone="info">{bulk}</Alert>}
+      <div className="overflow-hidden rounded-[18px] border border-line bg-panel">
+        <div className="flex flex-wrap gap-2 border-b border-line p-3 sm:p-4">
+          <label className="relative m-0 min-w-[180px] flex-1">
+            <span className="sr-only">Search posts</span>
+            <Icon name="search" size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search posts or sources…" className="!pl-9" />
+          </label>
+          {usedPlatforms.length > 1 && (
+            <label className="m-0">
+              <span className="sr-only">Platform</span>
+              <select value={platform} onChange={(e) => setPlatform(e.target.value)}>
+                <option value="">All platforms</option>
+                {usedPlatforms.map((p) => <option key={p} value={p}>{PLATFORM_LABELS[p] ?? p}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+        {!data && !error && <div className="p-5"><Loading /></div>}
+        {error && <div className="p-4"><Alert>{error}</Alert></div>}
+        {data && shown.length === 0 && (
           <Empty
             icon="posts"
-            title={`No ${TABS.find(([id]) => id === status)![1].toLowerCase()} posts`}
-            body={status === "draft" ? "Write something new, or turn an idea into posts." : "Posts move here as you approve, schedule and publish them."}
-            action={status === "draft" ? <LinkButton to="/app/new" size="sm">New post</LinkButton> : undefined}
+            title={all.length ? "Nothing matches" : `No ${STATUSES.find((s) => s.id === status)?.label.toLowerCase() ?? ""} posts`}
+            body={all.length ? "Try another word or platform." : status === "draft" ? "Write something new, or turn an idea into posts." : "Posts move here as you approve, schedule and publish them."}
+            action={!all.length && status === "draft" ? <LinkButton to="/app/new" size="sm">New post</LinkButton> : undefined}
           />
-        </Panel>
-      )}
-      <div className="grid gap-4 xl:grid-cols-2">
-        {data?.data.map((d) => <DraftCard key={d.id} draft={d} onChange={() => reload()} />)}
+        )}
+        {groups.map((g) => (
+          <div key={g.key}>
+            <div className="flex items-center gap-2 border-b border-line bg-sunken px-4 py-2 sm:px-5">
+              <Icon name={(g.kind && SOURCE_KINDS[g.kind]?.icon) || "edit"} size={14} className="shrink-0 text-muted" />
+              <span className="truncate font-mono text-[11.5px] uppercase tracking-[0.1em] text-muted">{g.title}</span>
+            </div>
+            <ul className="m-0 list-none p-0">
+              {g.items.map((d) => (
+                <ListItem key={d.id} selected={d.id === detailId} onSelect={() => setParams({ id: d.id }, true)} label={`${PLATFORM_LABELS[d.platform] ?? d.platform} post: ${d.text.slice(0, 60)}`}>
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-ink">{PLATFORM_LABELS[d.platform] ?? d.platform}</span>
+                    <span className="flex flex-wrap justify-end gap-1.5">
+                      {d.issues.length > 0 && <Tag tone={d.issues.some((i) => i.severity === "error") ? "danger" : "warn"}>{d.issues.length} to check</Tag>}
+                      <Tag tone={statusTone(d.status)}>{d.status}</Tag>
+                    </span>
+                  </span>
+                  <span className="line-clamp-2 text-[14px] leading-snug text-ink-2">{d.text}</span>
+                  <span className="font-mono text-[12px] text-muted">{d.status === "scheduled" && d.scheduledAt ? `Posts ${formatDate(d.scheduledAt)}` : d.status === "published" && d.publishedAt ? `Published ${timeAgo(d.publishedAt)}` : `Written ${timeAgo(d.createdAt)}`}</span>
+                </ListItem>
+              ))}
+            </ul>
+          </div>
+        ))}
       </div>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-5">
+      <PageHeader title="Posts" subtitle="Everything you’ve written: waiting, scheduled, or out in the world." actions={<LinkButton to="/app/new" variant="inverse" icon="plus">New post</LinkButton>} />
+      <StatStrip
+        label="Post status"
+        active={status}
+        onPick={(id) => setParams({ status: id, id: null })}
+        items={STATUSES.map((s) => ({ id: s.id, label: s.label, value: counts?.statuses[s.id] ?? 0, tone: s.tone }))}
+      />
+      <Split
+        hasSelection={Boolean(selected)}
+        onBack={() => setParams({ id: null })}
+        backLabel="All posts"
+        list={list}
+        detail={
+          detailId ? (
+            <PostDetail key={detailId} id={detailId} onSelect={(id) => setParams({ id }, true)} />
+          ) : (
+            <DetailPanel>
+              <Empty icon="posts" title="Pick a post" body="Its details, where it came from and what to do next appear here." />
+            </DetailPanel>
+          )
+        }
+      />
     </div>
   );
 }

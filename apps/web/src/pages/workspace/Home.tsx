@@ -130,7 +130,7 @@ export function AppHome() {
                     <li key={i.id} className="flex items-center gap-3 border-t border-line py-3 first:border-t-0">
                       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-raised text-accent-ink"><Icon name="ideas" size={16} /></span>
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">{i.reason}</span>
-                      <LinkButton to="/app/ideas" variant="secondary" size="sm">Write</LinkButton>
+                      <LinkButton to={`/app/ideas?id=${i.id}`} variant="secondary" size="sm">Write</LinkButton>
                     </li>
                   ))}
                 </ul>

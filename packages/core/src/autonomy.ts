@@ -135,6 +135,7 @@ export async function listIdeas(db: Db, orgId: string, status: "new" | "drafted"
       createdAt: idea.createdAt,
       contextItemId: idea.contextItemId,
       title: contextItem.title,
+      kind: contextItem.kind,
       body: sql<string>`substr(${contextItem.body}, 1, 400)`,
       url: contextItem.url,
     })
@@ -143,6 +144,42 @@ export async function listIdeas(db: Db, orgId: string, status: "new" | "drafted"
     .where(and(eq(idea.orgId, orgId), eq(idea.status, status)))
     .orderBy(desc(idea.score), desc(idea.createdAt))
     .limit(50);
+}
+
+export async function ideaCounts(db: Db, orgId: string) {
+  const rows = await db.select({ status: idea.status, n: sql<number>`count(*)` }).from(idea).where(eq(idea.orgId, orgId)).groupBy(idea.status);
+  const out = { new: 0, drafted: 0, dismissed: 0 };
+  for (const r of rows) out[r.status] = Number(r.n);
+  return out;
+}
+
+/** One idea with its full material, and the brief written from it (if any) so its posts can be listed. */
+export async function getIdea(db: Db, orgId: string, id: string) {
+  const [row] = await db
+    .select({
+      id: idea.id,
+      reason: idea.reason,
+      score: idea.score,
+      status: idea.status,
+      createdAt: idea.createdAt,
+      contextItemId: idea.contextItemId,
+      title: contextItem.title,
+      kind: contextItem.kind,
+      body: sql<string>`substr(${contextItem.body}, 1, 6000)`,
+      url: contextItem.url,
+    })
+    .from(idea)
+    .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
+    .where(and(eq(idea.orgId, orgId), eq(idea.id, id)));
+  if (!row) return null;
+  const [b] = await db.select({ id: brief.id }).from(brief).where(and(eq(brief.orgId, orgId), eq(brief.contextItemId, row.contextItemId))).orderBy(desc(brief.createdAt)).limit(1);
+  return { ...row, briefId: b?.id ?? null };
+}
+
+/** Brings a dismissed idea back. */
+export async function restoreIdea(db: Db, orgId: string, id: string) {
+  const rows = await db.update(idea).set({ status: "new" }).where(and(eq(idea.orgId, orgId), eq(idea.id, id), eq(idea.status, "dismissed"))).returning({ id: idea.id });
+  return rows.length > 0;
 }
 
 export async function dismissIdea(db: Db, orgId: string, id: string) {

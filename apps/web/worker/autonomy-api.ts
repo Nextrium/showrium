@@ -20,6 +20,9 @@ import {
   latestInsight,
   listEngagement,
   listIdeas,
+  ideaCounts,
+  getIdea,
+  restoreIdea,
   recordAudit,
   refreshInsights,
   refreshPostEngagement,
@@ -58,14 +61,34 @@ const actor = (p: Principal) => ({ actorUserId: p.kind === "user" ? p.userId : n
 // --- Ideas -----------------------------------------------------------------------------
 
 const IdeaSchema = z
-  .object({ id: z.string(), reason: z.string(), score: z.number(), status: z.enum(["new", "drafted", "dismissed"]), title: z.string(), body: z.string(), url: z.string().nullable(), createdAt: z.string() })
+  .object({ id: z.string(), reason: z.string(), score: z.number(), status: z.enum(["new", "drafted", "dismissed"]), title: z.string(), kind: z.string(), body: z.string(), url: z.string().nullable(), createdAt: z.string() })
   .openapi("Idea");
+const Counts = z.object({ new: z.number(), drafted: z.number(), dismissed: z.number() });
 
 autonomyApi.openapi(
-  createRoute({ method: "get", path: "/ideas", tags: ["Autonomy"], request: { query: z.object({ status: z.enum(["new", "drafted", "dismissed"]).default("new") }) }, responses: { 200: json(z.object({ data: z.array(IdeaSchema) })), ...errs } }),
+  createRoute({ method: "get", path: "/ideas", tags: ["Autonomy"], request: { query: z.object({ status: z.enum(["new", "drafted", "dismissed"]).default("new") }) }, responses: { 200: json(z.object({ data: z.array(IdeaSchema), counts: Counts })), ...errs } }),
   async (c) => {
-    const rows = await listIdeas(c.get("db"), c.get("principal").orgId, c.req.valid("query").status);
-    return c.json({ data: rows.map((r) => ({ id: r.id, reason: r.reason, score: r.score, status: r.status, title: r.title, body: r.body, url: r.url, createdAt: r.createdAt.toISOString() })) }, 200);
+    const { orgId } = c.get("principal");
+    const [rows, counts] = await Promise.all([listIdeas(c.get("db"), orgId, c.req.valid("query").status), ideaCounts(c.get("db"), orgId)]);
+    return c.json({ data: rows.map((r) => ({ id: r.id, reason: r.reason, score: r.score, status: r.status, title: r.title, kind: r.kind, body: r.body, url: r.url, createdAt: r.createdAt.toISOString() })), counts }, 200);
+  },
+);
+
+autonomyApi.openapi(
+  createRoute({ method: "get", path: "/ideas/{id}", tags: ["Autonomy"], request: { params: z.object({ id: z.string() }) }, responses: { 200: json(z.object({ idea: IdeaSchema.extend({ briefId: z.string().nullable() }) })), ...errs } }),
+  async (c) => {
+    const r = await getIdea(c.get("db"), c.get("principal").orgId, c.req.valid("param").id);
+    if (!r) return c.json(apiError("not_found", "No such idea in this workspace."), 404);
+    return c.json({ idea: { id: r.id, reason: r.reason, score: r.score, status: r.status, title: r.title, kind: r.kind, body: r.body, url: r.url, createdAt: r.createdAt.toISOString(), briefId: r.briefId } }, 200);
+  },
+);
+
+autonomyApi.openapi(
+  createRoute({ method: "post", path: "/ideas/{id}/restore", tags: ["Autonomy"], request: { params: z.object({ id: z.string() }) }, responses: { 204: { description: "Restored" }, ...errs } }),
+  async (c) => {
+    if (denied(c.get("principal"), "content.write")) return c.json(forbidden("restore ideas"), 403);
+    if (!(await restoreIdea(c.get("db"), c.get("principal").orgId, c.req.valid("param").id))) return c.json(apiError("not_found", "No such dismissed idea in this workspace."), 404);
+    return c.body(null, 204);
   },
 );
 

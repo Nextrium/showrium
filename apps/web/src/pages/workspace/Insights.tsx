@@ -1,6 +1,6 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { api, formatDate, useApi } from "../../lib";
-import { MODES, type Draft, type Persona, type Platform } from "./shared";
+import type { Draft } from "./shared";
 import { PageHeader } from "../../ui/kit";
 
 type Idea = { id: string; reason: string; score: number; title: string; body: string; url: string | null; createdAt: string };
@@ -17,59 +17,6 @@ type Analytics = {
 };
 
 const errorText = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
-
-function Ideas({ platforms }: { platforms: Platform[] }) {
-  const { data, reload } = useApi<{ data: Idea[] }>("/ideas");
-  const [mode, setMode] = useState<string>("build_in_public");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const act = async (id: string, what: "compose" | "dismiss") => {
-    setBusy(id);
-    setError(null);
-    setMessage(null);
-    try {
-      if (what === "compose") {
-        const out = await api<{ drafts: unknown[] }>(`/ideas/${id}/compose`, { method: "POST", body: JSON.stringify({ mode, platforms }) });
-        setMessage(`${out.drafts.length} post${out.drafts.length === 1 ? "" : "s"} written. Find them in Drafts.`);
-      } else await api(`/ideas/${id}/dismiss`, { method: "POST" });
-      reload();
-    } catch (err) {
-      setError(errorText(err, "That didn't work."));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  return (
-    <section className="card">
-      <label>
-        Write them as
-        <select value={mode} onChange={(e) => setMode(e.target.value)}>
-          {MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-        </select>
-      </label>
-      {!platforms.length && <p className="note">Choose your platforms in Voice to write posts from ideas.</p>}
-      <ul className="items">
-        {data?.data.map((i) => (
-          <li key={i.id}>
-            <strong>{i.reason}</strong>
-            {i.body && <p className="note">{i.body.slice(0, 200)}{i.body.length > 200 ? "…" : ""}</p>}
-            <div className="row">
-              <button className="button" disabled={Boolean(busy) || !platforms.length} onClick={() => act(i.id, "compose")}>{busy === i.id ? "Writing…" : "Write posts"}</button>
-              <button className="button secondary" disabled={Boolean(busy)} onClick={() => act(i.id, "dismiss")}>Not now</button>
-              {i.url && <a className="note" href={i.url} target="_blank" rel="noreferrer">Source</a>}
-            </div>
-          </li>
-        ))}
-        {data?.data.length === 0 && <li className="muted">No new ideas. Connect a repository or feed in Sources, and ideas appear here.</li>}
-      </ul>
-      {message && <p className="note" role="status">{message}</p>}
-      {error && <p className="error" role="alert">{error}</p>}
-    </section>
-  );
-}
 
 function Stats() {
   const { data } = useApi<Analytics>("/analytics");
@@ -185,16 +132,6 @@ function Audience({ onIdea }: { onIdea: () => void }) {
       {message && <p className="note" role="status">{message}</p>}
       {error && <p className="error" role="alert">{error}</p>}
     </section>
-  );
-}
-
-export function IdeasPage() {
-  const { data } = useApi<{ persona: Persona | null }>("/persona");
-  return (
-    <div className="dash">
-      <PageHeader title="Ideas" subtitle="Post-worthy moments from your sources and from what your audience asks." />
-      <Ideas platforms={data?.persona?.platforms ?? []} />
-    </div>
   );
 }
 
