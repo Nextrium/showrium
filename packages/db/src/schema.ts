@@ -448,6 +448,8 @@ export const idea = sqliteTable(
 /** 0 coach (ideas only), 1 drafts, 2 batch (drafts + approve in one tap), 3 autopilot (schedules clean posts). */
 export const AUTOPILOT_LEVELS = ["coach", "drafts", "batch", "autopilot"] as const;
 export type AutopilotLevel = (typeof AUTOPILOT_LEVELS)[number];
+/** What automation may do on one platform. Each switch is independent. */
+export type AutomationRule = { write: boolean; schedule: boolean; approve: boolean };
 export const autopilot = sqliteTable(
   "autopilot",
   {
@@ -458,6 +460,18 @@ export const autopilot = sqliteTable(
     postsPerWeek: integer("posts_per_week").notNull().default(3),
     /** Hour of day (UTC) that autopilot schedules posts for. */
     publishHourUtc: integer("publish_hour_utc").notNull().default(14),
+    // Sprint 3: independent switches. `level` above is kept in sync (the most any platform allows),
+    // so the scheduler can still find workspaces with something switched on.
+    /** Check sources for new ideas automatically. */
+    findIdeas: integer("find_ideas", { mode: "boolean" }).notNull().default(true),
+    /** Per platform: write drafts, schedule when approved, approve for me. */
+    rules: text("rules", { mode: "json" }).$type<Partial<Record<Platform, AutomationRule>>>().notNull().default(sql`'{}'`),
+    /** Posts per week in each style, e.g. { build_in_public: 2, teach: 1 }. */
+    mix: text("mix", { mode: "json" }).$type<Partial<Record<ContentMode, number>>>().notNull().default(sql`'{}'`),
+    /** Days of the week to post on (0 = Sunday, UTC). */
+    days: text("days", { mode: "json" }).$type<number[]>().notNull().default(sql`'[0,1,2,3,4,5,6]'`),
+    /** Styles written in the last 7 days, to follow the mix. */
+    weekLog: text("week_log", { mode: "json" }).$type<{ at: number; mode: ContentMode }[]>().notNull().default(sql`'[]'`),
     lastRunAt: integer("last_run_at", { mode: "timestamp_ms" }),
     updatedAt: updatedAt(),
   },

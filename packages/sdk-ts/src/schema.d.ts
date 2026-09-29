@@ -66,6 +66,8 @@ export interface paths {
                         "application/json": {
                             auth: {
                                 password: boolean;
+                                passwordReset: boolean;
+                                verifyEmail: boolean;
                                 github: boolean;
                                 google: boolean;
                             };
@@ -4403,9 +4405,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Autopilot"] & {
-                            lastRunAt: string | null;
-                        };
+                        "application/json": components["schemas"]["AutomationSettings"];
                     };
                 };
                 /** @description Invalid */
@@ -4489,7 +4489,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["Autopilot"];
+                    "application/json": components["schemas"]["Automation"] | components["schemas"]["AutopilotLegacy"];
                 };
             };
             responses: {
@@ -4499,9 +4499,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["Autopilot"] & {
-                            lastRunAt: string | null;
-                        };
+                        "application/json": components["schemas"]["AutomationSettings"];
                     };
                 };
                 /** @description Invalid */
@@ -7935,7 +7933,75 @@ export interface components {
             url: string | null;
             createdAt: string;
         };
-        Autopilot: {
+        AutomationSettings: components["schemas"]["Automation"] & {
+            /** @enum {string} */
+            level: "coach" | "drafts" | "batch" | "autopilot";
+            /** @enum {string} */
+            mode: "smile" | "teach" | "expert_take" | "build_in_public" | "promote";
+            platforms: ("linkedin" | "x" | "instagram" | "facebook" | "threads" | "bluesky" | "mastodon" | "tiktok" | "youtube_shorts")[];
+            postsPerWeek: number;
+            lastRunAt: string | null;
+        };
+        Automation: {
+            findIdeas: boolean;
+            rules: {
+                linkedin?: {
+                    write: boolean;
+                    schedule: boolean;
+                    approve: boolean;
+                };
+                x?: {
+                    write: boolean;
+                    schedule: boolean;
+                    approve: boolean;
+                };
+                instagram?: {
+                    write: boolean;
+                    schedule: boolean;
+                    approve: boolean;
+                };
+                facebook?: {
+                    write: boolean;
+                    schedule: boolean;
+                    approve: boolean;
+                };
+                threads?: {
+                    write: boolean;
+                    schedule: boolean;
+                    approve: boolean;
+                };
+                bluesky?: {
+                    write: boolean;
+                    schedule: boolean;
+                    approve: boolean;
+                };
+                mastodon?: {
+                    write: boolean;
+                    schedule: boolean;
+                    approve: boolean;
+                };
+                tiktok?: {
+                    write: boolean;
+                    schedule: boolean;
+                    approve: boolean;
+                };
+                youtube_shorts?: {
+                    write: boolean;
+                    schedule: boolean;
+                    approve: boolean;
+                };
+            };
+            mix: {
+                smile?: number;
+                teach?: number;
+                expert_take?: number;
+                build_in_public?: number;
+                promote?: number;
+            };
+            days: number[];
+            publishHourUtc: number;
+        };
+        AutopilotLegacy: {
             /** @enum {string} */
             level: "coach" | "drafts" | "batch" | "autopilot";
             /** @enum {string} */

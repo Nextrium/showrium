@@ -13,6 +13,7 @@ export * from "./crypto.js";
 export * from "./publishing.js";
 export * from "./video.js";
 export * from "./autonomy.js";
+export * from "./automation.js";
 export * from "./chunk.js";
 export * from "./billing.js";
 export * from "./team.js";

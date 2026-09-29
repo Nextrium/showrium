@@ -1,43 +1,109 @@
 import { useState } from "react";
 import { api, timeAgo, useApi, useEditable } from "../../lib";
-import { Alert, Badge, Chip, Icon, LinkButton, Loading, PageHeader, Panel, SaveBar, type IconName } from "../../ui/kit";
+import { Alert, Badge, Chip, Icon, LinkButton, Loading, PageHeader, Panel, SaveBar, Switch } from "../../ui/kit";
 import { MODES, usePlatforms, type Persona, type Platform } from "./shared";
 
-type Level = "coach" | "drafts" | "batch" | "autopilot";
-type Settings = { level: Level; mode: string; platforms: Platform[]; postsPerWeek: number; publishHourUtc: number };
-type Billing = { plan: string; fullAccess: boolean; features: { autopilot: Level } };
+type Rule = { write: boolean; schedule: boolean; approve: boolean };
+type Mode = (typeof MODES)[number]["id"];
+type Settings = { findIdeas: boolean; rules: Partial<Record<Platform, Rule>>; mix: Partial<Record<Mode, number>>; days: number[]; publishHourUtc: number };
+type Billing = { plan: string; fullAccess: boolean; features: { autopilot: "coach" | "batch" | "autopilot" } };
+type Connection = { platform: string; status: string };
 
-const ORDER: Level[] = ["coach", "drafts", "batch", "autopilot"];
-const LEVELS: { id: Level; title: string; body: string; icon: IconName; needs: string }[] = [
-  { id: "coach", title: "Ideas only", body: "Showrium finds things worth sharing. You decide what to write.", icon: "ideas", needs: "" },
-  { id: "drafts", title: "Write drafts", body: "Posts are written from your best ideas each week. You approve each one.", icon: "edit", needs: "Starter" },
-  { id: "batch", title: "Weekly batch", body: "The week's drafts wait in Posts, ready to approve in one tap.", icon: "posts", needs: "Starter" },
-  { id: "autopilot", title: "Auto-schedule clean posts", body: "Posts with no warnings are scheduled to your connected accounts. You can cancel any of them. Never X, never replies.", icon: "automation", needs: "Creator" },
+const OFF: Rule = { write: false, schedule: false, approve: false };
+const API_PLATFORMS: Platform[] = ["x", "linkedin", "bluesky", "mastodon"];
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MAX_WEEK = 14;
+
+// Settings are stored in UTC; people choose in their own time. Moving the hour across midnight moves the day.
+const offsetHours = -new Date().getTimezoneOffset() / 60;
+const mod = (n: number, m: number) => ((n % m) + m) % m;
+function toLocal(s: { publishHourUtc: number; days: number[] }) {
+  const raw = s.publishHourUtc + offsetHours;
+  const shift = Math.floor(raw / 24);
+  return { hour: mod(Math.round(raw), 24), days: s.days.map((d) => mod(d + shift, 7)).sort() };
+}
+function toUtc(hour: number, days: number[]) {
+  const raw = hour - offsetHours;
+  const shift = Math.floor(raw / 24);
+  return { publishHourUtc: mod(Math.round(raw), 24), days: days.map((d) => mod(d + shift, 7)).sort() };
+}
+
+const SWITCHES: { key: keyof Rule; label: string; hint: string }[] = [
+  { key: "write", label: "Write drafts", hint: "Posts are written from your best ideas, following your weekly mix." },
+  { key: "schedule", label: "Schedule when approved", hint: "When a post is approved, it goes to the next free slot on your connected account." },
+  { key: "approve", label: "Approve for me", hint: "Clean posts from your own material are approved without you. You can still cancel them." },
 ];
 
 export function AutomationPage() {
   const settings = useApi<Settings & { lastRunAt: string | null }>("/autopilot");
   const { data: billing } = useApi<Billing>("/billing");
   const { data: personaData } = useApi<{ persona: Persona | null }>("/persona");
-  const platforms = usePlatforms();
-  const saved: Settings | null = settings.data ? { level: settings.data.level, mode: settings.data.mode, platforms: settings.data.platforms, postsPerWeek: settings.data.postsPerWeek, publishHourUtc: settings.data.publishHourUtc } : null;
+  const { data: conns } = useApi<{ data: Connection[] }>("/connections");
+  const platformInfo = usePlatforms();
+  const persona = personaData?.persona ?? null;
+
+  // A stable shape (every platform of the person, in order) so "unsaved changes" compares like with like.
+  const saved: Settings | null =
+    settings.data && persona
+      ? {
+          findIdeas: settings.data.findIdeas,
+          rules: Object.fromEntries(persona.platforms.map((p) => [p, { ...OFF, ...settings.data!.rules[p] }])),
+          mix: Object.fromEntries(MODES.map((m) => [m.id, settings.data!.mix[m.id] ?? 0])),
+          days: settings.data.days,
+          publishHourUtc: settings.data.publishHourUtc,
+        }
+      : null;
   const { draft, setDraft, dirty, reset } = useEditable<Settings>("automation", saved);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
   if (settings.error) return <Alert>{settings.error}</Alert>;
-  if (!draft || !billing || !personaData) return <Loading />;
-  const persona = personaData.persona;
-  const maxIndex = ORDER.indexOf(billing.features.autopilot);
-  const safe = persona?.monetizationSafe ?? false;
-  const offset = -new Date().getTimezoneOffset() / 60;
-  const toLocal = (utc: number) => (((utc + offset) % 24) + 24) % 24;
-  const toUtc = (local: number) => (((local - offset) % 24) + 24) % 24;
-  // Functional updates: each change builds on the latest draft, so quick successive edits all count.
-  const set = <K extends keyof Settings>(k: K, v: Settings[K] | ((cur: Settings[K]) => Settings[K])) =>
-    setDraft((d) => (d ? { ...d, [k]: typeof v === "function" ? (v as (cur: Settings[K]) => Settings[K])(d[k]) : v } : d));
-  const toggle = (p: Platform) => set("platforms", (cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]));
+  if (!personaData || !billing) return <Loading />;
+  if (!persona) {
+    return (
+      <>
+        <PageHeader title="Automation" subtitle="Decide how much Showrium does for you." />
+        <Panel>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="min-w-0 flex-1 text-sm text-ink-2">Set up your voice first, so automation knows how you sound and where you post.</span>
+            <LinkButton to="/app/voice">Set up my voice</LinkButton>
+          </div>
+        </Panel>
+      </>
+    );
+  }
+  if (!draft) return <Loading />;
+
+  const level = billing.features.autopilot;
+  const allowed = { write: level !== "coach", schedule: level !== "coach", approve: level === "autopilot" };
+  const needs = { write: "Starter", schedule: "Starter", approve: "Creator" };
+  const safe = persona.monetizationSafe;
+  const connected = new Set((conns?.data ?? []).filter((c) => c.status === "active").map((c) => c.platform));
+  const local = toLocal(draft);
+  const total = Object.values(draft.mix).reduce<number>((a, b) => a + (b ?? 0), 0);
+  const writing = persona.platforms.filter((p) => draft.rules[p]?.write);
+  const label = (p: Platform) => platformInfo.find((x) => x.id === p)?.label ?? p;
+
+  const setRule = (p: Platform, key: keyof Rule, value: boolean) =>
+    setDraft((d) => {
+      if (!d) return d;
+      const cur = { ...OFF, ...d.rules[p], [key]: value };
+      if (key === "write" && !value) cur.approve = false; // approving needs writing
+      return { ...d, rules: { ...d.rules, [p]: cur } };
+    });
+  const setMix = (m: Mode, n: number) => setDraft((d) => (d ? { ...d, mix: { ...d.mix, [m]: Math.max(0, Math.min(7, n)) } } : d));
+  const setWhen = (hour: number, days: number[]) => setDraft((d) => (d ? { ...d, ...toUtc(hour, days) } : d));
+
+  /** Why a switch can't be turned on, if it can't. */
+  const lockReason = (p: Platform, key: keyof Rule): string | null => {
+    if (!allowed[key]) return `Needs ${needs[key]} plan`;
+    if (key === "approve" && p === "x") return "X needs your approval";
+    if (key === "approve" && safe) return "Off in monetization-safe mode";
+    if (key === "approve" && !draft.rules[p]?.write) return "Turn on writing first";
+    if (key === "schedule" && !API_PLATFORMS.includes(p)) return "You post these yourself";
+    return null;
+  };
 
   const save = async () => {
     setSaving(true);
@@ -53,93 +119,112 @@ export function AutomationPage() {
     }
   };
 
-  if (!persona) {
-    return (
-      <>
-        <PageHeader title="Automation" subtitle="Decide how much Showrium does for you." />
-        <Panel>
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="min-w-0 flex-1 text-sm text-ink-2">Set up your voice first, so automation knows how you sound and where you post.</span>
-            <LinkButton to="/app/voice">Set up my voice</LinkButton>
-          </div>
-        </Panel>
-      </>
-    );
-  }
+  const approving = writing.filter((p) => draft.rules[p]?.approve);
+  const summary = !writing.length
+    ? draft.findIdeas
+      ? "Showrium finds ideas in your sources. You decide what to write."
+      : "Nothing runs automatically. Check sources and write posts whenever you like."
+    : `Each week, ${total} post${total === 1 ? "" : "s"} written for ${writing.map(label).join(", ")}.${approving.length ? ` ${approving.map(label).join(", ")} ${approving.length === 1 ? "is" : "are"} approved for you.` : " You approve each one."}`;
 
   return (
     <>
       <PageHeader
         title="Automation"
-        subtitle="Decide how much Showrium does for you. Replies are always yours to write."
+        subtitle="Switch on only what you want, per platform. Replies are always yours to write."
         actions={!dirty && <span className="flex items-center gap-1.5 text-[13.5px] text-ok"><Icon name="check" size={15} strokeWidth={2.2} />{savedAt ? `Saved ${timeAgo(savedAt)}` : "All changes saved"}</span>}
       />
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <Panel title="How much Showrium does" id="levels">
-          <div role="radiogroup" aria-labelledby="levels" className="flex flex-col gap-2.5">
-            {LEVELS.map((l, i) => {
-              const lockedByPlan = i > maxIndex;
-              const lockedBySafe = l.id === "autopilot" && safe;
-              const locked = lockedByPlan || lockedBySafe;
-              const on = draft.level === l.id;
-              return (
-                <button
-                  key={l.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={on}
-                  aria-disabled={locked}
-                  onClick={() => !locked && set("level", l.id)}
-                  className={`flex w-full items-start gap-3.5 rounded-2xl border p-4 text-left transition-colors ${
-                    locked ? "cursor-not-allowed border-dashed border-line-strong bg-transparent opacity-75" : on ? "cursor-pointer border-accent bg-accent-soft" : "cursor-pointer border-line bg-sunken hover:border-line-strong"
-                  }`}
-                >
-                  <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${on ? "bg-accent text-on-accent" : "bg-raised text-accent-ink"}`}><Icon name={locked ? "lock" : l.icon} /></span>
-                  <span className="flex min-w-0 flex-1 flex-col gap-1">
-                    <span className="flex flex-wrap items-center gap-2 font-semibold text-ink">
-                      {l.title}
-                      {lockedByPlan && <Badge tone="neutral">Needs {l.needs} plan</Badge>}
-                      {!lockedByPlan && lockedBySafe && <Badge tone="warn">Off in monetization-safe mode</Badge>}
-                    </span>
-                    <span className="text-[13.5px] text-muted">{l.body}</span>
-                  </span>
-                  <span aria-hidden="true" className={`mt-1 h-5 w-5 shrink-0 rounded-full border-2 ${on ? "border-accent bg-accent shadow-[inset_0_0_0_3px_var(--accent-soft)]" : "border-line-strong"}`} />
-                </button>
-              );
-            })}
-          </div>
-          {maxIndex < ORDER.length - 1 && !billing.fullAccess && (
-            <p className="m-0 text-sm text-muted">Your {billing.plan} plan includes the unlocked options. <a href="/app/billing">See plans →</a></p>
-          )}
-        </Panel>
+      <div className="flex items-start gap-3 rounded-[18px] border border-line bg-panel px-4 py-3.5">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent-ink"><Icon name="automation" size={17} /></span>
+        <p className="m-0 text-[14.5px] text-ink-2" role="status">{summary}</p>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="flex min-w-0 flex-col gap-5">
+          <Panel title="Find ideas" id="find">
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-sm text-ink-2">Check my sources for new ideas every few hours</span>
+              <Switch label="Find ideas" on={draft.findIdeas} onChange={(v) => setDraft((d) => (d ? { ...d, findIdeas: v } : d))} />
+            </div>
+            <p className="m-0 text-[13px] text-muted">Included in every plan. When off, sources are checked only when you press “Check now” in Sources.</p>
+          </Panel>
+
+          <Panel title="On each platform" id="platforms">
+            <ul className="m-0 flex list-none flex-col gap-3 p-0">
+              {persona.platforms.map((p) => (
+                <li key={p} className="flex flex-col gap-3 rounded-2xl border border-line bg-sunken p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-semibold">{label(p)}</span>
+                    {API_PLATFORMS.includes(p) ? (
+                      connected.has(p) ? <Badge tone="ok">Connected</Badge> : <LinkButton to="/app/accounts" size="sm" variant="ghost">Connect to schedule</LinkButton>
+                    ) : (
+                      <Badge tone="neutral">Tap-to-post</Badge>
+                    )}
+                  </div>
+                  <div className="grid gap-2.5 sm:grid-cols-3">
+                    {SWITCHES.map((s) => {
+                      const reason = lockReason(p, s.key);
+                      const on = Boolean(draft.rules[p]?.[s.key]);
+                      return (
+                        <div key={s.key} title={reason ?? s.hint} className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 ${on ? "border-accent/50 bg-accent-soft/50" : "border-line bg-panel"}`}>
+                          <span className="flex min-w-0 flex-col">
+                            <span className="text-[13.5px] font-medium text-ink">{s.label}</span>
+                            {reason && !on && <span className="text-[12px] text-muted">{reason}</span>}
+                          </span>
+                          <Switch label={`${s.label} on ${label(p)}`} on={on} disabled={Boolean(reason) && !on} onChange={(v) => setRule(p, s.key, v)} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <ul className="m-0 flex list-none flex-col gap-1 p-0 text-[13px] text-muted">
+              {SWITCHES.map((s) => <li key={s.key}><strong className="font-medium text-ink-2">{s.label}:</strong> {s.hint}</li>)}
+            </ul>
+            {!allowed.approve && !billing.fullAccess && <p className="m-0 text-sm text-muted">Your {billing.plan} plan includes the switches that are unlocked. <a href="/app/billing">See plans →</a></p>}
+          </Panel>
+        </div>
 
         <div className="flex min-w-0 flex-col gap-5">
-          <Panel title="Where and what" id="where">
-            <span className="text-sm text-muted">Platforms</span>
-            <div className="flex flex-wrap gap-2">
-              {persona.platforms.map((p) => {
-                const on = draft.platforms.includes(p);
-                const label = platforms.find((x) => x.id === p)?.label ?? p;
-                return <Chip key={p} on={on} onClick={() => toggle(p)}>{label}</Chip>;
+          <Panel title="Weekly style mix" id="mix">
+            <p className="m-0 text-[13px] text-muted">How many posts of each kind to write each week. Each post goes to every platform with writing on.</p>
+            <ul className="m-0 flex list-none flex-col gap-2 p-0">
+              {MODES.map((m) => {
+                const n = draft.mix[m.id] ?? 0;
+                return (
+                  <li key={m.id} className="flex items-center justify-between gap-3">
+                    <span className="flex min-w-0 flex-col">
+                      <span className="text-sm font-medium text-ink">{m.label}</span>
+                      <span className="truncate text-[12.5px] text-muted">{m.hint}</span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2">
+                      <button type="button" aria-label={`Fewer ${m.label}`} disabled={n <= 0} onClick={() => setMix(m.id, n - 1)} className="h-8 w-8 cursor-pointer rounded-lg border border-line-strong bg-raised text-ink disabled:opacity-40">−</button>
+                      <span className="w-5 text-center font-mono tabular-nums" aria-live="polite">{n}</span>
+                      <button type="button" aria-label={`More ${m.label}`} disabled={n >= 7 || total >= MAX_WEEK} onClick={() => setMix(m.id, n + 1)} className="h-8 w-8 cursor-pointer rounded-lg border border-line-strong bg-raised text-ink disabled:opacity-40">+</button>
+                    </span>
+                  </li>
+                );
               })}
+            </ul>
+            <div className={`flex items-center justify-between rounded-xl px-3 py-2 text-sm ${writing.length && !total ? "bg-warn-soft text-warn" : "bg-raised text-ink-2"}`}>
+              <span>{writing.length && !total ? "Add at least one post a week" : "Posts a week"}</span>
+              <span className="font-mono font-semibold">{total} / {MAX_WEEK}</span>
             </div>
-            <label>
-              Style
-              <select value={draft.mode} onChange={(e) => set("mode", e.target.value)}>
-                {MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-              </select>
-            </label>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-sm text-ink-2">Ideas turned into posts each week</span>
-              <span className="flex items-center gap-2">
-                <button type="button" aria-label="Fewer" disabled={draft.postsPerWeek <= 1} onClick={() => set("postsPerWeek", (n) => Math.max(1, n - 1))} className="h-9 w-9 cursor-pointer rounded-lg border border-line-strong bg-raised text-lg text-ink disabled:opacity-40">−</button>
-                <span className="w-6 text-center font-mono">{draft.postsPerWeek}</span>
-                <button type="button" aria-label="More" disabled={draft.postsPerWeek >= 14} onClick={() => set("postsPerWeek", (n) => Math.min(14, n + 1))} className="h-9 w-9 cursor-pointer rounded-lg border border-line-strong bg-raised text-lg text-ink disabled:opacity-40">+</button>
-              </span>
+          </Panel>
+
+          <Panel title="When to post" id="when">
+            <span className="text-[13px] text-muted">Days (for scheduled posts)</span>
+            <div className="flex flex-wrap gap-1.5">
+              {DAYS.map((d, i) => (
+                <Chip key={d} on={local.days.includes(i)} onClick={() => setWhen(local.hour, local.days.includes(i) ? local.days.filter((x) => x !== i) : [...local.days, i])}>
+                  {d}
+                </Chip>
+              ))}
             </div>
+            {!local.days.length && <p className="m-0 text-[13px] text-warn">Choose at least one day.</p>}
             <label>
-              Schedule posts around (your time)
-              <select value={toLocal(draft.publishHourUtc)} onChange={(e) => set("publishHourUtc", toUtc(Number(e.target.value)))}>
+              Around (your time)
+              <select value={local.hour} onChange={(e) => setWhen(Number(e.target.value), local.days)}>
                 {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>)}
               </select>
             </label>

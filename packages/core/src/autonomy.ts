@@ -1,8 +1,7 @@
 // Phase 5: autonomy and learning. Ideas from sources, autopilot, the engagement listener,
 // audience insights and analytics. Every function filters by orgId (tenant isolation lives here).
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import {
-  autopilot,
   brief,
   connection,
   contextItem,
@@ -10,23 +9,19 @@ import {
   engagement,
   idea,
   insight,
-  persona,
   postMetrics,
   source,
-  type AutopilotLevel,
   type ContentMode,
   type Db,
   type Platform,
 } from "@nextrium/db";
 import { generateStructured, insightSystemPrompt, insightUserPrompt, InsightSchema, type Provider } from "@nextrium/llm";
 import { blueskyEngagement, mastodonEngagement, type FetchLike, type PostEngagement } from "@nextrium/platforms";
-import { addContextItems, compose, getOrgPlan, markSourceChecked, updateDraft } from "./content.js";
-import { allowedAutopilotLevel, getUsage, PLAN_FEATURES, PLAN_LIMITS } from "./plans.js";
+import { addContextItems, compose, getOrgPlan, markSourceChecked } from "./content.js";
+import { PLAN_FEATURES } from "./plans.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
 import { ingestFeed, ingestGithubActivity, ingestWatchedPage, resolveBlogSource } from "./ingest.js";
-import { recordAudit } from "./orgs.js";
-import { API_PUBLISH_PLATFORMS, scheduleDraft } from "./publishing.js";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -117,7 +112,13 @@ export async function runSourcePolling(db: Db, opts: { fetch?: FetchLike | undef
   const due = await db
     .select()
     .from(source)
-    .where(or(isNull(source.lastCheckedAt), lt(source.lastCheckedAt, new Date(now.getTime() - 6 * HOUR))))
+    .where(
+      and(
+        or(isNull(source.lastCheckedAt), lt(source.lastCheckedAt, new Date(now.getTime() - 6 * HOUR))),
+        // "Find ideas" switched off in Automation: sources are checked only when the person asks.
+        sql`NOT EXISTS (SELECT 1 FROM autopilot a WHERE a.org_id = ${source.orgId} AND a.find_ideas = 0)`,
+      ),
+    )
     .orderBy(asc(source.lastCheckedAt))
     .limit(limit);
   let ideas = 0;
@@ -214,135 +215,6 @@ export async function composeIdea(db: Db, providers: Provider[], input: { orgId:
     await db.update(idea).set({ status: "new", draftedAt: null }).where(eq(idea.id, input.ideaId));
     throw error;
   }
-}
-
-// --- Autopilot -----------------------------------------------------------------------
-
-export type AutopilotSettings = { level: AutopilotLevel; mode: ContentMode; platforms: Platform[]; postsPerWeek: number; publishHourUtc: number };
-const DEFAULTS: AutopilotSettings = { level: "coach", mode: "build_in_public", platforms: [], postsPerWeek: 3, publishHourUtc: 14 };
-
-export async function getAutopilot(db: Db, orgId: string) {
-  const [row] = await db.select().from(autopilot).where(eq(autopilot.orgId, orgId));
-  return row ? { level: row.level, mode: row.mode, platforms: row.platforms, postsPerWeek: row.postsPerWeek, publishHourUtc: row.publishHourUtc, lastRunAt: row.lastRunAt } : { ...DEFAULTS, lastRunAt: null };
-}
-
-export class AutopilotError extends Error {
-  constructor(
-    message: string,
-    readonly code: "invalid" | "plan_required" = "invalid",
-  ) {
-    super(message);
-    this.name = "AutopilotError";
-  }
-}
-
-export async function saveAutopilot(db: Db, orgId: string, s: AutopilotSettings) {
-  const [p] = await db.select({ safe: persona.monetizationSafe, platforms: persona.platforms }).from(persona).where(eq(persona.orgId, orgId));
-  if (s.level !== "coach") {
-    if (!p) throw new AutopilotError("Set up your voice first.");
-    if (!s.platforms.length) throw new AutopilotError("Choose at least one platform for autopilot.");
-    const outside = s.platforms.filter((x) => !p.platforms.includes(x));
-    if (outside.length) throw new AutopilotError(`Add ${outside.join(", ")} to your platforms in Voice first.`);
-  }
-  const plan = await getOrgPlan(db, orgId);
-  if (allowedAutopilotLevel(plan, s.level) !== s.level) {
-    throw new AutopilotError(`The ${plan} plan includes up to "${PLAN_FEATURES[plan].autopilot}". Upgrade for more.`, "plan_required");
-  }
-  if (s.level === "autopilot" && p?.safe) throw new AutopilotError("Monetization-safe mode needs your approval on every post, so full autopilot is off. Use batch approval instead.");
-  const values = { ...s, postsPerWeek: Math.min(14, Math.max(1, Math.round(s.postsPerWeek))), publishHourUtc: Math.min(23, Math.max(0, Math.round(s.publishHourUtc))) };
-  await db.insert(autopilot).values({ orgId, ...values }).onConflictDoUpdate({ target: autopilot.orgId, set: { ...values, updatedAt: new Date() } });
-  return getAutopilot(db, orgId);
-}
-
-/** The next posting slot at the chosen hour, at least 2 hours away so the user can still cancel. */
-export function nextSlot(now: Date, hourUtc: number): Date {
-  const slot = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hourUtc));
-  while (slot.getTime() < now.getTime() + 2 * HOUR) slot.setUTCDate(slot.getUTCDate() + 1);
-  return slot;
-}
-
-/** Platforms autopilot never posts to by itself. X: paid API per post and strict automation rules. */
-export const AUTOPILOT_EXCLUDED: Platform[] = ["x"];
-
-export async function runAutopilotFor(db: Db, providers: Provider[], orgId: string, now = new Date()) {
-  const saved = await getAutopilot(db, orgId);
-  const plan = await getOrgPlan(db, orgId);
-  // A downgraded plan caps the level without changing the saved setting.
-  const s = { ...saved, level: allowedAutopilotLevel(plan, saved.level) };
-  if (s.level === "coach") return { skipped: "coach" as const };
-  const [p] = await db.select({ safe: persona.monetizationSafe, platforms: persona.platforms }).from(persona).where(eq(persona.orgId, orgId));
-  if (!p) return { skipped: "no_persona" as const };
-  const platforms = s.platforms.filter((x) => p.platforms.includes(x));
-  if (!platforms.length) return { skipped: "no_platforms" as const };
-
-  const [week] = await db
-    .select({ n: sql<number>`count(*)` })
-    .from(idea)
-    .where(and(eq(idea.orgId, orgId), eq(idea.status, "drafted"), gte(idea.draftedAt, new Date(now.getTime() - 7 * DAY))));
-  if ((week?.n ?? 0) >= s.postsPerWeek) return { skipped: "weekly_limit" as const };
-
-  // Autopilot spends only the plan's monthly allowance, never credits.
-  if ((await getUsage(db, orgId)).postsGenerated + platforms.length > PLAN_LIMITS[plan].posts) return { skipped: "plan_allowance" as const };
-
-  const [best] = await db
-    .select({ id: idea.id, kind: contextItem.kind })
-    .from(idea)
-    .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
-    .where(and(eq(idea.orgId, orgId), eq(idea.status, "new"), gte(idea.createdAt, new Date(now.getTime() - 30 * DAY))))
-    .orderBy(desc(idea.score), desc(idea.createdAt))
-    .limit(1);
-  if (!best) return { skipped: "no_ideas" as const };
-
-  const out = await composeIdea(db, providers, { orgId, ideaId: best.id, mode: s.mode, platforms });
-  let scheduled = 0;
-  // Full autopilot schedules only clean posts (no errors, no warnings) to connected accounts.
-  // Everything else waits in Drafts for the user. Replies are never automated.
-  // Ideas from audience comments are shaped by strangers' text, so they always wait for the user.
-  if (s.level === "autopilot" && !p.safe && (best.kind === "github_release" || best.kind === "github_activity" || best.kind === "rss_item")) {
-    const conns = await db
-      .select({ id: connection.id, platform: connection.platform })
-      .from(connection)
-      .where(and(eq(connection.orgId, orgId), eq(connection.status, "active")));
-    for (const d of out.drafts) {
-      if (d.issues.length || AUTOPILOT_EXCLUDED.includes(d.platform)) continue;
-      const conn = conns.find((c) => c.platform === d.platform && API_PUBLISH_PLATFORMS.includes(c.platform));
-      if (!conn) continue;
-      await updateDraft(db, orgId, d.id, { status: "approved" });
-      await scheduleDraft(db, orgId, d.id, { at: nextSlot(now, s.publishHourUtc), connectionId: conn.id });
-      scheduled++;
-    }
-  }
-  await recordAudit(db, { orgId, actorUserId: null, action: "autopilot.run", target: best.id, meta: { level: s.level, drafts: out.drafts.length, scheduled } });
-  return { ideaId: best.id, drafts: out.drafts.length, scheduled };
-}
-
-/** Cron: runs autopilot for workspaces that haven't run in the last 20 hours (once a day each). */
-export async function runAutopilot(db: Db, providers: Provider[], now = new Date(), limit = 1) {
-  if (!providers.length) return { ran: 0 };
-  const cutoff = new Date(now.getTime() - 20 * HOUR);
-  const due = await db
-    .select({ orgId: autopilot.orgId })
-    .from(autopilot)
-    .where(and(ne(autopilot.level, "coach"), or(isNull(autopilot.lastRunAt), lt(autopilot.lastRunAt, cutoff))))
-    .orderBy(asc(autopilot.lastRunAt))
-    .limit(limit);
-  let ran = 0;
-  for (const { orgId } of due) {
-    // Claim the run so overlapping cron invocations can't both run one workspace.
-    const [claimed] = await db
-      .update(autopilot)
-      .set({ lastRunAt: now })
-      .where(and(eq(autopilot.orgId, orgId), or(isNull(autopilot.lastRunAt), lt(autopilot.lastRunAt, cutoff))))
-      .returning({ orgId: autopilot.orgId });
-    if (!claimed) continue;
-    try {
-      await runAutopilotFor(db, providers, orgId, now);
-      ran++;
-    } catch (error) {
-      console.warn("autopilot run failed", { orgId, error: error instanceof Error ? error.message : String(error) });
-    }
-  }
-  return { ran };
 }
 
 // --- Engagement listener ------------------------------------------------------------------

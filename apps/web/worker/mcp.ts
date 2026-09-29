@@ -14,6 +14,7 @@ import {
   getOrgPlan,
   getUsage,
   listDrafts,
+  autoScheduleApproved,
   listIdeas,
   PLAN_LIMITS,
   recordAudit,
@@ -68,8 +69,12 @@ const TOOLS = {
     run: async ({ db, orgId, apiKeyId }, a) => {
       const d = await updateDraft(db, orgId, a.draft_id, { ...(a.text !== undefined ? { text: a.text } : {}), ...(a.status ? { status: a.status } : {}) });
       if (!d) throw new ToolError("No such draft in this workspace.");
-      if (a.status === "approved") await recordAudit(db, { orgId, actorApiKeyId: apiKeyId, action: "draft.approved", target: d.id, meta: { via: "mcp" } });
-      return { id: d.id, status: d.status, text: d.text, issues: d.issues };
+      let status = d.status;
+      if (a.status === "approved") {
+        await recordAudit(db, { orgId, actorApiKeyId: apiKeyId, action: "draft.approved", target: d.id, meta: { via: "mcp" } });
+        if (await autoScheduleApproved(db, orgId, [d.id])) status = "scheduled";
+      }
+      return { id: d.id, status, text: d.text, issues: d.issues };
     },
   }),
   list_ideas: tool({

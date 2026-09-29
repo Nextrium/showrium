@@ -18,6 +18,7 @@ import {
   ingestUrl,
   listContextItems,
   listDrafts,
+  autoScheduleApproved,
   draftSources,
   getDraft,
   listSources,
@@ -413,6 +414,11 @@ contentApi.openapi(
       });
       if (!updated) return c.json(apiError("not_found", "No such post in this workspace."), 404);
       if (patch.status === "approved") {
+        // "Schedule when approved": the post goes to the next free slot, if switched on for its platform.
+        if (can(principal.role, "publish") && (await autoScheduleApproved(c.get("db"), principal.orgId, [updated.id]))) {
+          const now = await getDraft(c.get("db"), principal.orgId, updated.id);
+          if (now) Object.assign(updated, now);
+        }
         await recordAudit(c.get("db"), { orgId: principal.orgId, actorUserId: principal.kind === "user" ? principal.userId : null, actorApiKeyId: principal.kind === "api_key" ? principal.apiKeyId : null, action: "draft.approved", target: updated.id });
       }
       return c.json({ draft: toDraft(updated) }, 200);

@@ -27,6 +27,8 @@ import {
   refreshInsights,
   refreshPostEngagement,
   saveAutopilot,
+  saveLegacyAutopilot,
+  autoScheduleApproved,
   updateDraft,
   type Permission,
 } from "@nextrium/core";
@@ -130,7 +132,18 @@ autonomyApi.openapi(
 
 // --- Autopilot --------------------------------------------------------------------------
 
-const AutopilotSchema = z
+const Rule = z.object({ write: z.boolean(), schedule: z.boolean(), approve: z.boolean() });
+const AutomationInput = z
+  .object({
+    findIdeas: z.boolean(),
+    rules: z.partialRecord(z.enum(PLATFORMS), Rule),
+    mix: z.partialRecord(z.enum(CONTENT_MODES), z.number().int().min(0).max(14)),
+    days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    publishHourUtc: z.number().int().min(0).max(23),
+  })
+  .openapi("Automation");
+// The earlier single-level shape, still accepted.
+const LegacyInput = z
   .object({
     level: z.enum(AUTOPILOT_LEVELS),
     mode: z.enum(CONTENT_MODES),
@@ -138,27 +151,33 @@ const AutopilotSchema = z
     postsPerWeek: z.number().int().min(1).max(14),
     publishHourUtc: z.number().int().min(0).max(23),
   })
-  .openapi("Autopilot");
+  .openapi("AutopilotLegacy");
+const AutomationOut = AutomationInput.extend({
+  level: z.enum(AUTOPILOT_LEVELS),
+  mode: z.enum(CONTENT_MODES),
+  platforms: z.array(z.enum(PLATFORMS)),
+  postsPerWeek: z.number(),
+  lastRunAt: z.string().nullable(),
+}).openapi("AutomationSettings");
+type Saved = Awaited<ReturnType<typeof getAutopilot>>;
+const out = (s: Saved) => ({ ...s, lastRunAt: s.lastRunAt?.toISOString() ?? null });
 
 autonomyApi.openapi(
-  createRoute({ method: "get", path: "/autopilot", tags: ["Autonomy"], responses: { 200: json(AutopilotSchema.extend({ lastRunAt: z.string().nullable() })), ...errs } }),
-  async (c) => {
-    const s = await getAutopilot(c.get("db"), c.get("principal").orgId);
-    return c.json({ ...s, lastRunAt: s.lastRunAt?.toISOString() ?? null }, 200);
-  },
+  createRoute({ method: "get", path: "/autopilot", tags: ["Autonomy"], responses: { 200: json(AutomationOut), ...errs } }),
+  async (c) => c.json(out(await getAutopilot(c.get("db"), c.get("principal").orgId)), 200),
 );
 
 autonomyApi.openapi(
-  createRoute({ method: "put", path: "/autopilot", tags: ["Autonomy"], request: body(AutopilotSchema), responses: { 200: json(AutopilotSchema.extend({ lastRunAt: z.string().nullable() })), 402: json(Err, "Plan required"), ...errs } }),
+  createRoute({ method: "put", path: "/autopilot", tags: ["Autonomy"], request: body(z.union([AutomationInput, LegacyInput])), responses: { 200: json(AutomationOut), 402: json(Err, "Plan required"), ...errs } }),
   async (c) => {
     const p = c.get("principal");
-    // Autopilot can publish without a per-post approval, so only owners and admins may change it.
-    if (denied(p, "workspace.manage")) return c.json(forbidden("change autopilot"), 403);
+    // Automation can publish without a per-post approval, so only owners and admins may change it.
+    if (denied(p, "workspace.manage")) return c.json(forbidden("change automation"), 403);
     try {
       const input = c.req.valid("json");
-      const s = await saveAutopilot(c.get("db"), p.orgId, input);
-      await recordAudit(c.get("db"), { orgId: p.orgId, ...actor(p), action: "autopilot.updated", meta: { level: input.level, platforms: input.platforms } });
-      return c.json({ ...s, lastRunAt: s.lastRunAt?.toISOString() ?? null }, 200);
+      const s = "rules" in input ? await saveAutopilot(c.get("db"), p.orgId, input) : await saveLegacyAutopilot(c.get("db"), p.orgId, input);
+      await recordAudit(c.get("db"), { orgId: p.orgId, ...actor(p), action: "autopilot.updated", meta: { level: s.level, rules: s.rules, mix: s.mix, findIdeas: s.findIdeas } });
+      return c.json(out(s), 200);
     } catch (error) {
       if (error instanceof AutopilotError) return error.code === "plan_required" ? c.json(apiError("plan_required", error.message), 402) : c.json(apiError("invalid_autopilot", error.message), 409);
       throw error;
@@ -200,6 +219,8 @@ autonomyApi.openapi(
         skipped.push({ id, reason: error.message });
       }
     }
+    // "Schedule when approved" (per platform, in Automation).
+    if (!denied(p, "publish")) await autoScheduleApproved(c.get("db"), p.orgId, approved);
     return c.json({ approved, skipped }, 200);
   },
 );
