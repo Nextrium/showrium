@@ -17,6 +17,7 @@ export type Draft = {
   createdAt: string;
   parts?: string[] | null;
   partsPosted?: number;
+  image?: { source: string; alt: string; mime: string; bytes: number; width?: number; height?: number; aiGenerated: boolean; sourceUrl?: string } | null;
   source?: { mode: string; kind: string | null; title: string | null; url: string | null; contextItemId: string | null } | null;
 };
 export type Persona = {

@@ -10,6 +10,16 @@ import { createDb } from "@nextrium/db";
 import { expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, runAutopilot, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
 import { aiProviders } from "./ai.js";
 import { publishDeps } from "./connections-api.js";
+import { imageDeps } from "./images-api.js";
+import { autoImagesForBrief, type AfterCompose } from "@nextrium/core";
+import type { Db } from "@nextrium/db";
+import type { Env } from "./env.js";
+
+/** Automation finds an image for the posts it writes, like people's own posts. */
+function autoImages(env: Env, db: Db): AfterCompose | undefined {
+  const deps = imageDeps(env, db);
+  return deps ? (orgId, briefId) => autoImagesForBrief(deps, orgId, briefId) : undefined;
+}
 
 const app = new Hono<AppEnv>();
 
@@ -116,7 +126,7 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
       const job = cronJob(event.scheduledTime);
       const result =
         job === "sources" ? await runSourcePolling(db, {}, now)
-        : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now))
+        : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now, 1, autoImages(env, db)))
         : job === "engagement" ? await runEngagementSync(db, fetch, now)
         : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now) };
       console.log("cron", job, result);

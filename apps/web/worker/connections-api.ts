@@ -67,7 +67,7 @@ export function platformConfigs(env: Env): PublishDeps["configs"] {
 }
 
 export async function publishDeps(env: Env, db: Db): Promise<PublishDeps> {
-  return { db, key: await importTokenKey(env.TOKEN_ENCRYPTION_KEY), configs: platformConfigs(env) };
+  return { db, key: await importTokenKey(env.TOKEN_ENCRYPTION_KEY), configs: platformConfigs(env), media: env.MEDIA };
 }
 
 const notConfigured = () => apiError("not_configured", "Connecting accounts isn't set up in this environment yet.");

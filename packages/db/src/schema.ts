@@ -227,6 +227,23 @@ export type Platform = (typeof PLATFORMS)[number];
 export const CONTENT_MODES = ["smile", "teach", "expert_take", "build_in_public", "promote"] as const;
 export type ContentMode = (typeof CONTENT_MODES)[number];
 
+export const IMAGE_SOURCES = ["upload", "link", "screenshot", "card", "ai"] as const;
+export type ImageSource = (typeof IMAGE_SOURCES)[number];
+export const IMAGE_SIZES = ["square", "portrait", "landscape", "none"] as const;
+export type ImageSize = (typeof IMAGE_SIZES)[number];
+export type PostImage = { key: string; source: ImageSource; alt: string; mime: string; bytes: number; width?: number | undefined; height?: number | undefined; aiGenerated: boolean; sourceUrl?: string | undefined };
+
+/** Image preferences per workspace: the size each platform gets, and what Showrium may do on its own. */
+export const imageSetting = sqliteTable("image_setting", {
+  orgId: text("org_id").primaryKey().references(() => org.id, { onDelete: "cascade" }),
+  sizes: text("sizes", { mode: "json" }).$type<Partial<Record<Platform, ImageSize>>>().notNull().default(sql`'{}'`),
+  /** Find an image for new posts automatically (from your photo, the link, or a screenshot). */
+  auto: integer("auto", { mode: "boolean" }).notNull().default(true),
+  /** Allow AI-made images when there's no real one (always labelled). */
+  allowAi: integer("allow_ai", { mode: "boolean" }).notNull().default(true),
+  updatedAt: updatedAt(),
+});
+
 /** Who the user is and how they sound. One per workspace for now (brands come later). */
 export const persona = sqliteTable("persona", {
   orgId: text("org_id").primaryKey().references(() => org.id, { onDelete: "cascade" }),
@@ -326,6 +343,8 @@ export const draft = sqliteTable(
     parts: text("parts", { mode: "json" }).$type<string[] | null>(),
     /** Thread parts already posted (in order), so a retry continues instead of posting twice. */
     postedParts: text("posted_parts", { mode: "json" }).$type<{ id: string; cid?: string | undefined; url: string | null }[] | null>(),
+    /** The post's one image (Sprint 6), stored privately in R2. */
+    image: text("image", { mode: "json" }).$type<PostImage | null>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

@@ -35,6 +35,7 @@ import {
 import { PlatformError } from "@nextrium/platforms";
 import { aiProviders } from "./ai.js";
 import { toDraft } from "./content-api.js";
+import { findImagesLater } from "./images-api.js";
 import { apiError, requirePrincipal, type AppEnv, type Principal } from "./principal.js";
 
 export const autonomyApi = new OpenAPIHono<AppEnv>({
@@ -118,6 +119,7 @@ autonomyApi.openapi(
     if (!providers.length) return c.json(apiError("ai_unavailable", "The writing engine isn't configured in this environment."), 503);
     try {
       const out = await composeIdea(c.get("db"), providers, { orgId: p.orgId, ideaId: c.req.valid("param").id, ...c.req.valid("json") });
+      findImagesLater(c, c.get("db"), p.orgId, out.briefId);
       return c.json({ briefId: out.briefId, drafts: out.drafts.map(toDraft) }, 201);
     } catch (error) {
       if (error instanceof IdeaError) return c.json(apiError(error.code, error.message), error.code === "not_found" ? 404 : 409);

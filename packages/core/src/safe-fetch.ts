@@ -35,10 +35,11 @@ export function assertSafeUrl(raw: string): URL {
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
-export async function safeFetchText(
+/** Fetches a user-supplied URL safely and returns its bytes (see the rules at the top). */
+export async function safeFetchBytes(
   raw: string,
   opts: { fetch?: FetchLike | undefined; maxBytes?: number; timeoutMs?: number; accept?: string; allowedTypes?: RegExp } = {},
-): Promise<{ url: string; contentType: string; text: string }> {
+): Promise<{ url: string; contentType: string; bytes: Uint8Array }> {
   const doFetch = opts.fetch ?? fetch;
   const maxBytes = opts.maxBytes ?? 1_000_000;
   let url = assertSafeUrl(raw);
@@ -60,7 +61,7 @@ export async function safeFetchText(
     const declared = Number(res.headers.get("Content-Length") ?? "0");
     if (declared > maxBytes) throw new Error("The page is too large.");
     const reader = res.body?.getReader();
-    if (!reader) return { url: url.toString(), contentType, text: "" };
+    if (!reader) return { url: url.toString(), contentType, bytes: new Uint8Array() };
     const chunks: Uint8Array[] = [];
     let total = 0;
     for (;;) {
@@ -79,7 +80,15 @@ export async function safeFetchText(
       bytes.set(c, offset);
       offset += c.byteLength;
     }
-    return { url: url.toString(), contentType, text: new TextDecoder().decode(bytes) };
+    return { url: url.toString(), contentType, bytes };
   }
   throw new UnsafeUrlError("Too many redirects.");
+}
+
+export async function safeFetchText(
+  raw: string,
+  opts: { fetch?: FetchLike | undefined; maxBytes?: number; timeoutMs?: number; accept?: string; allowedTypes?: RegExp } = {},
+): Promise<{ url: string; contentType: string; text: string }> {
+  const out = await safeFetchBytes(raw, opts);
+  return { url: out.url, contentType: out.contentType, text: new TextDecoder().decode(out.bytes) };
 }

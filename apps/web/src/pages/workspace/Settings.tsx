@@ -1,3 +1,4 @@
+import { ImageSettingsPanel } from "../../components/PostImage";
 import { useState, type FormEvent } from "react";
 import { InvitesCard } from "../../components/InvitesCard";
 import { api, formatDate, timeAgo, useApi } from "../../lib";
@@ -171,7 +172,7 @@ export function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        subtitle="Appearance, developer access and workspace details."
+        subtitle="Appearance, images, developer access and workspace details."
         actions={me && <Badge tone={me.workspace.fullAccess ? "info" : "neutral"}>{me.workspace.name} · {planLabel(me.workspace.plan, me.workspace.fullAccess)}</Badge>}
       />
       <div className="grid gap-5 lg:grid-cols-2">
@@ -180,6 +181,7 @@ export function SettingsPage() {
           <ThemePicker />
         </Panel>
         <ApiKeys canManage={canManage} />
+        <ImageSettingsPanel canManage={canManage} />
       </div>
       {me?.principal.isPlatformAdmin && (
         <>

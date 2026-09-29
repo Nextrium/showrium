@@ -248,7 +248,10 @@ const SUITS: Record<ContentMode, string[]> = {
   promote: ["github_release", "url", "manual"],
 };
 
-export async function runAutopilotFor(db: Db, providers: Provider[], orgId: string, now = new Date()) {
+/** Called with each new brief (the worker uses it to find the posts' image). */
+export type AfterCompose = (orgId: string, briefId: string) => Promise<unknown>;
+
+export async function runAutopilotFor(db: Db, providers: Provider[], orgId: string, now = new Date(), afterCompose?: AfterCompose) {
   const s = await getAutopilot(db, orgId);
   const plan = await getOrgPlan(db, orgId);
   const allowed = allowedSwitches(plan); // a downgraded plan caps what runs, without changing the saved settings
@@ -279,6 +282,7 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   const best = candidates.map((c) => ({ ...c, rank: c.score + (SUITS[mode].includes(c.kind) ? 15 : 0) })).sort((a, b) => b.rank - a.rank)[0]!;
 
   const out = await composeIdea(db, providers, { orgId, ideaId: best.id, mode, platforms });
+  await afterCompose?.(orgId, out.briefId).catch(() => undefined);
   await db.update(autopilot).set({ weekLog: [...log, { at: now.getTime(), mode }] }).where(eq(autopilot.orgId, orgId));
 
   // "Approve for me": only clean posts (no errors or warnings), from the person's own material
@@ -298,7 +302,7 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
 }
 
 /** Cron: runs workspaces with writing switched on, oldest first, at most every 10 hours each. */
-export async function runAutopilot(db: Db, providers: Provider[], now = new Date(), limit = 1) {
+export async function runAutopilot(db: Db, providers: Provider[], now = new Date(), limit = 1, afterCompose?: AfterCompose) {
   if (!providers.length) return { ran: 0 };
   const cutoff = new Date(now.getTime() - 10 * HOUR);
   const due = await db
@@ -317,7 +321,7 @@ export async function runAutopilot(db: Db, providers: Provider[], now = new Date
       .returning({ orgId: autopilot.orgId });
     if (!claimed) continue;
     try {
-      await runAutopilotFor(db, providers, orgId, now);
+      await runAutopilotFor(db, providers, orgId, now, afterCompose);
       ran++;
     } catch (error) {
       console.warn("autopilot run failed", { orgId, error: error instanceof Error ? error.message : String(error) });

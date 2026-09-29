@@ -27,6 +27,24 @@ export interface PublishResult {
   /** Bluesky: the record's content hash, needed to reply to it (threads). */
   cid?: string | undefined;
 }
+/** One image to attach (Sprint 6). Bytes are already checked; `alt` describes it for screen readers. */
+export interface ImageUpload {
+  bytes: Uint8Array<ArrayBuffer>;
+  mime: string;
+  alt: string;
+  width?: number | undefined;
+  height?: number | undefined;
+}
+
+function multipart(fields: Record<string, string | { bytes: Uint8Array<ArrayBuffer>; mime: string; name: string }>): FormData {
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) {
+    if (typeof v === "string") form.set(k, v);
+    else form.set(k, new Blob([v.bytes], { type: v.mime }), v.name);
+  }
+  return form;
+}
+
 /** For threads: the post to reply to, and the first post of the thread (Bluesky needs both). */
 export interface ReplyTo {
   id: string;
@@ -70,7 +88,7 @@ const expiry = (seconds: unknown) => (typeof seconds === "number" ? Date.now() +
 
 export const x = {
   authorizeUrl(cfg: OAuthConfig, state: string, challenge: string) {
-    const q = new URLSearchParams({ response_type: "code", client_id: cfg.clientId, redirect_uri: cfg.redirectUri, scope: "tweet.read tweet.write users.read offline.access", state, code_challenge: challenge, code_challenge_method: "S256" });
+    const q = new URLSearchParams({ response_type: "code", client_id: cfg.clientId, redirect_uri: cfg.redirectUri, scope: "tweet.read tweet.write users.read media.write offline.access", state, code_challenge: challenge, code_challenge_method: "S256" });
     return `https://x.com/i/oauth2/authorize?${q}`;
   },
   async exchange(cfg: OAuthConfig, code: string, verifier: string, doFetch: FetchLike = fetch): Promise<TokenSet> {
@@ -98,11 +116,28 @@ export const x = {
     const subscription = typeof data.subscription_type === "string" && /^[A-Za-z]{1,20}$/.test(data.subscription_type) ? data.subscription_type : "None";
     return { accountId: data.id, handle: `@${data.username}`, subscription };
   },
-  async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo): Promise<PublishResult> {
+  /** Uploads an image (needs the media.write scope) and sets its alt text. Returns the media id. */
+  async uploadImage(tokens: TokenSet, image: ImageUpload, doFetch: FetchLike = fetch): Promise<string> {
+    const res = await request("X", doFetch, "https://api.x.com/2/media/upload", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokens.accessToken}` },
+      body: multipart({ media: { bytes: image.bytes, mime: image.mime, name: "image" }, media_category: "tweet_image" }),
+    });
+    const { data } = (await res.json()) as { data: { id: string } };
+    if (image.alt) {
+      await request("X", doFetch, "https://api.x.com/2/media/metadata", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ id: data.id, metadata: { alt_text: { text: image.alt.slice(0, 1000) } } }),
+      }).catch(() => undefined); // alt text is best effort; the image still posts
+    }
+    return data.id;
+  },
+  async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, mediaId?: string): Promise<PublishResult> {
     const res = await request("X", doFetch, "https://api.x.com/2/tweets", {
       method: "POST",
       headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ text, ...(replyTo ? { reply: { in_reply_to_tweet_id: replyTo.id } } : {}) }),
+      body: JSON.stringify({ text, ...(replyTo ? { reply: { in_reply_to_tweet_id: replyTo.id } } : {}), ...(mediaId ? { media: { media_ids: [mediaId] } } : {}) }),
     });
     const { data } = (await res.json()) as { data: { id: string } };
     return { externalId: data.id, url: `https://x.com/${account.handle.replace(/^@/, "")}/status/${data.id}` };
@@ -138,13 +173,26 @@ export const linkedin = {
     const u = (await res.json()) as { sub: string; name?: string };
     return { accountId: u.sub, handle: u.name ?? "LinkedIn member" };
   },
-  async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch): Promise<PublishResult> {
+  /** Images API: ask for an upload URL, upload the bytes, and get the image URN for the post. */
+  async uploadImage(tokens: TokenSet, account: Account, image: ImageUpload, doFetch: FetchLike = fetch): Promise<string> {
+    const init = await request("LinkedIn", doFetch, "https://api.linkedin.com/rest/images?action=initializeUpload", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json", "LinkedIn-Version": LINKEDIN_VERSION, "X-Restli-Protocol-Version": "2.0.0" },
+      body: JSON.stringify({ initializeUploadRequest: { owner: `urn:li:person:${account.accountId}` } }),
+    });
+    const { value } = (await init.json()) as { value: { uploadUrl: string; image: string } };
+    if (!/^https:\/\/[a-z0-9.-]+\.linkedin\.com\//i.test(value.uploadUrl)) throw new PlatformError("LinkedIn", "rejected", "LinkedIn returned an unexpected upload address.");
+    await request("LinkedIn", doFetch, value.uploadUrl, { method: "PUT", headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": image.mime }, body: image.bytes });
+    return value.image;
+  },
+  async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, image?: { urn: string; alt: string }): Promise<PublishResult> {
     const res = await request("LinkedIn", doFetch, "https://api.linkedin.com/rest/posts", {
       method: "POST",
       headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json", "LinkedIn-Version": LINKEDIN_VERSION, "X-Restli-Protocol-Version": "2.0.0" },
       body: JSON.stringify({
         author: `urn:li:person:${account.accountId}`,
         commentary: escapeLinkedIn(text),
+        ...(image ? { content: { media: { id: image.urn, altText: image.alt.slice(0, 4000) } } } : {}),
         visibility: "PUBLIC",
         distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] },
         lifecycleState: "PUBLISHED",
@@ -211,7 +259,7 @@ export async function tiktokInboxUpload(tokens: TokenSet, video: BodyInit, size:
 
 // --- Mastodon (per-instance OAuth with PKCE) --------------------------------------------------
 
-export const MASTODON_SCOPES = "read:accounts write:statuses";
+export const MASTODON_SCOPES = "read:accounts write:statuses write:media";
 export const mastodon = {
   async registerApp(instance: string, redirectUri: string, doFetch: FetchLike = fetch): Promise<{ clientId: string; clientSecret: string }> {
     const res = await request("Mastodon", doFetch, `https://${instance}/api/v1/apps`, {
@@ -240,11 +288,19 @@ export const mastodon = {
     const a = (await res.json()) as { id: string; acct: string };
     return { accountId: a.id, handle: `@${a.acct}@${instance}` };
   },
-  async publish(instance: string, tokens: TokenSet, text: string, idempotencyKey: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo): Promise<PublishResult> {
+  async uploadImage(instance: string, tokens: TokenSet, image: ImageUpload, doFetch: FetchLike = fetch): Promise<string> {
+    const res = await request("Mastodon", doFetch, `https://${instance}/api/v2/media`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tokens.accessToken}` },
+      body: multipart({ file: { bytes: image.bytes, mime: image.mime, name: "image" }, description: image.alt.slice(0, 1500) }),
+    });
+    return ((await res.json()) as { id: string }).id;
+  },
+  async publish(instance: string, tokens: TokenSet, text: string, idempotencyKey: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, mediaId?: string): Promise<PublishResult> {
     const res = await request("Mastodon", doFetch, `https://${instance}/api/v1/statuses`, {
       method: "POST",
       headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify({ status: text, visibility: "public", ...(replyTo ? { in_reply_to_id: replyTo.id } : {}) }),
+      body: JSON.stringify({ status: text, visibility: "public", ...(replyTo ? { in_reply_to_id: replyTo.id } : {}), ...(mediaId ? { media_ids: [mediaId] } : {}) }),
     });
     const s = (await res.json()) as { id: string; url?: string };
     return { externalId: s.id, url: s.url ?? null };
@@ -274,7 +330,17 @@ export const bluesky = {
     const s = (await res.json()) as { accessJwt: string; did: string; handle: string };
     return { accessJwt: s.accessJwt, account: { accountId: s.did, handle: `@${s.handle}` } };
   },
-  async publish(service: string, accessJwt: string, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo): Promise<PublishResult> {
+  /** Bluesky takes images up to about 1 MB. */
+  async uploadImage(service: string, accessJwt: string, image: ImageUpload, doFetch: FetchLike = fetch): Promise<unknown> {
+    if (image.bytes.byteLength > 976_000) throw new PlatformError("Bluesky", "rejected", "Bluesky takes images up to 1 MB. Crop the image to its size in Showrium to make it smaller.");
+    const res = await request("Bluesky", doFetch, `${service}/xrpc/com.atproto.repo.uploadBlob`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessJwt}`, "Content-Type": image.mime },
+      body: image.bytes,
+    });
+    return ((await res.json()) as { blob: unknown }).blob;
+  },
+  async publish(service: string, accessJwt: string, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, image?: { blob: unknown; alt: string; width?: number | undefined; height?: number | undefined }): Promise<PublishResult> {
     const facets = blueskyLinkFacets(text);
     const reply =
       replyTo?.cid && replyTo.rootId && replyTo.rootCid
@@ -286,7 +352,16 @@ export const bluesky = {
       body: JSON.stringify({
         repo: account.accountId,
         collection: "app.bsky.feed.post",
-        record: { $type: "app.bsky.feed.post", text, createdAt: new Date().toISOString(), ...(facets.length ? { facets } : {}), ...reply },
+        record: {
+          $type: "app.bsky.feed.post",
+          text,
+          createdAt: new Date().toISOString(),
+          ...(facets.length ? { facets } : {}),
+          ...reply,
+          ...(image
+            ? { embed: { $type: "app.bsky.embed.images", images: [{ alt: image.alt.slice(0, 2000), image: image.blob, ...(image.width && image.height ? { aspectRatio: { width: image.width, height: image.height } } : {}) }] } }
+            : {}),
+        },
       }),
     });
     const r = (await res.json()) as { uri: string; cid?: string };

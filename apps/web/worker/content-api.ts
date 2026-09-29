@@ -36,6 +36,7 @@ import {
 } from "@nextrium/core";
 import { PLATFORM_RULES } from "@nextrium/policy";
 import { aiProviders } from "./ai.js";
+import { findImagesLater } from "./images-api.js";
 import { apiError, requirePrincipal, type AppEnv } from "./principal.js";
 
 export const contentApi = new OpenAPIHono<AppEnv>({
@@ -306,6 +307,10 @@ const DraftSchema = z
     /** A thread's parts in order (null for a single post), and how many have been posted. */
     parts: z.array(z.string()).nullable(),
     partsPosted: z.number(),
+    /** The post's image (where it came from and its description; the file itself is at /drafts/{id}/image). */
+    image: z
+      .object({ source: z.string(), alt: z.string(), mime: z.string(), bytes: z.number(), width: z.number().optional(), height: z.number().optional(), aiGenerated: z.boolean(), sourceUrl: z.string().optional() })
+      .nullable(),
     // Where the post came from (the material it was written from). Included on reads.
     source: z
       .object({ mode: z.string(), kind: z.string().nullable(), title: z.string().nullable(), url: z.string().nullable(), contextItemId: z.string().nullable() })
@@ -328,6 +333,7 @@ export const toDraft = (d: DraftRow) => ({
   createdAt: d.createdAt.toISOString(),
   parts: d.parts ?? null,
   partsPosted: d.postedParts?.length ?? 0,
+  image: d.image ? (({ key: _key, ...rest }) => rest)(d.image) : null,
 });
 
 contentApi.openapi(
@@ -351,6 +357,7 @@ contentApi.openapi(
     if (!providers.length) return c.json(apiError("ai_unavailable", "The writing engine isn't configured in this environment."), 503);
     try {
       const out = await compose(c.get("db"), providers, { orgId: c.get("principal").orgId, ...input });
+      findImagesLater(c, c.get("db"), c.get("principal").orgId, out.briefId);
       return c.json({ ...out, drafts: out.drafts.map(toDraft) }, 201);
     } catch (error) {
       if (error instanceof ComposeError) {

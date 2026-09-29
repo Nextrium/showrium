@@ -3,6 +3,7 @@ import { api, formatDate, setUnsaved, timeAgo, useApi } from "../../lib";
 import { PublishControls } from "./Publish";
 import { IssueList, MODES, usePlatforms, type Draft } from "./shared";
 import { Alert, Button, Empty, Icon, LinkButton, Loading, PageHeader, type IconName } from "../../ui/kit";
+import { PostImagePanel } from "../../components/PostImage";
 import { DetailPanel, ListItem, SectionLabel, Split, StatStrip, Tag, useQueryParams } from "../../ui/split";
 
 export const PLATFORM_LABELS: Record<string, string> = {
@@ -293,6 +294,11 @@ function PostDetail({ id, onSelect }: { id: string; onSelect: (id: string) => vo
       <section className="flex flex-col gap-2">
         <SectionLabel>Post</SectionLabel>
         <PostEditor key={draft.id} draft={draft} />
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <SectionLabel>Image</SectionLabel>
+        <PostImagePanel key={draft.id} draft={draft} />
       </section>
 
       {others.length > 0 && (

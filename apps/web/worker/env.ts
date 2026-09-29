@@ -37,6 +37,9 @@ export interface Env {
   TIKTOK_USE_SANDBOX?: string;
   /** Post images (R2, private). */
   MEDIA?: R2Bucket;
+  /** Optional: page screenshots for post images (Cloudflare Browser Rendering REST API). */
+  BROWSER_RENDERING_TOKEN?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
   /** Phase 4 premium video vendors (secrets; unset until contracts exist). */
   HEYGEN_API_KEY?: string;
   VEO_API_KEY?: string;
