@@ -83,6 +83,8 @@ export function authProviders(env: Env) {
     password: env.AUTH_PASSWORD_ENABLED === "true",
     // Password reset needs email; without it, the "Forgot password?" link is hidden.
     passwordReset: env.AUTH_PASSWORD_ENABLED === "true" && Boolean(env.BREVO_API_KEY),
+    // New password accounts confirm their email before signing in (when email is set up).
+    verifyEmail: env.AUTH_PASSWORD_ENABLED === "true" && Boolean(env.BREVO_API_KEY),
     github: Boolean(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET),
     google: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
   };

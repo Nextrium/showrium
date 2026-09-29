@@ -4,19 +4,35 @@ import { Alert, Button } from "../ui/kit";
 
 type Config = { auth: { password: boolean; github: boolean; google: boolean } };
 
+export function CheckEmail({ email }: { email: string }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-2xl border border-line bg-panel p-5" role="status">
+      <strong>Check your email</strong>
+      <p className="note m-0">
+        We sent a link to <strong>{email}</strong>. Open it to confirm your email and finish setting up. It works for 24 hours. If it isn't there in a few minutes, check your spam folder.
+      </p>
+    </div>
+  );
+}
+
 /** New account with email and password, allowed by the invite cookie set when the link was checked. */
 function EmailSignUp({ onError }: { onError: (message: string | null) => void }) {
   const [busy, setBusy] = useState(false);
+  const [checkEmail, setCheckEmail] = useState<string | null>(null);
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
+    const email = String(form.get("email")).trim();
     setBusy(true);
     onError(null);
-    const { error } = await authClient.signUp.email({ name: String(form.get("name")).trim(), email: String(form.get("email")).trim(), password: String(form.get("password")) });
+    // The confirmation link signs the person in and opens the welcome steps.
+    const { data, error } = await authClient.signUp.email({ name: String(form.get("name")).trim(), email, password: String(form.get("password")), callbackURL: "/app/welcome" });
     setBusy(false);
     if (error) onError(error.message ?? "Couldn't create the account. Check your details and try again.");
+    else if (!data?.token) setCheckEmail(email); // email confirmation is required first
     else navigate("/app/welcome");
   };
+  if (checkEmail) return <CheckEmail email={checkEmail} />;
   return (
     <form className="form" onSubmit={submit}>
       <label>
@@ -89,7 +105,7 @@ export function Invite() {
 
       {state === "valid" && !isPending && !session && (
         <>
-          <p className="note">Create your account in the way you prefer. You don't need GitHub or to be a developer. The invite works with any email for the next 30 minutes on this device.</p>
+          <p className="note">Create your account in the way you prefer. The invite works with any email for the next 30 minutes on this device.</p>
           {auth?.google && (
             <Button variant="secondary" onClick={() => social("google")}>
               Continue with Google

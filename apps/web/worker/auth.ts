@@ -35,6 +35,8 @@ export function createAuth(env: Env) {
       // Links last an hour; a reset signs the account out everywhere else.
       resetPasswordTokenExpiresIn: 60 * 60,
       revokeSessionsOnPasswordReset: true,
+      // With email set up, a password account must confirm its email before it can sign in.
+      requireEmailVerification: emailConfigured(env),
       ...(emailConfigured(env)
         ? {
             sendResetPassword: async ({ user, url }: { user: { email: string; name: string }; url: string }) => {
@@ -54,12 +56,13 @@ export function createAuth(env: Env) {
           }
         : {}),
     },
-    // Email verification: sent on sign-up when email is configured. Not required to sign in yet
-    // (beta), but only verified emails can be linked to Google or GitHub sign-in later.
+    // Email verification: sent on sign-up, and again when an unconfirmed account tries to sign in.
+    // Google and GitHub accounts arrive verified by the provider.
     ...(emailConfigured(env)
       ? {
           emailVerification: {
             sendOnSignUp: true,
+            sendOnSignIn: true,
             autoSignInAfterVerification: true,
             expiresIn: 24 * 60 * 60,
             sendVerificationEmail: async ({ user, url }: { user: { email: string; name: string }; url: string }) => {

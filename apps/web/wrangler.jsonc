@@ -41,6 +41,9 @@
       "name": "showrium",
       // showrium.com = website; app.showrium.com = product (sign-in, dashboard, API, OAuth callbacks).
       "ai": { "binding": "AI" },
+      // Scheduled jobs: publishing every 5 minutes, and background work (sources, autopilot,
+      // engagement, housekeeping) offset by 2 minutes. Emergency stop: PUBLISHING_PAUSED=true.
+      "triggers": { "crons": ["*/5 * * * *", "2-59/5 * * * *"] },
       // Domains are attached in the Cloudflare dashboard. The workers.dev address is off.
       "workers_dev": false,
       // Off: version preview URLs would run old (possibly vulnerable) versions against the

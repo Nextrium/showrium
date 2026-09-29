@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { WaitlistForm } from "../components/WaitlistForm";
 import { ForgotPassword } from "./ResetPassword";
+import { CheckEmail } from "./Invite";
 import { authClient, navigate, useApi, useRedirect } from "../lib";
 
 type Config = { auth: { password: boolean; passwordReset: boolean; github: boolean; google: boolean }; signupMode: "waitlist" | "allowlist" };
@@ -17,11 +18,13 @@ export function SignIn() {
   );
   const [busy, setBusy] = useState(false);
   const [forgot, setForgot] = useState(() => new URLSearchParams(window.location.search).has("forgot"));
+  const [checkEmail, setCheckEmail] = useState<string | null>(null);
   const [justReset] = useState(() => new URLSearchParams(window.location.search).has("reset"));
 
   useRedirect("/app", Boolean(session));
   if (session) return null;
   if (forgot) return <ForgotPassword onBack={() => setForgot(false)} />;
+  if (checkEmail) return <section className="auth"><h2>Confirm your email</h2><CheckEmail email={checkEmail} /></section>;
 
   const social = async (provider: "github" | "google") => {
     setError(null);
@@ -36,12 +39,18 @@ export function SignIn() {
     const password = String(form.get("password"));
     setBusy(true);
     setError(null);
-    const { error } =
-      mode === "signup"
-        ? await authClient.signUp.email({ email, password, name: String(form.get("name")) })
-        : await authClient.signIn.email({ email, password });
+    if (mode === "signup") {
+      const { data, error } = await authClient.signUp.email({ email, password, name: String(form.get("name")), callbackURL: "/app/welcome" });
+      setBusy(false);
+      if (error) setError(error.message ?? "That didn't work. Check your details and try again.");
+      else if (!data?.token) setCheckEmail(email);
+      else navigate("/app");
+      return;
+    }
+    const { error } = await authClient.signIn.email({ email, password, callbackURL: "/app" });
     setBusy(false);
-    if (error) setError(error.message ?? "That didn't work. Check your details and try again.");
+    if (error?.code === "EMAIL_NOT_VERIFIED") setCheckEmail(email); // a fresh link was just sent
+    else if (error) setError(error.message ?? "That didn't work. Check your details and try again.");
     else navigate("/app");
   };
 

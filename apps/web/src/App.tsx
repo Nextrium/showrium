@@ -1,4 +1,4 @@
-import { APP_ORIGIN, authClient, isWebsite, usePath } from "./lib";
+import { authClient, isWebsite, usePath } from "./lib";
 import { Link } from "./ui/Link";
 import { Home } from "./pages/Home";
 import { Invite } from "./pages/Invite";
@@ -10,12 +10,12 @@ import { Workspace } from "./pages/Workspace";
 
 export { Link } from "./ui/Link";
 
-// Session cookies belong to app.showrium.com, so the website doesn't check sign-in state.
+// The website only collects the waitlist; it has no way into the app (testers get invite links).
 function WebsiteNav() {
   return (
-    <Link to={`${APP_ORIGIN}/app`} className="button secondary">
-      Sign in
-    </Link>
+    <a href="#waitlist" className="button secondary">
+      Launching soon
+    </a>
   );
 }
 
@@ -42,7 +42,7 @@ function TopBar({ path }: { path: string }) {
         Showrium
       </Link>
       <nav className="nav" aria-label="Main">
-        {isWebsite ? <WebsiteNav /> : <AppNav path={path} />}
+        {isWebsite || path === "/" ? <WebsiteNav /> : <AppNav path={path} />}
       </nav>
     </header>
   );
@@ -65,6 +65,11 @@ export function App() {
   const path = usePath();
   // The signed-in app has its own full-screen shell (sidebar, tab bar), not the website frame.
   if (path === "/app" || path.startsWith("/app/")) return <Workspace path={path} />;
+  // app.showrium.com has no marketing page: its front door is the app (which asks you to sign in).
+  if (path === "/" && window.location.hostname === "app.showrium.com") {
+    window.location.replace("/app");
+    return null;
+  }
   const page =
     path === "/signin" ? <SignIn /> :
     path === "/invite" ? <Invite /> :

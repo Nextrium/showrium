@@ -64,7 +64,7 @@ api.openapi(
         content: {
           "application/json": {
             schema: z.object({
-              auth: z.object({ password: z.boolean(), passwordReset: z.boolean(), github: z.boolean(), google: z.boolean() }),
+              auth: z.object({ password: z.boolean(), passwordReset: z.boolean(), verifyEmail: z.boolean(), github: z.boolean(), google: z.boolean() }),
               signupMode: z.enum(["waitlist", "allowlist"]),
             }),
           },
