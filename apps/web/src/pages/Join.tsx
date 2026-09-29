@@ -54,7 +54,7 @@ export function Join() {
 
   return (
     <section className="auth">
-      <h2>{preview ? `Join ${preview.workspace}` : "Team invitation"}</h2>
+      <h1>{preview ? `Join ${preview.workspace}` : "Team invitation"}</h1>
       {preview && <p className="note">You're invited as {preview.role}. This invitation is for {preview.emailHint}.</p>}
       {preview && !isPending && session && (
         <>

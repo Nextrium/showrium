@@ -46,6 +46,20 @@ app.use("/api/*", async (c, next) => {
   await next();
 });
 
+// Personal data must not be kept by browsers or shared caches: API answers are "no-store" unless a
+// route says otherwise (post images are "private" for a few minutes).
+app.use("/api/*", async (c, next) => {
+  await next();
+  if (c.res.headers.has("Cache-Control")) return;
+  try {
+    c.res.headers.set("Cache-Control", "no-store");
+  } catch {
+    // Some responses have read-only headers: copy, then set.
+    c.res = new Response(c.res.body, c.res);
+    c.res.headers.set("Cache-Control", "no-store");
+  }
+});
+
 // Sign-in attempts: 10 per minute per IP. Other API calls: 120 per minute per IP.
 app.post("/api/auth/*", rateLimit((env) => env.AUTH_LIMITER, "auth"));
 app.use("/api/v1/*", rateLimit((env) => env.API_LIMITER, "api"));

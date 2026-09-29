@@ -97,8 +97,16 @@
   body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-size: 15px; line-height: 1.55; }
   a { color: var(--accent-ink); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* People who ask their device for less motion get none (WCAG 2.3.3). */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  }
   h1, h2 { font-family: var(--font-display); text-wrap: balance; letter-spacing: -0.01em; margin: 0; }
   h3 { margin: 0; font-size: 16px; font-weight: 600; }
+  /* Section titles that are level-2 headings for screen readers but look like small titles. */
+  h2.h3 { font-family: var(--font-sans); font-size: 16px; font-weight: 600; letter-spacing: normal; }
+  /* Links inside running text are underlined, so they don't rely on colour alone (WCAG 1.4.1). */
+  p a:not(.button), li > a:not(.button), .note a { text-decoration: underline; text-underline-offset: 2px; }
   label { display: grid; gap: 6px; font-size: 14px; font-weight: 500; color: var(--ink-2); }
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea, select {
     font: inherit; font-size: 15px; width: 100%; padding: 10px 12px; border-radius: 11px; border: 1px solid var(--line-strong);
@@ -192,7 +200,7 @@
   .footer { border-top: 1px solid var(--line); padding-block: 22px 40px; display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; color: var(--muted); font-size: 14px; }
   .footer nav { display: flex; flex-wrap: wrap; gap: 16px; }
   .auth { width: min(100%, 420px); margin: 48px auto; display: grid; gap: 16px; }
-  .auth h2 { font-size: 26px; }
+  .auth h1, .auth h2 { font-size: 26px; }
   .divider { text-align: center; color: var(--muted); font-size: 13px; }
   .legal { max-width: 720px; padding-block: 32px 64px; }
   .legal h1 { font-size: clamp(30px, 5vw, 40px); }

@@ -1,7 +1,9 @@
+import { SecurityPanel } from "../../components/Security";
+import { YourData } from "../../components/YourData";
 import { ImageSettingsPanel } from "../../components/PostImage";
 import { useState, type FormEvent } from "react";
 import { InvitesCard } from "../../components/InvitesCard";
-import { api, formatDate, timeAgo, useApi } from "../../lib";
+import { api, authClient, formatDate, timeAgo, useApi } from "../../lib";
 import { planLabel, ThemePicker } from "../../shell/AppShell";
 import { Alert, Badge, Button, PageHeader, Panel } from "../../ui/kit";
 
@@ -75,7 +77,7 @@ function ApiKeys({ canManage }: { canManage: boolean }) {
       <div className="table-wrap">
         <table>
           <thead>
-            <tr><th>Name</th><th>Key</th><th>Last used</th><th /></tr>
+            <tr><th>Name</th><th>Key</th><th>Last used</th><th><span className="sr-only">Actions</span></th></tr>
           </thead>
           <tbody>
             {keys.data?.data.map((k) => (
@@ -167,12 +169,13 @@ function AccessGrants() {
 
 export function SettingsPage() {
   const { data: me } = useApi<Me>("/me");
+  const { data: session } = authClient.useSession();
   const canManage = me?.principal.role === "owner" || me?.principal.role === "admin";
   return (
     <>
       <PageHeader
         title="Settings"
-        subtitle="Appearance, images, developer access and workspace details."
+        subtitle="Appearance, security, images, your data and developer access."
         actions={me && <Badge tone={me.workspace.fullAccess ? "info" : "neutral"}>{me.workspace.name} · {planLabel(me.workspace.plan, me.workspace.fullAccess)}</Badge>}
       />
       <div className="grid gap-5 lg:grid-cols-2">
@@ -181,7 +184,9 @@ export function SettingsPage() {
           <ThemePicker />
         </Panel>
         <ApiKeys canManage={canManage} />
+        <SecurityPanel />
         <ImageSettingsPanel canManage={canManage} />
+        {session?.user.email && <YourData canExport={canManage} email={session.user.email} />}
       </div>
       {me?.principal.isPlatformAdmin && (
         <>

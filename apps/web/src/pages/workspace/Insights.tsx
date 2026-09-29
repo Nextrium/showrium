@@ -24,7 +24,7 @@ function Stats() {
   const max = Math.max(1, ...data.perWeek);
   return (
     <section className="card">
-      <h3>How it's going</h3>
+      <h2 className="h3">How it's going</h2>
       <div className="row stats">
         <div><strong>{data.statuses.published ?? 0}</strong><span className="note">published</span></div>
         <div><strong>{(data.statuses.draft ?? 0) + (data.statuses.approved ?? 0)}</strong><span className="note">waiting</span></div>
@@ -91,7 +91,7 @@ function Audience({ onIdea }: { onIdea: () => void }) {
 
   return (
     <section className="card">
-      <h3>What your audience is saying</h3>
+      <h2 className="h3">What your audience is saying</h2>
       <div className="row">
         <button className="button secondary" disabled={busy} onClick={refresh}>{busy ? "Working…" : "Find themes in comments"}</button>
         {insight && <span className="note">From {insight.basedOn} comments · {formatDate(insight.createdAt)}</span>}

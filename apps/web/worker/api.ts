@@ -22,6 +22,7 @@ import { autonomyApi } from "./autonomy-api.js";
 import { businessApi } from "./business-api.js";
 import { materialApi } from "./material-api.js";
 import { imagesApi } from "./images-api.js";
+import { privacyApi } from "./privacy-api.js";
 import { authProviders, signupMode } from "./env.js";
 import { apiError, canManageKeys, requirePrincipal, type AppEnv } from "./principal.js";
 
@@ -439,6 +440,7 @@ api.route("/", autonomyApi);
 api.route("/", businessApi);
 api.route("/", materialApi);
 api.route("/", imagesApi);
+api.route("/", privacyApi);
 
 api.doc31("/openapi.json", {
   openapi: "3.1.0",

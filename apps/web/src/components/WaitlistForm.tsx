@@ -34,7 +34,7 @@ export function WaitlistForm({ id = "waitlist" }: { id?: string }) {
   }
 
   return (
-    <form onSubmit={submit} aria-label="Join the waitlist" className="flex w-full flex-col gap-2">
+    <form onSubmit={submit} aria-label={id === "hero" ? "Join the waitlist" : `Join the waitlist (${id === "footer" ? "end of page" : id})`} className="flex w-full flex-col gap-2">
       <div className="flex w-full flex-col gap-2 sm:flex-row">
         <label htmlFor={`${id}-email`} className="sr-only">
           Email

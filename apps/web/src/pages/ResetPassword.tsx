@@ -21,7 +21,7 @@ export function ForgotPassword({ onBack }: { onBack: () => void }) {
 
   return (
     <section className="auth">
-      <h2>Reset your password</h2>
+      <h1>Reset your password</h1>
       {sent ? (
         <Alert tone="ok">If that email has a Showrium account, a reset link is on its way. It works for one hour. Check your spam folder if it doesn't arrive.</Alert>
       ) : (
@@ -68,7 +68,7 @@ export function ResetPassword() {
   if (!token || params.get("error")) {
     return (
       <section className="auth">
-        <h2>This link doesn't work</h2>
+        <h1>This link doesn't work</h1>
         <p className="note">Reset links work once, for one hour. Ask for a new one from the sign-in page.</p>
         <Button onClick={() => navigate("/signin?forgot=1")}>Get a new link</Button>
       </section>
@@ -76,7 +76,7 @@ export function ResetPassword() {
   }
   return (
     <section className="auth">
-      <h2>Choose a new password</h2>
+      <h1>Choose a new password</h1>
       <form className="form" onSubmit={submit}>
         <label>
           New password (at least 10 characters)

@@ -54,7 +54,7 @@ export function CreatePage() {
   if (personaData && !persona) {
     return (
       <section className="card max-w-xl">
-        <h3>First, your voice</h3>
+        <h2 className="h3">First, your voice</h2>
         <p className="note">Tell Showrium a little about you, so posts sound like you and only go where you already are.</p>
         <Link to="/app/voice" className="button">Set up my voice</Link>
       </section>
@@ -135,7 +135,7 @@ export function CreatePage() {
     <div className="dash">
       <PageHeader title="New post" subtitle="One input becomes a post for each platform you choose, in your voice." />
       <section className="card">
-        <h3>1. What do you want to share?</h3>
+        <h2 className="h3">1. What do you want to share?</h2>
         <div className="tabs small" role="tablist">
           {(["text", "link", "voice", "file"] as const).map((k) => (
             <button key={k} role="tab" aria-selected={input === k} className={`tab${input === k ? " active" : ""}`} onClick={() => setInput(k)}>
@@ -188,7 +188,7 @@ export function CreatePage() {
       </section>
 
       <section className="card">
-        <h3>2. How and where</h3>
+        <h2 className="h3">2. How and where</h2>
         <div className="chips">
           {MODES.map((m) => (
             <label key={m.id} className="check chip-check" title={m.hint}>
@@ -219,7 +219,7 @@ export function CreatePage() {
 
       {drafts.length > 0 && (
         <section className="dash">
-          <h3>Your drafts</h3>
+          <h2 className="h3">Your drafts</h2>
           {drafts.map((d) => (
             <DraftCard key={d.id} draft={d} onChange={(u) => setDrafts(drafts.map((x) => (x.id === u.id ? u : x)))} />
           ))}

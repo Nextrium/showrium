@@ -1,4 +1,5 @@
 import { createAuthClient } from "better-auth/react";
+import { twoFactorClient } from "better-auth/client/plugins";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // showrium.com is the public website; the product runs on app.showrium.com.
@@ -7,7 +8,16 @@ const WEBSITE_HOST = "showrium.com";
 export const isWebsite = window.location.hostname === WEBSITE_HOST;
 export const APP_ORIGIN = isWebsite ? "https://app.showrium.com" : "";
 
-export const authClient = createAuthClient();
+// Two-step sign-in: when a password sign-in needs the code, the sign-in page asks for it.
+export const authClient = createAuthClient({
+  plugins: [
+    twoFactorClient({
+      onTwoFactorRedirect() {
+        window.dispatchEvent(new Event("showrium:two-factor"));
+      },
+    }),
+  ],
+});
 
 // --- Unsaved changes: forms register while they have edits; leaving asks first. ---
 

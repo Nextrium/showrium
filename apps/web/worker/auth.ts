@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { twoFactor } from "better-auth/plugins";
 import { createDb, schema } from "@nextrium/db";
 import { canSignUp, claimInvite, createPersonalOrg, readCookie, recordInviteAcceptedBy, teamInviteAllowsSignUp } from "@nextrium/core";
 import { actionEmail, emailConfigured, sendEmail } from "./email.js";
@@ -27,7 +28,7 @@ export function createAuth(env: Env) {
     trustedOrigins: [env.BETTER_AUTH_URL],
     database: drizzleAdapter(db, {
       provider: "sqlite",
-      schema: { user: schema.user, session: schema.session, account: schema.account, verification: schema.verification },
+      schema: { user: schema.user, session: schema.session, account: schema.account, verification: schema.verification, twoFactor: schema.twoFactor },
     }),
     emailAndPassword: {
       enabled: providers.password,
@@ -90,6 +91,10 @@ export function createAuth(env: Env) {
       accountLinking: { enabled: true, requireLocalEmailVerified: true },
     },
     telemetry: { enabled: false },
+    appName: "Showrium",
+    // Optional two-step sign-in with an authenticator app (plus one-time backup codes).
+    // Wrong codes lock the step for a while (built into the plugin); a trusted device skips it for 30 days.
+    plugins: [twoFactor({ issuer: "Showrium" })],
     databaseHooks: {
       user: {
         create: {

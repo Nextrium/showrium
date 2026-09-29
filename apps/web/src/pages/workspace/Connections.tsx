@@ -56,7 +56,7 @@ export function ConnectionsPage() {
       <PageHeader title="Accounts" subtitle="The social accounts Showrium can post to. Tokens are encrypted, and you can disconnect at any time." />
       {notice && <p className="note" role="status">{notice}</p>}
       <section className="card">
-        <h3>Connected accounts</h3>
+        <h2 className="h3">Connected accounts</h2>
         <p className="note">Showrium posts only what you approve. Tokens are encrypted and you can disconnect at any time.</p>
         <div className="table-wrap">
           <table>
@@ -76,7 +76,7 @@ export function ConnectionsPage() {
       </section>
 
       <section className="card">
-        <h3>Connect an account</h3>
+        <h2 className="h3">Connect an account</h2>
         {available.length === 0 && <p className="note">Connecting accounts isn't set up in this environment yet. Tap-to-post still works.</p>}
         <div className="row">
           {(["x", "linkedin", "tiktok"] as const).filter((p) => available.includes(p)).map((p) => (

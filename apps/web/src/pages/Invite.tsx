@@ -91,7 +91,7 @@ export function Invite() {
 
   return (
     <section className="auth">
-      <h2>{state === "invalid" ? "This invite link doesn't work" : "You're invited to Showrium"}</h2>
+      <h1>{state === "invalid" ? "This invite link doesn't work" : "You're invited to Showrium"}</h1>
       {(state === "checking" || isPending) && state !== "invalid" && <p className="note">Checking your invite…</p>}
 
       {state === "valid" && !isPending && session && (

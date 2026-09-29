@@ -80,7 +80,7 @@ function NavLinks({ path, sections, compact, onNavigate }: { path: string; secti
                   (compact ? (
                     <span className="absolute right-2 top-1.5 h-2 w-2 rounded-full bg-accent" aria-label={`${item.badge} new`} />
                   ) : (
-                    <span className="rounded-full bg-raised px-2 font-mono text-[11.5px] text-ink-2">{item.badge}</span>
+                    <span className="rounded-full bg-raised px-2 font-mono text-[11.5px] text-ink-2"><span className="sr-only">, </span>{item.badge}<span className="sr-only"> new</span></span>
                   ))}
               </Link>
             );
@@ -299,7 +299,7 @@ export function AppShell({ path, children }: { path: string; children: ReactNode
       <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-lg focus:bg-panel focus:px-3 focus:py-2">Skip to content</a>
 
       {/* Tablet rail and desktop sidebar */}
-      <aside className={`sticky top-0 hidden h-dvh shrink-0 border-r border-line bg-sidebar md:block ${collapsed ? "w-[76px]" : "w-[76px] lg:w-64"}`}>
+      <aside aria-label="Main menu" className={`sticky top-0 hidden h-dvh shrink-0 border-r border-line bg-sidebar md:block ${collapsed ? "w-[76px]" : "w-[76px] lg:w-64"}`}>
         <div className="hidden h-full lg:block">
           <SidebarBody path={path} me={me} sections={sections} compact={collapsed} onToggle={toggle} />
         </div>

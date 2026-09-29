@@ -47,6 +47,7 @@ export function StatStrip({ items, active, onPick, label }: { items: { id: strin
             key={s.id}
             role="tab"
             aria-selected={on}
+            aria-label={`${s.label}: ${s.value}`}
             onClick={() => onPick(s.id)}
             className={`relative flex cursor-pointer flex-col items-center gap-1 border-line px-2 py-3.5 transition-colors ${i % 3 ? "border-l" : ""} ${i >= 3 ? "border-t sm:border-t-0" : ""} ${i === 3 ? "sm:border-l" : ""} ${on ? "bg-selected" : "hover:bg-raised"}`}
           >
@@ -118,6 +119,6 @@ export function Split({ list, detail, hasSelection, onBack, backLabel }: { list:
 }
 
 /** The right-hand panel. Scrolls on its own on wide screens. */
-export function DetailPanel({ children }: { children: ReactNode }) {
-  return <aside className="flex min-w-0 flex-col gap-5 rounded-[18px] border border-line bg-panel p-5 sm:p-6 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto">{children}</aside>;
+export function DetailPanel({ children, label = "Details" }: { children: ReactNode; label?: string }) {
+  return <aside aria-label={label} className="flex min-w-0 flex-col gap-5 rounded-[18px] border border-line bg-panel p-5 sm:p-6 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto">{children}</aside>;
 }

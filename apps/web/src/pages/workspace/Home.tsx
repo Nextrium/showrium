@@ -139,7 +139,7 @@ export function AppHome() {
           </div>
         </div>
 
-        <aside className="flex min-w-0 flex-col gap-5">
+        <aside aria-label="At a glance" className="flex min-w-0 flex-col gap-5">
           <Panel title="Waiting for you" id="waiting" className="bg-raised">
             <div className="flex items-baseline gap-2.5">
               <span className="font-display text-[40px] font-semibold leading-none">{waiting.length}</span>

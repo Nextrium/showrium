@@ -99,7 +99,7 @@ function Player({ video, onRevised }: { video: Video; onRevised: (v: Video) => v
   const ext = file?.blob.type.includes("mp4") ? "mp4" : "webm";
   return (
     <section className="card">
-      <h3>{video.timeline.title}</h3>
+      <h2 className="h3">{video.timeline.title}</h2>
       <div className="studio">
         <canvas ref={canvas} width={size.w} height={size.h} className="studio-canvas" aria-label="Video preview" />
         <div className="form">
@@ -162,7 +162,7 @@ export function StudioPage() {
     <div className="dash">
       <PageHeader title="Video" subtitle="Turn a post into a short explainer with captions and a voice-over, made on your device." />
       <section className="card">
-        <h3>Make a video</h3>
+        <h2 className="h3">Make a video</h2>
         <p className="note">Turn a post into a short explainer with captions and an AI voice-over. It's made on your device, so it's quick and free to render.</p>
         <form className="row" onSubmit={create}>
           <label>
@@ -189,7 +189,7 @@ export function StudioPage() {
       </section>
       {open && <Player video={open} onRevised={setOpen} />}
       <section className="card">
-        <h3>Your videos</h3>
+        <h2 className="h3">Your videos</h2>
         <ul className="items">
           {videos.data?.data.map((v) => (
             <li key={v.id}>

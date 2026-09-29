@@ -18,6 +18,8 @@ export const user = sqliteTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: integer("email_verified", { mode: "boolean" }).notNull().default(false),
   image: text("image"),
+  /** Two-step sign-in with an authenticator app is on. */
+  twoFactorEnabled: integer("two_factor_enabled", { mode: "boolean" }).default(false),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -65,6 +67,21 @@ export const verification = sqliteTable("verification", {
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+/** Authenticator-app secrets and backup codes (encrypted by Better Auth), with lockout after wrong codes. */
+export const twoFactor = sqliteTable(
+  "two_factor",
+  {
+    id: text("id").primaryKey(),
+    secret: text("secret").notNull(),
+    backupCodes: text("backup_codes").notNull(),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    verified: integer("verified", { mode: "boolean" }).default(true),
+    failedVerificationCount: integer("failed_verification_count").default(0),
+    lockedUntil: integer("locked_until", { mode: "timestamp_ms" }),
+  },
+  (t) => [index("two_factor_user_idx").on(t.userId), index("two_factor_secret_idx").on(t.secret)],
+);
 
 // ---------------------------------------------------------------------------
 // Tenancy: every business row belongs to an org. All queries filter by org_id.

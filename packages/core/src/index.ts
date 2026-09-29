@@ -15,6 +15,7 @@ export * from "./video.js";
 export * from "./autonomy.js";
 export * from "./automation.js";
 export * from "./images.js";
+export * from "./privacy.js";
 export * from "./chunk.js";
 export * from "./billing.js";
 export * from "./team.js";

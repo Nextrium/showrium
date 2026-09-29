@@ -39,7 +39,7 @@ export function BillingCard({ canManage }: { canManage: boolean }) {
 
   return (
     <section className="card" aria-labelledby="billing-title">
-      <h3 id="billing-title">Plan and billing</h3>
+      <h2 className="h3" id="billing-title">Plan and billing</h2>
       <p className="note">
         You're on <strong>{data.plan}</strong>: autopilot up to "{data.features.autopilot}", audience themes {data.features.insights ? "included" : "not included"}, {data.features.seats} seat{data.features.seats === 1 ? "" : "s"}.
       </p>
@@ -116,7 +116,7 @@ export function TeamCard({ canManage, myEmail }: { canManage: boolean; myEmail: 
 
   return (
     <section className="card" aria-labelledby="team-title">
-      <h3 id="team-title">Team</h3>
+      <h2 className="h3" id="team-title">Team</h2>
       <p className="note">{used} of {data.seats} seat{data.seats === 1 ? "" : "s"} used. Roles: viewers read; editors write; approvers approve and publish; admins manage everything but owners.</p>
       <div className="table-wrap">
         <table>
@@ -177,7 +177,7 @@ export function AuditCard() {
   const last = data.data[data.data.length - 1];
   return (
     <section className="card" aria-labelledby="audit-title">
-      <h3 id="audit-title">Audit log</h3>
+      <h2 className="h3" id="audit-title">Audit log</h2>
       <div className="table-wrap">
         <table>
           <tbody>

@@ -52,7 +52,7 @@ export function InvitesCard() {
 
   return (
     <section className="card" aria-labelledby="invites-title">
-      <h3 id="invites-title">Invites</h3>
+      <h2 className="h3" id="invites-title">Invites</h2>
       <p className="note">Each link works once, for 7 days, with any sign-in email. Visible to Showrium staff only.</p>
       <form className="row" onSubmit={create}>
         <label>
