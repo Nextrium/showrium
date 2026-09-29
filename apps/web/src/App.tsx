@@ -5,6 +5,7 @@ import { Invite } from "./pages/Invite";
 import { Join } from "./pages/Join";
 import { Privacy, Terms } from "./pages/Legal";
 import { SignIn } from "./pages/SignIn";
+import { ResetPassword } from "./pages/ResetPassword";
 import { Workspace } from "./pages/Workspace";
 
 export { Link } from "./ui/Link";
@@ -67,6 +68,7 @@ export function App() {
   const page =
     path === "/signin" ? <SignIn /> :
     path === "/invite" ? <Invite /> :
+    path === "/reset-password" ? <ResetPassword /> :
     path === "/join" ? <Join /> :
     path === "/privacy" ? <Privacy /> :
     path === "/terms" ? <Terms /> :

@@ -9,6 +9,10 @@ export interface Env {
   SITE_URL: string;
   BETTER_AUTH_SECRET: string;
   AUTH_PASSWORD_ENABLED?: string;
+  /** Transactional email (password resets, verification): Brevo API key (secret) and the sender. */
+  BREVO_API_KEY?: string;
+  /** "Name <address>" or an address. Default: Showrium <support@showrium.com>. */
+  EMAIL_FROM?: string;
   /** "waitlist" (nobody can self sign-up) or "allowlist". Anything else means waitlist. */
   SIGNUP_MODE?: string;
   WAITLIST_LIMITER?: RateLimit;
@@ -77,6 +81,8 @@ export function signupMode(env: Env) {
 export function authProviders(env: Env) {
   return {
     password: env.AUTH_PASSWORD_ENABLED === "true",
+    // Password reset needs email; without it, the "Forgot password?" link is hidden.
+    passwordReset: env.AUTH_PASSWORD_ENABLED === "true" && Boolean(env.BREVO_API_KEY),
     github: Boolean(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET),
     google: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
   };

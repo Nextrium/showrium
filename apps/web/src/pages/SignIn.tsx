@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { WaitlistForm } from "../components/WaitlistForm";
+import { ForgotPassword } from "./ResetPassword";
 import { authClient, navigate, useApi, useRedirect } from "../lib";
 
-type Config = { auth: { password: boolean; github: boolean; google: boolean }; signupMode: "waitlist" | "allowlist" };
+type Config = { auth: { password: boolean; passwordReset: boolean; github: boolean; google: boolean }; signupMode: "waitlist" | "allowlist" };
 
 export function SignIn() {
   const { data: config } = useApi<Config>("/config");
@@ -15,9 +16,12 @@ export function SignIn() {
       : null,
   );
   const [busy, setBusy] = useState(false);
+  const [forgot, setForgot] = useState(() => new URLSearchParams(window.location.search).has("forgot"));
+  const [justReset] = useState(() => new URLSearchParams(window.location.search).has("reset"));
 
   useRedirect("/app", Boolean(session));
   if (session) return null;
+  if (forgot) return <ForgotPassword onBack={() => setForgot(false)} />;
 
   const social = async (provider: "github" | "google") => {
     setError(null);
@@ -47,6 +51,7 @@ export function SignIn() {
   return (
     <section className="auth">
       <h2>{mode === "signup" ? "Create your account" : "Sign in to Showrium"}</h2>
+      {justReset && <p className="note" role="status">Your password was changed. Sign in with the new one.</p>}
 
       {auth?.github && (
         <button className="button secondary" onClick={() => social("github")}>
@@ -88,6 +93,11 @@ export function SignIn() {
               {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in"}
             </button>
           </form>
+          {mode === "signin" && auth.passwordReset && (
+            <p className="note">
+              <a href="/signin?forgot=1" onClick={(e) => { e.preventDefault(); setForgot(true); }}>Forgot your password?</a>
+            </p>
+          )}
           <p className="note">
             {mode === "signup" ? "Already have an account? " : "New to Showrium? "}
             <a href="#" onClick={(e) => { e.preventDefault(); setMode(mode === "signup" ? "signin" : "signup"); }}>
