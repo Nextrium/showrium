@@ -12,7 +12,17 @@ import {
   recordAudit,
   revokeApiKey,
 } from "@nextrium/core";
-import { joinWaitlist } from "@nextrium/core";
+import { createInvite, isInviteUsable, isPlatformAdmin, joinWaitlist, listInvites, revokeInvite } from "@nextrium/core";
+import { setCookie } from "hono/cookie";
+import { INVITE_COOKIE } from "./auth.js";
+import { connectionsApi } from "./connections-api.js";
+import { contentApi } from "./content-api.js";
+import { videoApi } from "./video-api.js";
+import { autonomyApi } from "./autonomy-api.js";
+import { businessApi } from "./business-api.js";
+import { materialApi } from "./material-api.js";
+import { imagesApi } from "./images-api.js";
+import { privacyApi } from "./privacy-api.js";
 import { authProviders, signupMode } from "./env.js";
 import { apiError, canManageKeys, requirePrincipal, type AppEnv } from "./principal.js";
 
@@ -56,7 +66,7 @@ api.openapi(
         content: {
           "application/json": {
             schema: z.object({
-              auth: z.object({ password: z.boolean(), github: z.boolean(), google: z.boolean() }),
+              auth: z.object({ password: z.boolean(), passwordReset: z.boolean(), verifyEmail: z.boolean(), github: z.boolean(), google: z.boolean() }),
               signupMode: z.enum(["waitlist", "allowlist"]),
             }),
           },
@@ -107,9 +117,16 @@ api.use("/me", requirePrincipal);
 api.use("/credits/*", requirePrincipal);
 api.use("/api-keys/*", requirePrincipal);
 api.use("/api-keys", requirePrincipal);
+api.use("/admin/*", requirePrincipal);
+
+/** Platform admin = a signed-in user (never an API key) whose verified email is on PLATFORM_ADMIN_EMAILS. */
+function platformAdmin(c: { get: (k: "principal") => import("./principal.js").Principal; env: { PLATFORM_ADMIN_EMAILS?: string } }) {
+  const principal = c.get("principal");
+  return principal.kind === "user" && isPlatformAdmin(principal.email, c.env.PLATFORM_ADMIN_EMAILS) ? principal : null;
+}
 
 const OrgSchema = z
-  .object({ id: z.string(), name: z.string(), slug: z.string(), plan: z.string() })
+  .object({ id: z.string(), name: z.string(), slug: z.string(), plan: z.string(), fullAccess: z.boolean() })
   .openapi("Workspace");
 
 api.openapi(
@@ -123,7 +140,7 @@ api.openapi(
         content: {
           "application/json": {
             schema: z.object({
-              principal: z.object({ kind: z.enum(["user", "api_key"]), role: z.string() }),
+              principal: z.object({ kind: z.enum(["user", "api_key"]), role: z.string(), isPlatformAdmin: z.boolean() }),
               workspace: OrgSchema,
             }),
           },
@@ -136,7 +153,10 @@ api.openapi(
     const principal = c.get("principal");
     const workspace = await getOrg(c.get("db"), principal.orgId);
     if (!workspace) return c.json(apiError("no_workspace", "Workspace not found."), 403);
-    return c.json({ principal: { kind: principal.kind, role: principal.role }, workspace }, 200);
+    return c.json(
+      { principal: { kind: principal.kind, role: principal.role, isPlatformAdmin: Boolean(platformAdmin(c)) }, workspace },
+      200,
+    );
   },
 );
 
@@ -296,12 +316,138 @@ api.openapi(
   },
 );
 
+// --- Invites ------------------------------------------------------------------
+
+const InviteSchema = z
+  .object({
+    id: z.string(),
+    note: z.string().nullable(),
+    status: z.enum(["pending", "accepted", "revoked", "expired"]),
+    expiresAt: z.string(),
+    createdAt: z.string(),
+  })
+  .openapi("Invite");
+
+api.openapi(
+  createRoute({
+    method: "post",
+    path: "/admin/invites",
+    tags: ["Invites"],
+    request: {
+      body: { required: true, content: { "application/json": { schema: z.object({ note: z.string().trim().max(120).optional() }) } } },
+    },
+    responses: {
+      201: {
+        description: "The invite link. It is shown only once and works once, for 7 days.",
+        content: { "application/json": { schema: z.object({ id: z.string(), link: z.string(), expiresAt: z.string() }) } },
+      },
+      ...errors,
+    },
+  }),
+  async (c) => {
+    const admin = platformAdmin(c);
+    if (!admin) return c.json(apiError("forbidden", "Only Showrium staff can create invites."), 403);
+    const created = await createInvite(c.get("db"), { createdByUserId: admin.userId, note: c.req.valid("json").note ?? null });
+    await recordAudit(c.get("db"), { orgId: admin.orgId, actorUserId: admin.userId, action: "invite.created", target: created.id });
+    const link = `${new URL(c.env.BETTER_AUTH_URL).origin}/invite?token=${encodeURIComponent(created.token)}`;
+    return c.json({ id: created.id, link, expiresAt: created.expiresAt.toISOString() }, 201);
+  },
+);
+
+api.openapi(
+  createRoute({
+    method: "get",
+    path: "/admin/invites",
+    tags: ["Invites"],
+    responses: {
+      200: { description: "Recent invites (links are never shown again)", content: { "application/json": { schema: z.object({ data: z.array(InviteSchema) }) } } },
+      ...errors,
+    },
+  }),
+  async (c) => {
+    if (!platformAdmin(c)) return c.json(apiError("forbidden", "Only Showrium staff can see invites."), 403);
+    const now = Date.now();
+    const rows = await listInvites(c.get("db"));
+    return c.json(
+      {
+        data: rows.map((r) => ({
+          id: r.id,
+          note: r.note,
+          status: r.acceptedAt ? ("accepted" as const) : r.revokedAt ? ("revoked" as const) : r.expiresAt.getTime() <= now ? ("expired" as const) : ("pending" as const),
+          expiresAt: r.expiresAt.toISOString(),
+          createdAt: r.createdAt.toISOString(),
+        })),
+      },
+      200,
+    );
+  },
+);
+
+api.openapi(
+  createRoute({
+    method: "delete",
+    path: "/admin/invites/{id}",
+    tags: ["Invites"],
+    request: { params: z.object({ id: z.string() }) },
+    responses: {
+      204: { description: "Revoked" },
+      404: { description: "No pending invite with this ID", content: { "application/json": { schema: ErrorSchema } } },
+      ...errors,
+    },
+  }),
+  async (c) => {
+    const admin = platformAdmin(c);
+    if (!admin) return c.json(apiError("forbidden", "Only Showrium staff can revoke invites."), 403);
+    const { id } = c.req.valid("param");
+    if (!(await revokeInvite(c.get("db"), id))) return c.json(apiError("not_found", "No pending invite with that ID."), 404);
+    await recordAudit(c.get("db"), { orgId: admin.orgId, actorUserId: admin.userId, action: "invite.revoked", target: id });
+    return c.body(null, 204);
+  },
+);
+
+api.openapi(
+  createRoute({
+    method: "post",
+    path: "/invites/accept",
+    tags: ["Invites"],
+    request: { body: { required: true, content: { "application/json": { schema: z.object({ token: z.string().max(100) }) } } } },
+    responses: {
+      200: { description: "Invite is valid; sign in next to use it", content: { "application/json": { schema: z.object({ ok: z.literal(true) }) } } },
+      400: { description: "Invalid, used, revoked or expired invite", content: { "application/json": { schema: ErrorSchema } } },
+    },
+  }),
+  async (c) => {
+    const { token } = c.req.valid("json");
+    if (!(await isInviteUsable(createDb(c.env.DB), token))) {
+      return c.json(apiError("invalid_invite", "This invite link is invalid, already used or expired."), 400);
+    }
+    // Short-lived, only sent to sign-in endpoints, unreadable by page scripts.
+    setCookie(c, INVITE_COOKIE, token, {
+      path: "/api/auth",
+      httpOnly: true,
+      secure: c.env.BETTER_AUTH_URL.startsWith("https://"),
+      sameSite: "Lax",
+      maxAge: 30 * 60,
+    });
+    return c.json({ ok: true as const }, 200);
+  },
+);
+
+api.route("/", contentApi);
+api.route("/", connectionsApi);
+api.route("/", videoApi);
+api.route("/", autonomyApi);
+api.route("/", businessApi);
+api.route("/", materialApi);
+api.route("/", imagesApi);
+api.route("/", privacyApi);
+
 api.doc31("/openapi.json", {
   openapi: "3.1.0",
   info: {
     title: "Showrium API",
     version: "1.0.0",
-    description: "One API for Showrium: workspaces, credits and API keys (more resources arrive each phase).",
+    description: "One API for Showrium: material, posts, publishing, video, ideas and insights, billing, teams and the audit log. AI agents can use the MCP server at /api/mcp with the same API key.",
   },
   servers: [{ url: "/api/v1" }],
 });
