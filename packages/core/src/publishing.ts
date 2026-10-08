@@ -6,7 +6,7 @@ import { hasErrors, X_LONG_SUBSCRIPTIONS, xWeightedLength } from "@nextrium/poli
 import { postCreditTxn, InsufficientCreditsError } from "./credits.js";
 import { decryptJson, encryptJson, pkceChallenge, randomToken } from "./crypto.js";
 import { newId } from "./ids.js";
-import type { ImageStore } from "./images.js";
+import { imagesForPublishing, type ImageStore } from "./images.js";
 import { recordAudit } from "./orgs.js";
 import { getOrgPlan } from "./content.js";
 import { addUsage, CREDITS_PER_X_API_POST, CREDITS_PER_X_API_POST_WITH_LINK, PLAN_LIMITS } from "./plans.js";
@@ -130,37 +130,45 @@ async function freshTokens(deps: PublishDeps, conn: typeof connection.$inferSele
   return tokens;
 }
 
-type SendCache = { bluesky?: { service: string; accessJwt: string; account: Account }; imageNote?: string };
+type SendCache = { bluesky?: { service: string; accessJwt: string; account: Account }; imageNotes?: string[] };
 
-async function sendToPlatform(deps: PublishDeps, conn: typeof connection.$inferSelect, text: string, idempotencyKey: string, replyTo?: ReplyTo, cache: SendCache = {}, image?: ImageUpload | null) {
+async function sendToPlatform(deps: PublishDeps, conn: typeof connection.$inferSelect, text: string, idempotencyKey: string, replyTo?: ReplyTo, cache: SendCache = {}, images: ImageUpload[] = []) {
   const account = { accountId: conn.accountId, handle: conn.handle };
   const key = aad(conn.orgId, conn.platform, conn.accountId);
-  // The image is uploaded first. If that fails (too big, missing permission), the post still goes
-  // out without it, and the reason is kept to show the person. It never marks the account broken.
-  const attach = async <T>(upload: () => Promise<T>): Promise<T | undefined> => {
-    if (!image) return undefined;
-    try {
-      return await upload();
-    } catch (error) {
-      cache.imageNote = error instanceof PlatformError && error.kind !== "auth" ? error.message : `${PLATFORM_NAMES[conn.platform] ?? conn.platform} didn't accept the image. Reconnect the account to allow images, then post again.`;
-      return undefined;
+  // Images are uploaded first, one by one. One that fails (too big, unsupported, missing permission)
+  // is left out, and the reason is kept to show the person; the post still goes out with the rest.
+  // An image problem never marks the account broken.
+  const attachAll = async <T>(upload: (image: ImageUpload) => Promise<T>): Promise<{ value: T; image: ImageUpload }[]> => {
+    const out: { value: T; image: ImageUpload }[] = [];
+    for (const [i, image] of images.entries()) {
+      if (conn.platform === "linkedin" && !["image/jpeg", "image/png", "image/gif"].includes(image.mime)) {
+        (cache.imageNotes ??= []).push(`Image ${i + 1}: LinkedIn takes JPG, PNG or GIF only.`);
+        continue;
+      }
+      try {
+        out.push({ value: await upload(image), image });
+      } catch (error) {
+        const why = error instanceof PlatformError && error.kind !== "auth" ? error.message : `${PLATFORM_NAMES[conn.platform] ?? conn.platform} didn't accept it. Reconnect the account to allow images, then post again.`;
+        (cache.imageNotes ??= []).push(`Image ${i + 1}: ${why}`);
+      }
     }
+    return out;
   };
   switch (conn.platform) {
     case "x": {
       const tokens = await freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, key));
-      const mediaId = await attach(() => x.uploadImage(tokens, image!, deps.fetch));
-      return x.publish(tokens, account, text, deps.fetch, replyTo, mediaId);
+      const media = await attachAll((image) => x.uploadImage(tokens, image, deps.fetch));
+      return x.publish(tokens, account, text, deps.fetch, replyTo, media.map((m) => m.value));
     }
     case "linkedin": {
       const tokens = await freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, key));
-      const urn = await attach(() => linkedin.uploadImage(tokens, account, image!, deps.fetch));
-      return linkedin.publish(tokens, account, text, deps.fetch, urn ? { urn, alt: image!.alt } : undefined);
+      const media = await attachAll((image) => linkedin.uploadImage(tokens, account, image, deps.fetch));
+      return linkedin.publish(tokens, account, text, deps.fetch, media.map((m) => ({ urn: m.value, alt: m.image.alt })));
     }
     case "mastodon": {
       const { tokens } = await decryptJson<OAuthSecret>(deps.key, conn.secret, key);
-      const mediaId = await attach(() => mastodon.uploadImage(conn.meta.instance!, tokens, image!, deps.fetch));
-      return mastodon.publish(conn.meta.instance!, tokens, text, idempotencyKey, deps.fetch, replyTo, mediaId);
+      const media = await attachAll((image) => mastodon.uploadImage(conn.meta.instance!, tokens, image, deps.fetch));
+      return mastodon.publish(conn.meta.instance!, tokens, text, idempotencyKey, deps.fetch, replyTo, media.map((m) => m.value));
     }
     case "bluesky": {
       // One session per publish, reused across a thread's parts.
@@ -171,8 +179,8 @@ async function sendToPlatform(deps: PublishDeps, conn: typeof connection.$inferS
         cache.bluesky = { service, accessJwt: session.accessJwt, account: session.account };
       }
       const b = cache.bluesky;
-      const blob = await attach(() => bluesky.uploadImage(b.service, b.accessJwt, image!, deps.fetch));
-      return bluesky.publish(b.service, b.accessJwt, b.account, text, deps.fetch, replyTo, blob ? { blob, alt: image!.alt, width: image!.width, height: image!.height } : undefined);
+      const media = await attachAll((image) => bluesky.uploadImage(b.service, b.accessJwt, image, deps.fetch));
+      return bluesky.publish(b.service, b.accessJwt, b.account, text, deps.fetch, replyTo, media.map((m) => ({ blob: m.value, alt: m.image.alt, width: m.image.width, height: m.image.height })));
     }
     default:
       throw new PublishError("not_supported", "Publishing to this platform arrives with video support.");
@@ -180,17 +188,6 @@ async function sendToPlatform(deps: PublishDeps, conn: typeof connection.$inferS
 }
 
 const PLATFORM_NAMES: Record<string, string> = { x: "X", linkedin: "LinkedIn", mastodon: "Mastodon", bluesky: "Bluesky" };
-
-/** The post's image, ready to upload (null when it has none or storage isn't available). */
-async function loadImage(deps: PublishDeps, image: typeof draft.$inferSelect.image): Promise<ImageUpload | null> {
-  if (!image || !deps.media) return null;
-  const obj = await deps.media.get(image.key);
-  if (!obj) return null;
-  const bytes = new Uint8Array(await obj.arrayBuffer());
-  // Say it's AI-made in the alt text too (platform labels are applied where they exist).
-  const alt = image.aiGenerated && !/AI-generated/i.test(image.alt) ? `${image.alt} (AI-generated image)` : image.alt;
-  return { bytes, mime: image.mime, alt, width: image.width, height: image.height };
-}
 
 /** Before a long X post: confirm the account still has a subscription that allows it (one read). */
 async function confirmXLong(deps: PublishDeps, conn: typeof connection.$inferSelect) {
@@ -256,19 +253,19 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   }
 
   const cache: SendCache = {};
-  const image = await loadImage(deps, d.image).catch(() => null);
+  const images = deps.media ? await imagesForPublishing(db, deps.media, input.orgId, d).catch(() => []) : [];
   try {
     if (conn.platform === "x" && !isThread && xWeightedLength(d.text) > 280) await confirmXLong(deps, conn);
     let result: { externalId: string; url: string | null };
     if (!isThread) {
-      result = await sendToPlatform(deps, conn, d.text, d.id, undefined, cache, image);
+      result = await sendToPlatform(deps, conn, d.text, d.id, undefined, cache, images);
     } else {
       for (let i = startAt; i < parts.length; i++) {
         const prev = posted[i - 1];
         const root = posted[0];
         const replyTo = prev && root ? { id: prev.id, cid: prev.cid, rootId: root.id, rootCid: root.cid } : undefined;
-        // The image goes on the first part only.
-        const r = await sendToPlatform(deps, conn, parts[i]!, `${d.id}:${i}`, replyTo, cache, i === 0 ? image : null);
+        // Images go on the first part only.
+        const r = await sendToPlatform(deps, conn, parts[i]!, `${d.id}:${i}`, replyTo, cache, i === 0 ? images : []);
         posted = [...posted, { id: r.externalId, cid: r.cid, url: r.url }];
         await db.update(draft).set({ postedParts: posted, updatedAt: new Date() }).where(eq(draft.id, d.id));
       }
@@ -276,9 +273,9 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     }
     await db
       .update(draft)
-      .set({ status: "published", publishedAt: new Date(), externalPostId: result.externalId, externalUrl: result.url, publishMethod: "api", lastError: cache.imageNote ? `Posted without the image: ${cache.imageNote}` : null, updatedAt: new Date() })
+      .set({ status: "published", publishedAt: new Date(), externalPostId: result.externalId, externalUrl: result.url, publishMethod: "api", lastError: cache.imageNotes?.length ? `Posted, but not every image went with it. ${cache.imageNotes.join(" ")}` : null, updatedAt: new Date() })
       .where(eq(draft.id, d.id));
-    await recordAudit(db, { orgId: input.orgId, actorUserId: input.actorUserId ?? null, action: "draft.published", target: d.id, meta: { platform: conn.platform, parts: parts.length, image: image ? (cache.imageNote ? "dropped" : "attached") : "none" } });
+    await recordAudit(db, { orgId: input.orgId, actorUserId: input.actorUserId ?? null, action: "draft.published", target: d.id, meta: { platform: conn.platform, parts: parts.length, images: images.length, imagesLeftOut: cache.imageNotes?.length ?? 0 } });
     return { status: "published" as const, url: result.url };
   } catch (error) {
     const base = error instanceof PlatformError || error instanceof PublishError ? error.message : "Publishing failed unexpectedly.";

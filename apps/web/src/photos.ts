@@ -29,6 +29,10 @@ async function drawToJpeg(source: ImageBitmap): Promise<Blob> {
   canvas.height = Math.round(source.height * scale);
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("no canvas");
+  // JPEG has no transparency: see-through areas become white, not black.
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingQuality = "high";
   ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
   return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("encode failed"))), "image/jpeg", 0.88));
 }
@@ -62,4 +66,18 @@ export async function preparePhoto(file: File): Promise<File> {
     }
   }
   return file;
+}
+
+/**
+ * For post images: every platform takes JPG and PNG, but LinkedIn doesn't take WebP. So a WebP
+ * (or a photo that needed converting) becomes a JPEG; JPG, PNG and GIF are kept as they are.
+ */
+export async function prepareForPosting(file: File): Promise<File> {
+  const prepared = await preparePhoto(file);
+  if (!/^image\/webp$/i.test(prepared.type)) return prepared;
+  try {
+    return new File([await drawToJpeg(await createImageBitmap(prepared))], jpegName(prepared.name), { type: "image/jpeg" });
+  } catch {
+    return prepared;
+  }
 }

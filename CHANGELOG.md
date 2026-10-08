@@ -14,10 +14,12 @@ The first release of Showrium to app.showrium.com, for invited testers.
   - a daily question matched to your work
 - **Ideas and Posts:** a list with a detail panel, and every post shows where it came from.
 - **Threads and long posts:** "Write as a thread" for X, Bluesky, Threads and Mastodon, with each part editable. Long posts on X for Premium accounts.
-- **One image per post:**
-  - your photo, the link's own image, a page screenshot, a designed card, or an AI image (always labelled)
-  - in the shape each platform shows best
+- **Up to 4 images per post:**
+  - your photos, the link's own image, a page screenshot, a designed card, or an AI image (always labelled)
+  - shared by every post written from the same material, or different images for one post
+  - cropped to the shape each platform shows best, from the original at full quality (the original is kept)
   - with a description for screen readers
+  - "Post it myself" brings them along: share with images on phones, or copy and paste each image
 - **Publishing:** post directly to Bluesky, Mastodon, LinkedIn and X (threads and images included), or tap-to-post anywhere else. Schedule posts, or approve a batch in one tap.
 - **Automation you control:**
   - switches for each platform (write drafts, schedule when approved, approve for me)

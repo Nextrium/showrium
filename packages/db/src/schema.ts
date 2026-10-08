@@ -360,12 +360,41 @@ export const draft = sqliteTable(
     parts: text("parts", { mode: "json" }).$type<string[] | null>(),
     /** Thread parts already posted (in order), so a retry continues instead of posting twice. */
     postedParts: text("posted_parts", { mode: "json" }).$type<{ id: string; cid?: string | undefined; url: string | null }[] | null>(),
-    /** The post's one image (Sprint 6), stored privately in R2. */
+    /** Sprint 6's single image. Superseded by `post_image` (copied there by migration 0017); kept for older rows. */
     image: text("image", { mode: "json" }).$type<PostImage | null>(),
+    /** The post uses its own images instead of the ones shared by every post from the same material. */
+    ownImages: integer("own_images", { mode: "boolean" }).notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [index("draft_org_status_idx").on(t.orgId, t.status, t.createdAt), index("draft_due_idx").on(t.status, t.scheduledAt)],
+);
+
+/** One stored version of an image (the original, or a crop to a shape). */
+export type ImageFile = { key: string; mime: string; bytes: number; width?: number | undefined; height?: number | undefined };
+
+/**
+ * Up to 4 images, in order. Shared by every post written from the same material (brief), or owned
+ * by one post (draft_id set) when it opts out. Each keeps its original plus a crop per shape.
+ */
+export const postImage = sqliteTable(
+  "post_image",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    briefId: text("brief_id").references(() => brief.id, { onDelete: "cascade" }),
+    draftId: text("draft_id").references(() => draft.id, { onDelete: "cascade" }),
+    position: integer("position").notNull().default(0),
+    source: text("source", { enum: IMAGE_SOURCES }).notNull(),
+    alt: text("alt").notNull().default(""),
+    original: text("original", { mode: "json" }).$type<ImageFile>().notNull(),
+    /** Crops made from the original, by shape: { landscape: {...}, square: {...} }. */
+    variants: text("variants", { mode: "json" }).$type<Partial<Record<Exclude<ImageSize, "none">, ImageFile>>>().notNull().default(sql`'{}'`),
+    aiGenerated: integer("ai_generated", { mode: "boolean" }).notNull().default(false),
+    sourceUrl: text("source_url"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("post_image_brief_idx").on(t.orgId, t.briefId, t.position), index("post_image_draft_idx").on(t.orgId, t.draftId, t.position)],
 );
 
 /** Posts generated per workspace per calendar month (UTC), for plan quotas. */

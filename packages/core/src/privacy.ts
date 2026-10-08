@@ -13,6 +13,7 @@ import {
   oauthState,
   org,
   persona,
+  postImage,
   source,
   subscription,
   user,
@@ -71,10 +72,15 @@ export async function exportWorkspace(db: Db, orgId: string, userId: string) {
     ideas: await db.select({ id: idea.id, reason: idea.reason, status: idea.status, createdAt: idea.createdAt }).from(idea).where(eq(idea.orgId, orgId)),
     posts: (
       await db
-        .select({ id: draft.id, platform: draft.platform, status: draft.status, text: draft.text, parts: draft.parts, image: draft.image, scheduledAt: draft.scheduledAt, publishedAt: draft.publishedAt, externalUrl: draft.externalUrl, createdAt: draft.createdAt })
+        .select({ id: draft.id, briefId: draft.briefId, platform: draft.platform, status: draft.status, text: draft.text, parts: draft.parts, ownImages: draft.ownImages, scheduledAt: draft.scheduledAt, publishedAt: draft.publishedAt, externalUrl: draft.externalUrl, createdAt: draft.createdAt })
         .from(draft)
         .where(eq(draft.orgId, orgId))
-    ).map((d) => ({ ...d, image: d.image ? { source: d.image.source, alt: d.image.alt, aiGenerated: d.image.aiGenerated } : null })),
+    ),
+    // Image descriptions and where each came from (the files themselves stay in the app).
+    images: await db
+      .select({ id: postImage.id, sharedByBrief: postImage.briefId, ownedByPost: postImage.draftId, position: postImage.position, source: postImage.source, alt: postImage.alt, aiGenerated: postImage.aiGenerated, sourceUrl: postImage.sourceUrl, createdAt: postImage.createdAt })
+      .from(postImage)
+      .where(eq(postImage.orgId, orgId)),
     connectedAccounts: await db.select({ platform: connection.platform, handle: connection.handle, status: connection.status, createdAt: connection.createdAt }).from(connection).where(eq(connection.orgId, orgId)),
     activity: await db.select({ action: auditEvent.action, target: auditEvent.target, createdAt: auditEvent.createdAt }).from(auditEvent).where(eq(auditEvent.orgId, orgId)),
   };

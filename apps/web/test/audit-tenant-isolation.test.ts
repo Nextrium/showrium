@@ -71,7 +71,9 @@ describe("release audit: tenant isolation on every route with an id", () => {
     await a.call("PATCH", `/drafts/${draftId}`, { status: "approved" });
     const form = new FormData();
     form.set("file", new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 4, 176, 0, 0, 2, 163])], "a.png", { type: "image/png" }));
-    expect((await a.call("PUT", `/drafts/${draftId}/image`, undefined, form)).status).toBe(200);
+    const added = await a.call("POST", `/drafts/${draftId}/images`, undefined, form);
+    expect(added.status).toBe(201);
+    const imageId = ((await added.json()) as { image: { id: string } }).image.id;
     const sourceId = `src_${crypto.randomUUID()}`;
     await env.DB.prepare("INSERT INTO source (id, org_id, kind, key) VALUES (?, ?, 'rss', 'https://iso.example/feed')").bind(sourceId, a.orgId).run();
     const ideaCtx = `ctx_${crypto.randomUUID()}`;
@@ -89,16 +91,18 @@ describe("release audit: tenant isolation on every route with an id", () => {
     const memberId = (await env.DB.prepare("SELECT id FROM membership WHERE org_id = ?").bind(a.orgId).first<{ id: string }>())?.id ?? "";
     const insightId = `ins_${crypto.randomUUID()}`;
     await env.DB.prepare("INSERT INTO insight (id, org_id, themes, based_on, model) VALUES (?, ?, ?, 3, 'test')").bind(insightId, a.orgId, JSON.stringify([{ label: "L", kind: "question", count: 3, examples: [], suggestion: "S" }])).run();
-    const ids = [draftId, ctx.id, sourceId, ideaId, connId, videoId, apiKeyId, inviteId, memberId, insightId, a.orgId].filter(Boolean);
+    const ids = [draftId, imageId, ctx.id, sourceId, ideaId, connId, videoId, apiKeyId, inviteId, memberId, insightId, a.orgId].filter(Boolean);
     // Controls: the ids are real (A can use them), so B's refusals below mean something.
-    expect(ids).toHaveLength(11);
+    expect(ids).toHaveLength(12);
     expect((await a.call("GET", `/drafts/${draftId}`)).status).toBe(200);
-    expect((await a.call("GET", `/drafts/${draftId}/image`)).status).toBe(200);
+    expect((await a.call("GET", `/images/${imageId}`)).status).toBe(200);
+    expect((await a.call("GET", `/drafts/${draftId}/images`)).status).toBe(200);
     expect((await a.call("GET", `/ideas/${ideaId}`)).status).toBe(200);
     expect((await a.call("GET", `/videos/${videoId}`)).status).toBe(200);
 
     const snapshot = async () => ({
-      drafts: (await env.DB.prepare("SELECT id, status, text, image IS NOT NULL AS img FROM draft WHERE org_id = ? ORDER BY id").bind(a.orgId).all()).results,
+      drafts: (await env.DB.prepare("SELECT id, status, text, own_images FROM draft WHERE org_id = ? ORDER BY id").bind(a.orgId).all()).results,
+      images: (await env.DB.prepare("SELECT id, brief_id, draft_id, position, alt, original, variants FROM post_image WHERE org_id = ? ORDER BY id").bind(a.orgId).all()).results,
       sources: (await env.DB.prepare("SELECT id FROM source WHERE org_id = ?").bind(a.orgId).all()).results,
       ideas: (await env.DB.prepare("SELECT id, status FROM idea WHERE org_id = ?").bind(a.orgId).all()).results,
       conns: (await env.DB.prepare("SELECT id, status FROM connection WHERE org_id = ?").bind(a.orgId).all()).results,
@@ -119,7 +123,15 @@ describe("release audit: tenant isolation on every route with an id", () => {
         routes.push({ method: method.toUpperCase(), path, body: sample(op.requestBody?.content?.["application/json"]?.schema, defs) });
       }
     }
-    routes.push({ method: "GET", path: "/drafts/{id}/image" }, { method: "PUT", path: "/drafts/{id}/image" }, { method: "POST", path: "/videos/{id}/tiktok-inbox" });
+    // Plain (form upload or file) routes that aren't in the documented list.
+    const FORM = ["POST /drafts/{id}/images", "PUT /images/{id}/variants/landscape"];
+    routes.push(
+      { method: "GET", path: "/images/{id}" },
+      { method: "POST", path: "/drafts/{id}/images" },
+      { method: "PUT", path: "/images/{id}/variants/landscape" },
+      { method: "DELETE", path: "/images/{id}/variants/landscape" },
+      { method: "POST", path: "/videos/{id}/tiktok-inbox" },
+    );
     expect(routes.length).toBeGreaterThan(30);
 
     const leaks: string[] = [];
@@ -127,7 +139,7 @@ describe("release audit: tenant isolation on every route with an id", () => {
     for (const r of routes) {
       for (const id of ids) {
         const path = r.path.replace(/\{index\}/g, "0").replace(/\{platform\}/g, "bluesky").replace(/\{org\}/g, a.orgId).replace(/\{[a-zA-Z]+\}/g, encodeURIComponent(id));
-        const res = r.method === "PUT" && r.path === "/drafts/{id}/image" ? await b.call("PUT", path, undefined, form) : await b.call(r.method, path, r.method === "GET" || r.method === "DELETE" ? undefined : r.body ?? {});
+        const res = FORM.includes(`${r.method} ${r.path}`) ? await b.call(r.method, path, undefined, form) : await b.call(r.method, path, r.method === "GET" || r.method === "DELETE" ? undefined : r.body ?? {});
         calls++;
         // Starting OAuth for a platform isn't about A's data (it redirects B to connect B's own account).
         if (res.status < 300 && !(r.path.endsWith("/start"))) leaks.push(`${r.method} ${path} → ${res.status}`);

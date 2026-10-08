@@ -18,6 +18,8 @@ import {
   ingestUrl,
   listContextItems,
   listDrafts,
+  imagesForDrafts,
+  type ImageRow,
   autoScheduleApproved,
   draftSources,
   getDraft,
@@ -36,7 +38,7 @@ import {
 } from "@nextrium/core";
 import { PLATFORM_RULES } from "@nextrium/policy";
 import { aiProviders } from "./ai.js";
-import { findImagesLater } from "./images-api.js";
+import { ImageSummary, findImagesLater, toImageSummary } from "./images-api.js";
 import { apiError, requirePrincipal, type AppEnv } from "./principal.js";
 
 export const contentApi = new OpenAPIHono<AppEnv>({
@@ -307,10 +309,10 @@ const DraftSchema = z
     /** A thread's parts in order (null for a single post), and how many have been posted. */
     parts: z.array(z.string()).nullable(),
     partsPosted: z.number(),
-    /** The post's image (where it came from and its description; the file itself is at /drafts/{id}/image). */
-    image: z
-      .object({ source: z.string(), alt: z.string(), mime: z.string(), bytes: z.number(), width: z.number().optional(), height: z.number().optional(), aiGenerated: z.boolean(), sourceUrl: z.string().optional() })
-      .nullable(),
+    /** The post's images, in order (up to 4). The files are at /images/{id}. */
+    images: z.array(ImageSummary),
+    /** True when the post has its own images; false when it shares those of its material with the other posts. */
+    ownImages: z.boolean(),
     // Where the post came from (the material it was written from). Included on reads.
     source: z
       .object({ mode: z.string(), kind: z.string().nullable(), title: z.string().nullable(), url: z.string().nullable(), contextItemId: z.string().nullable() })
@@ -319,7 +321,7 @@ const DraftSchema = z
   })
   .openapi("Draft");
 type DraftRow = Awaited<ReturnType<typeof listDrafts>>[number];
-export const toDraft = (d: DraftRow) => ({
+export const toDraft = (d: DraftRow, images: ImageRow[] = []) => ({
   id: d.id,
   briefId: d.briefId,
   platform: d.platform,
@@ -333,8 +335,15 @@ export const toDraft = (d: DraftRow) => ({
   createdAt: d.createdAt.toISOString(),
   parts: d.parts ?? null,
   partsPosted: d.postedParts?.length ?? 0,
-  image: d.image ? (({ key: _key, ...rest }) => rest)(d.image) : null,
+  images: images.map(toImageSummary),
+  ownImages: d.ownImages || !d.briefId,
 });
+
+/** Drafts with their images (two extra queries for any number of posts). */
+export async function draftsWithImages(db: Parameters<typeof imagesForDrafts>[0], orgId: string, rows: DraftRow[]) {
+  const images = await imagesForDrafts(db, orgId, rows);
+  return rows.map((d) => toDraft(d, images.get(d.id) ?? []));
+}
 
 contentApi.openapi(
   createRoute({
@@ -358,7 +367,7 @@ contentApi.openapi(
     try {
       const out = await compose(c.get("db"), providers, { orgId: c.get("principal").orgId, ...input });
       findImagesLater(c, c.get("db"), c.get("principal").orgId, out.briefId);
-      return c.json({ ...out, drafts: out.drafts.map(toDraft) }, 201);
+      return c.json({ ...out, drafts: out.drafts.map((d) => toDraft(d)) }, 201);
     } catch (error) {
       if (error instanceof ComposeError) {
         const status = error.code === "quota_exceeded" ? 402 : error.code === "persona_required" ? 409 : error.code === "ai_unavailable" ? 503 : error.code === "context_not_found" ? 404 : 400;
@@ -384,7 +393,8 @@ contentApi.openapi(
     const { orgId } = c.get("principal");
     const rows = await listDrafts(c.get("db"), orgId, { ...(status ? { status } : {}), ...(briefId ? { briefId } : {}) });
     const sources = await draftSources(c.get("db"), orgId, rows.map((d) => d.briefId));
-    return c.json({ data: rows.map((d) => ({ ...toDraft(d), source: d.briefId ? sources.get(d.briefId) ?? null : null })) }, 200);
+    const out = await draftsWithImages(c.get("db"), orgId, rows);
+    return c.json({ data: out.map((d) => ({ ...d, source: d.briefId ? sources.get(d.briefId) ?? null : null })) }, 200);
   },
 );
 
@@ -401,7 +411,8 @@ contentApi.openapi(
     const d = await getDraft(c.get("db"), orgId, c.req.valid("param").id);
     if (!d) return c.json(apiError("not_found", "No such post in this workspace."), 404);
     const sources = await draftSources(c.get("db"), orgId, [d.briefId]);
-    return c.json({ draft: { ...toDraft(d), source: d.briefId ? sources.get(d.briefId) ?? null : null } }, 200);
+    const [out] = await draftsWithImages(c.get("db"), orgId, [d]);
+    return c.json({ draft: { ...out!, source: d.briefId ? sources.get(d.briefId) ?? null : null } }, 200);
   },
 );
 
@@ -434,7 +445,7 @@ contentApi.openapi(
         }
         await recordAudit(c.get("db"), { orgId: principal.orgId, actorUserId: principal.kind === "user" ? principal.userId : null, actorApiKeyId: principal.kind === "api_key" ? principal.apiKeyId : null, action: "draft.approved", target: updated.id });
       }
-      return c.json({ draft: toDraft(updated) }, 200);
+      return c.json({ draft: (await draftsWithImages(c.get("db"), principal.orgId, [updated]))[0]! }, 200);
     } catch (error) {
       if (error instanceof DraftStateError) return c.json(apiError("invalid_state", error.message), 409);
       throw error;

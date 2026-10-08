@@ -7970,16 +7970,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/drafts/{id}/image/link": {
+    "/drafts/{id}/images": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        post: {
+        get: {
             parameters: {
                 query?: never;
                 header?: never;
@@ -7996,10 +7994,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": {
-                            url: string;
-                            expiresAt: string;
-                        };
+                        "application/json": components["schemas"]["PostImageSet"];
                     };
                 };
                 /** @description Invalid */
@@ -8074,13 +8069,15 @@ export interface paths {
                 };
             };
         };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/drafts/{id}/image/find": {
+    "/drafts/{id}/images/find": {
         parameters: {
             query?: never;
             header?: never;
@@ -8108,7 +8105,7 @@ export interface paths {
             };
             responses: {
                 /** @description OK */
-                200: {
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -8230,7 +8227,7 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Daily limit */
+                /** @description Limit */
                 429: {
                     headers: {
                         [name: string]: unknown;
@@ -8252,7 +8249,120 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/drafts/{id}/image": {
+    "/drafts/{id}/images/own": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        own: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PostImageSet"];
+                    };
+                };
+                /** @description Invalid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not signed in */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not allowed */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/images/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -8366,7 +8476,8 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        alt: string;
+                        alt?: string;
+                        position?: number;
                     };
                 };
             };
@@ -8454,6 +8565,118 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/images/{id}/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: {
+                    size?: "original" | "square" | "portrait" | "landscape";
+                };
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            url: string;
+                            expiresAt: string;
+                        };
+                    };
+                };
+                /** @description Invalid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not signed in */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not allowed */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/account/delete": {
@@ -8632,16 +8855,8 @@ export interface components {
             createdAt: string;
             parts: string[] | null;
             partsPosted: number;
-            image: {
-                source: string;
-                alt: string;
-                mime: string;
-                bytes: number;
-                width?: number;
-                height?: number;
-                aiGenerated: boolean;
-                sourceUrl?: string;
-            } | null;
+            images: components["schemas"]["PostImage"][];
+            ownImages: boolean;
             source?: {
                 mode: string;
                 kind: string | null;
@@ -8649,6 +8864,41 @@ export interface components {
                 url: string | null;
                 contextItemId: string | null;
             } | null;
+        };
+        PostImage: {
+            id: string;
+            position: number;
+            source: string;
+            alt: string;
+            aiGenerated: boolean;
+            sourceUrl: string | null;
+            shared: boolean;
+            original: {
+                mime: string;
+                bytes: number;
+                width?: number;
+                height?: number;
+            };
+            variants: {
+                square?: {
+                    mime: string;
+                    bytes: number;
+                    width?: number;
+                    height?: number;
+                };
+                portrait?: {
+                    mime: string;
+                    bytes: number;
+                    width?: number;
+                    height?: number;
+                };
+                landscape?: {
+                    mime: string;
+                    bytes: number;
+                    width?: number;
+                    height?: number;
+                };
+            };
         };
         Connection: {
             id: string;
@@ -8833,15 +9083,10 @@ export interface components {
             auto: boolean;
             allowAi: boolean;
         };
-        PostImage: {
-            source: string;
-            alt: string;
-            mime: string;
-            bytes: number;
-            width?: number;
-            height?: number;
-            aiGenerated: boolean;
-            sourceUrl?: string;
+        PostImageSet: {
+            own: boolean;
+            sharedWith: number;
+            images: components["schemas"]["PostImage"][];
         };
     };
     responses: never;

@@ -120,6 +120,13 @@
       "when": 1790659684677,
       "tag": "0016_quiet_dagger",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1791479699157,
+      "tag": "0017_even_rumiko_fujikawa",
+      "breakpoints": true
     }
   ]
 }

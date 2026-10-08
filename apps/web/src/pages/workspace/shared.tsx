@@ -17,8 +17,21 @@ export type Draft = {
   createdAt: string;
   parts?: string[] | null;
   partsPosted?: number;
-  image?: { source: string; alt: string; mime: string; bytes: number; width?: number; height?: number; aiGenerated: boolean; sourceUrl?: string } | null;
+  images: DraftImage[];
+  ownImages: boolean;
   source?: { mode: string; kind: string | null; title: string | null; url: string | null; contextItemId: string | null } | null;
+};
+type ImageFileInfo = { mime: string; bytes: number; width?: number; height?: number };
+export type DraftImage = {
+  id: string;
+  position: number;
+  source: string;
+  alt: string;
+  aiGenerated: boolean;
+  sourceUrl: string | null;
+  shared: boolean;
+  original: ImageFileInfo;
+  variants: Partial<Record<"square" | "portrait" | "landscape", ImageFileInfo>>;
 };
 export type Persona = {
   displayName: string;

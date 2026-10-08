@@ -297,7 +297,7 @@ function PostDetail({ id, onSelect }: { id: string; onSelect: (id: string) => vo
       </section>
 
       <section className="flex flex-col gap-2">
-        <SectionLabel>Image</SectionLabel>
+        <SectionLabel>Images</SectionLabel>
         <PostImagePanel key={draft.id} draft={draft} />
       </section>
 

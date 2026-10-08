@@ -1,9 +1,10 @@
-// Sprint 6: one image per post. Sources, in order: the person's own photo → the link's own preview
+// Sprint 6: images for posts (up to 4, shared by the posts from the same material). Sources, in order: the person's own photo → the link's own preview
 // image → a screenshot of the page (when Browser Rendering is set up) → an AI image (when allowed,
 // always labelled). Designed cards and crops to the preferred size are made in the browser and
 // uploaded like a photo. Images are private in R2 and served only through the app.
-import { and, eq, gte, inArray, sql } from "drizzle-orm";
-import { brief, contextItem, draft, imageSetting, type Db, type ImageSize, type ImageSource, type Platform, type PostImage } from "@nextrium/db";
+import { and, asc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import { brief, contextItem, draft, imageSetting, postImage, type Db, type ImageFile, type ImageSize, type ImageSource, type Platform } from "@nextrium/db";
+import { chunkRows } from "./chunk.js";
 import { getOrgPlan } from "./content.js";
 import { newId } from "./ids.js";
 import { PLAN_LIMITS } from "./plans.js";
@@ -98,69 +99,248 @@ export function imageSize(b: Uint8Array): { width: number; height: number } | nu
   return null;
 }
 
-export async function getDraftImage(db: Db, orgId: string, draftId: string) {
-  const [row] = await db.select({ image: draft.image, status: draft.status }).from(draft).where(and(eq(draft.orgId, orgId), eq(draft.id, draftId)));
-  return row ?? null;
+// --- Image sets: up to 4 per material, shared by its posts --------------------------------------------
+
+export const MAX_IMAGES = 4;
+export type ImageRow = typeof postImage.$inferSelect;
+type DraftRef = { id: string; briefId: string | null; ownImages: boolean; status: string; platform: Platform; text: string };
+const LOCKED = ["published", "publishing"];
+
+async function draftRef(db: Db, orgId: string, draftId: string): Promise<DraftRef | null> {
+  const [d] = await db
+    .select({ id: draft.id, briefId: draft.briefId, ownImages: draft.ownImages, status: draft.status, platform: draft.platform, text: draft.text })
+    .from(draft)
+    .where(and(eq(draft.orgId, orgId), eq(draft.id, draftId)));
+  return d ?? null;
 }
 
-/**
- * Stores an image for a post (replacing any earlier one). The type is checked from the bytes;
- * published posts can't change their image.
- */
-export async function storeDraftImage(
+/** Posts without a brief (rare) always keep their own images. */
+const usesOwn = (d: Pick<DraftRef, "ownImages" | "briefId">) => d.ownImages || !d.briefId;
+
+/** The images a post uses, in order: its own, or the ones shared by every post from its material. */
+export async function imageSetFor(db: Db, orgId: string, d: Pick<DraftRef, "id" | "briefId" | "ownImages">): Promise<ImageRow[]> {
+  const where = usesOwn(d)
+    ? and(eq(postImage.orgId, orgId), eq(postImage.draftId, d.id))
+    : and(eq(postImage.orgId, orgId), eq(postImage.briefId, d.briefId!), isNull(postImage.draftId));
+  return db.select().from(postImage).where(where).orderBy(asc(postImage.position), asc(postImage.createdAt));
+}
+
+/** A post's images, plus how many other posts share them. */
+export async function listDraftImages(db: Db, orgId: string, draftId: string) {
+  const d = await draftRef(db, orgId, draftId);
+  if (!d) throw new ImageError("not_found", "No such post in this workspace.");
+  const images = await imageSetFor(db, orgId, d);
+  let sharedWith = 0;
+  if (!usesOwn(d)) {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(draft)
+      .where(and(eq(draft.orgId, orgId), eq(draft.briefId, d.briefId!), eq(draft.ownImages, false), sql`${draft.id} <> ${d.id}`));
+    sharedWith = Number(row?.n ?? 0);
+  }
+  return { own: usesOwn(d), sharedWith, images };
+}
+
+/** The images of many posts at once (a few queries, in chunks D1 accepts), keyed by post id. */
+export async function imagesForDrafts(db: Db, orgId: string, drafts: Pick<DraftRef, "id" | "briefId" | "ownImages">[]) {
+  const out = new Map<string, ImageRow[]>();
+  if (!drafts.length) return out;
+  const ownIds = drafts.filter(usesOwn).map((d) => d.id);
+  const briefIds = [...new Set(drafts.filter((d) => !usesOwn(d)).map((d) => d.briefId!))];
+  const rows: ImageRow[] = [];
+  for (const chunk of chunkRows(ownIds, 2)) rows.push(...(await db.select().from(postImage).where(and(eq(postImage.orgId, orgId), inArray(postImage.draftId, chunk)))));
+  for (const chunk of chunkRows(briefIds, 2)) rows.push(...(await db.select().from(postImage).where(and(eq(postImage.orgId, orgId), inArray(postImage.briefId, chunk), isNull(postImage.draftId)))));
+  rows.sort((a, b) => a.position - b.position || a.createdAt.getTime() - b.createdAt.getTime());
+  for (const d of drafts) out.set(d.id, rows.filter((r) => (usesOwn(d) ? r.draftId === d.id : r.briefId === d.briefId && !r.draftId)));
+  return out;
+}
+
+async function putFile(store: ImageStore, orgId: string, name: string, bytes: Uint8Array): Promise<ImageFile> {
+  if (!bytes.byteLength || bytes.byteLength > MAX_IMAGE_BYTES) throw new ImageError("too_large", "Images can be up to 5 MB.");
+  const mime = detectImageType(bytes);
+  if (!mime) throw new ImageError("unsupported_type", "Use a JPG, PNG, WebP or GIF image.");
+  const size = imageSize(bytes);
+  const key = `orgs/${orgId}/images/${name}.${EXT[mime]}`;
+  await store.put(key, bytes, { httpMetadata: { contentType: mime } });
+  return { key, mime, bytes: bytes.byteLength, ...(size ? { width: size.width, height: size.height } : {}) };
+}
+
+const filesOf = (row: ImageRow) => [row.original, ...Object.values(row.variants)].filter((f): f is ImageFile => Boolean(f?.key));
+
+/** Adds an image to the set the post uses (its own, or the shared one). At most 4. */
+export async function addDraftImage(
   db: Db,
   store: ImageStore,
   orgId: string,
   draftId: string,
   input: { bytes: Uint8Array; source: ImageSource; alt: string; aiGenerated?: boolean | undefined; sourceUrl?: string | undefined },
-): Promise<PostImage> {
-  const current = await getDraftImage(db, orgId, draftId);
-  if (!current) throw new ImageError("not_found", "No such post in this workspace.");
-  if (current.status === "published" || current.status === "publishing") throw new ImageError("locked", "Published posts keep their image.");
-  if (!input.bytes.byteLength || input.bytes.byteLength > MAX_IMAGE_BYTES) throw new ImageError("too_large", "Images can be up to 5 MB.");
-  const mime = detectImageType(input.bytes);
-  if (!mime) throw new ImageError("unsupported_type", "Use a JPG, PNG, WebP or GIF image.");
-  const size = imageSize(input.bytes);
-  const key = `orgs/${orgId}/images/${draftId}-${newId("img").slice(4)}.${EXT[mime]}`;
-  await store.put(key, input.bytes, { httpMetadata: { contentType: mime } });
-  const image: PostImage = {
-    key,
-    source: input.source,
-    alt: input.alt.trim().slice(0, 1000),
-    mime,
-    bytes: input.bytes.byteLength,
-    ...(size ? { width: size.width, height: size.height } : {}),
-    aiGenerated: input.aiGenerated ?? input.source === "ai",
-    ...(input.sourceUrl ? { sourceUrl: input.sourceUrl } : {}),
-  };
-  const updated = await db
-    .update(draft)
-    .set({ image, updatedAt: new Date() })
-    .where(and(eq(draft.orgId, orgId), eq(draft.id, draftId), inArray(draft.status, ["draft", "approved", "scheduled", "failed", "discarded"])))
-    .returning({ id: draft.id });
-  if (!updated.length) {
-    await store.delete(key);
-    throw new ImageError("locked", "Published posts keep their image.");
+): Promise<ImageRow> {
+  const d = await draftRef(db, orgId, draftId);
+  if (!d) throw new ImageError("not_found", "No such post in this workspace.");
+  if (LOCKED.includes(d.status)) throw new ImageError("locked", "Published posts keep their images.");
+  return (await insertImage(db, store, orgId, usesOwn(d) ? { draftId: d.id } : { briefId: d.briefId! }, input))!;
+}
+
+async function insertImage(
+  db: Db,
+  store: ImageStore,
+  orgId: string,
+  owner: { draftId: string } | { briefId: string },
+  input: { bytes: Uint8Array; source: ImageSource; alt: string; aiGenerated?: boolean | undefined; sourceUrl?: string | undefined },
+  fixedId?: string,
+): Promise<ImageRow | null> {
+  const set = await db
+    .select({ position: postImage.position })
+    .from(postImage)
+    .where("draftId" in owner ? and(eq(postImage.orgId, orgId), eq(postImage.draftId, owner.draftId)) : and(eq(postImage.orgId, orgId), eq(postImage.briefId, owner.briefId), isNull(postImage.draftId)));
+  if (set.length >= MAX_IMAGES) throw new ImageError("limit", `Up to ${MAX_IMAGES} images per post. Remove one first.`);
+  const id = fixedId ?? newId("img");
+  const original = await putFile(store, orgId, id, input.bytes);
+  const rows = await db
+    .insert(postImage)
+    .values({
+      id,
+      orgId,
+      briefId: "briefId" in owner ? owner.briefId : null,
+      draftId: "draftId" in owner ? owner.draftId : null,
+      position: set.length ? Math.max(...set.map((s) => s.position)) + 1 : 0,
+      source: input.source,
+      alt: input.alt.trim().slice(0, 1000),
+      original,
+      aiGenerated: input.aiGenerated ?? input.source === "ai",
+      sourceUrl: input.sourceUrl ?? null,
+    })
+    .onConflictDoNothing()
+    .returning();
+  if (!rows[0]) {
+    // Only with a fixed id: someone else added it first. Keep their file; remove ours if it differs.
+    const winner = await getImage(db, orgId, id);
+    if (winner?.original.key !== original.key) await store.delete(original.key).catch(() => undefined);
+    return null;
   }
-  if (current.image?.key && current.image.key !== key) await store.delete(current.image.key).catch(() => undefined);
-  return image;
+  return rows[0];
 }
 
-export async function updateImageAlt(db: Db, orgId: string, draftId: string, alt: string) {
-  const current = await getDraftImage(db, orgId, draftId);
-  if (!current?.image) throw new ImageError("not_found", "This post has no image.");
-  if (current.status === "published" || current.status === "publishing") throw new ImageError("locked", "Published posts keep their image.");
-  const image = { ...current.image, alt: alt.trim().slice(0, 1000) };
-  await db.update(draft).set({ image, updatedAt: new Date() }).where(and(eq(draft.orgId, orgId), eq(draft.id, draftId)));
-  return image;
+/** An image of the workspace, refusing changes when the post that owns it is published. */
+async function editableImage(db: Db, orgId: string, imageId: string) {
+  const [row] = await db.select().from(postImage).where(and(eq(postImage.orgId, orgId), eq(postImage.id, imageId)));
+  if (!row) throw new ImageError("not_found", "No such image in this workspace.");
+  if (row.draftId) {
+    const d = await draftRef(db, orgId, row.draftId);
+    if (d && LOCKED.includes(d.status)) throw new ImageError("locked", "Published posts keep their images.");
+  }
+  return row;
 }
 
-export async function removeDraftImage(db: Db, store: ImageStore, orgId: string, draftId: string) {
-  const current = await getDraftImage(db, orgId, draftId);
-  if (!current) throw new ImageError("not_found", "No such post in this workspace.");
-  if (current.status === "published" || current.status === "publishing") throw new ImageError("locked", "Published posts keep their image.");
-  await db.update(draft).set({ image: null, updatedAt: new Date() }).where(and(eq(draft.orgId, orgId), eq(draft.id, draftId)));
-  if (current.image?.key) await store.delete(current.image.key).catch(() => undefined);
+export async function getImage(db: Db, orgId: string, imageId: string) {
+  const [row] = await db.select().from(postImage).where(and(eq(postImage.orgId, orgId), eq(postImage.id, imageId)));
+  return row ?? null;
+}
+
+/** The file for a shape: its crop if one was made, else the original. */
+export function fileFor(row: ImageRow, size?: ImageSize | "original"): ImageFile {
+  return size && size !== "original" && size !== "none" ? (row.variants[size] ?? row.original) : row.original;
+}
+
+async function siblings(db: Db, orgId: string, row: ImageRow) {
+  return db
+    .select()
+    .from(postImage)
+    .where(row.draftId ? and(eq(postImage.orgId, orgId), eq(postImage.draftId, row.draftId)) : and(eq(postImage.orgId, orgId), eq(postImage.briefId, row.briefId!), isNull(postImage.draftId)))
+    .orderBy(asc(postImage.position), asc(postImage.createdAt));
+}
+
+/** Changes the description, or moves the image to another place in the order. */
+export async function updateImage(db: Db, orgId: string, imageId: string, patch: { alt?: string | undefined; position?: number | undefined }) {
+  const row = await editableImage(db, orgId, imageId);
+  if (patch.alt !== undefined) await db.update(postImage).set({ alt: patch.alt.trim().slice(0, 1000) }).where(eq(postImage.id, row.id));
+  if (patch.position !== undefined) {
+    const set = (await siblings(db, orgId, row)).filter((r) => r.id !== row.id);
+    const at = Math.max(0, Math.min(set.length, Math.round(patch.position)));
+    set.splice(at, 0, row);
+    for (const [i, r] of set.entries()) if (r.position !== i) await db.update(postImage).set({ position: i }).where(eq(postImage.id, r.id));
+  }
+  return (await getImage(db, orgId, imageId))!;
+}
+
+export async function deleteImage(db: Db, store: ImageStore, orgId: string, imageId: string) {
+  const row = await editableImage(db, orgId, imageId);
+  await db.delete(postImage).where(eq(postImage.id, row.id));
+  for (const f of filesOf(row)) await store.delete(f.key).catch(() => undefined);
+  const rest = await siblings(db, orgId, row);
+  for (const [i, r] of rest.entries()) if (r.position !== i) await db.update(postImage).set({ position: i }).where(eq(postImage.id, r.id));
+}
+
+/** Stores a crop of the original to a shape (made in the browser from the original, at full quality). */
+export async function setImageVariant(db: Db, store: ImageStore, orgId: string, imageId: string, size: Exclude<ImageSize, "none">, bytes: Uint8Array) {
+  const row = await editableImage(db, orgId, imageId);
+  const file = await putFile(store, orgId, `${row.id}-${size}-${newId("img").slice(-6)}`, bytes);
+  const old = row.variants[size];
+  await db.update(postImage).set({ variants: { ...row.variants, [size]: file } }).where(eq(postImage.id, row.id));
+  if (old?.key) await store.delete(old.key).catch(() => undefined);
+  return (await getImage(db, orgId, imageId))!;
+}
+
+/** Removes a crop, going back to the original for that shape. */
+export async function clearImageVariant(db: Db, store: ImageStore, orgId: string, imageId: string, size: Exclude<ImageSize, "none">) {
+  const row = await editableImage(db, orgId, imageId);
+  const old = row.variants[size];
+  const variants = { ...row.variants };
+  delete variants[size];
+  await db.update(postImage).set({ variants }).where(eq(postImage.id, row.id));
+  if (old?.key) await store.delete(old.key).catch(() => undefined);
+  return (await getImage(db, orgId, imageId))!;
+}
+
+/**
+ * Gives a post its own images (a copy of the shared ones, which it can then change on its own),
+ * or goes back to sharing (its own images are deleted).
+ */
+export async function setOwnImages(db: Db, store: ImageStore, orgId: string, draftId: string, own: boolean) {
+  const d = await draftRef(db, orgId, draftId);
+  if (!d) throw new ImageError("not_found", "No such post in this workspace.");
+  if (LOCKED.includes(d.status)) throw new ImageError("locked", "Published posts keep their images.");
+  if (!d.briefId) throw new ImageError("invalid", "This post isn't linked to shared material.");
+  if (own === d.ownImages) return listDraftImages(db, orgId, draftId);
+  if (own) {
+    const shared = await imageSetFor(db, orgId, { ...d, ownImages: false });
+    for (const r of shared) {
+      const copy = async (f: ImageFile, name: string) => {
+        const obj = await store.get(f.key);
+        if (!obj) throw new ImageError("not_found", "An image file is missing.");
+        return putFile(store, orgId, name, new Uint8Array(await obj.arrayBuffer()));
+      };
+      const id = newId("img");
+      const variants: ImageRow["variants"] = {};
+      for (const [size, f] of Object.entries(r.variants) as [Exclude<ImageSize, "none">, ImageFile][]) variants[size] = await copy(f, `${id}-${size}`);
+      await db.insert(postImage).values({ id, orgId, briefId: null, draftId: d.id, position: r.position, source: r.source, alt: r.alt, original: await copy(r.original, id), variants, aiGenerated: r.aiGenerated, sourceUrl: r.sourceUrl });
+    }
+  } else {
+    const mine = await imageSetFor(db, orgId, d);
+    await db.delete(postImage).where(and(eq(postImage.orgId, orgId), eq(postImage.draftId, d.id)));
+    for (const r of mine) for (const f of filesOf(r)) await store.delete(f.key).catch(() => undefined);
+  }
+  await db.update(draft).set({ ownImages: own, updatedAt: new Date() }).where(eq(draft.id, d.id));
+  return listDraftImages(db, orgId, draftId);
+}
+
+/** The image files to attach when publishing, in order, in the shape this platform shows best. */
+export async function imagesForPublishing(db: Db, store: ImageStore, orgId: string, d: { id: string; briefId: string | null; ownImages: boolean; platform: Platform }) {
+  const rows = (await imageSetFor(db, orgId, d)).slice(0, MAX_IMAGES);
+  if (!rows.length) return [];
+  const { sizes } = await getImageSettings(db, orgId);
+  const size = sizes[d.platform];
+  if (size === "none") return [];
+  const out: { bytes: Uint8Array<ArrayBuffer>; mime: string; alt: string; width?: number | undefined; height?: number | undefined }[] = [];
+  for (const r of rows) {
+    const file = fileFor(r, size);
+    const obj = await store.get(file.key);
+    if (!obj) continue;
+    // Say it's AI-made in the description too (platform labels are applied where they exist).
+    const alt = r.aiGenerated && !/AI-generated/i.test(r.alt) ? `${r.alt} (AI-generated image)`.trim() : r.alt;
+    out.push({ bytes: new Uint8Array(await obj.arrayBuffer()), mime: file.mime, alt, width: file.width, height: file.height });
+  }
+  return out;
 }
 
 // --- Finding an image -------------------------------------------------------------------------
@@ -222,13 +402,13 @@ export async function generateAiImage(ai: AiLike, postText: string): Promise<Uin
   return detectImageType(bytes) ? bytes : null;
 }
 
-/** AI images per day: the plan's daily upload allowance (they cost real money). Counted per brief. */
+/** AI images per day: the plan's daily upload allowance (they cost real money). */
 export async function aiImagesToday(db: Db, orgId: string, now = new Date()) {
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const [row] = await db
-    .select({ n: sql<number>`count(DISTINCT ${draft.briefId})` })
-    .from(draft)
-    .where(and(eq(draft.orgId, orgId), gte(draft.updatedAt, start), sql`json_extract(${draft.image}, '$.source') = 'ai'`));
+    .select({ n: sql<number>`count(*)` })
+    .from(postImage)
+    .where(and(eq(postImage.orgId, orgId), eq(postImage.source, "ai"), gte(postImage.createdAt, start)));
   return Number(row?.n ?? 0);
 }
 
@@ -289,8 +469,8 @@ export async function findImage(
 }
 
 /**
- * After posts are written: one image for every post in the brief that should have one (by the
- * preferred sizes) and doesn't yet. Best effort: posts without an image are still fine.
+ * After posts are written: one image for the material, shared by every post written from it.
+ * Best effort: posts without an image are still fine.
  */
 export async function autoImagesForBrief(deps: ImageDeps, orgId: string, briefId: string) {
   const settings = await getImageSettings(deps.db, orgId);
@@ -302,26 +482,22 @@ export async function autoImagesForBrief(deps: ImageDeps, orgId: string, briefId
     .where(and(eq(brief.orgId, orgId), eq(brief.id, briefId)));
   if (!b) return { attached: 0 };
   const drafts = await deps.db
-    .select({ id: draft.id, platform: draft.platform, text: draft.text, image: draft.image })
+    .select({ platform: draft.platform, text: draft.text })
     .from(draft)
     .where(and(eq(draft.orgId, orgId), eq(draft.briefId, briefId), inArray(draft.status, ["draft", "approved", "scheduled"])));
-  const needs = drafts.filter((d) => !d.image && settings.sizes[d.platform] !== "none");
-  if (!needs.length) return { attached: 0 };
-  // AI only for posts where a picture helps and nothing real exists: not for code updates, which get the link or nothing.
-  const allowAi = settings.allowAi && !["github_activity"].includes(b.kind);
-  const found = await findImage(deps, orgId, b, needs[0]!.text, { allowAi });
+  if (!drafts.some((d) => settings.sizes[d.platform] !== "none")) return { attached: 0 };
+  const existing = await deps.db.select({ id: postImage.id }).from(postImage).where(and(eq(postImage.orgId, orgId), eq(postImage.briefId, briefId), isNull(postImage.draftId)));
+  if (existing.length) return { attached: 0 };
+  // AI only where a picture helps and nothing real exists: not for daily code summaries.
+  const allowAi = settings.allowAi && b.kind !== "github_activity";
+  const found = await findImage(deps, orgId, b, drafts[0]!.text, { allowAi });
   if (!found) return { attached: 0 };
-  let attached = 0;
-  for (const d of needs) {
-    await storeDraftImage(deps.db, deps.store, orgId, d.id, { ...found, aiGenerated: found.source === "ai" }).then(
-      () => attached++,
-      () => undefined,
-    );
-  }
-  return { attached, source: found.source };
+  // One automatic image per material, even if this runs twice at once (a fixed id).
+  const added = await insertImage(deps.db, deps.store, orgId, { briefId }, { ...found, aiGenerated: found.source === "ai" }, `img_auto_${briefId}`);
+  return added ? { attached: 1, source: found.source } : { attached: 0 };
 }
 
-/** For a post that exists: find an image from its material (optionally from one source only). */
+/** For a post that exists: find an image from its material (optionally from one source only) and add it. */
 export async function findImageForDraft(deps: ImageDeps, orgId: string, draftId: string, only?: ImageSource) {
   const [row] = await deps.db
     .select({ text: draft.text, kind: contextItem.kind, title: contextItem.title, url: contextItem.url, mediaKey: contextItem.mediaKey })
@@ -338,5 +514,5 @@ export async function findImageForDraft(deps: ImageDeps, orgId: string, draftId:
       only === "link" ? "That page has no preview image." : only === "screenshot" ? "Screenshots aren't set up, or the page couldn't be captured." : only === "upload" ? "This post wasn't written from a photo." : "No image found. Try a card or upload a photo.";
     throw new ImageError("unavailable", why);
   }
-  return storeDraftImage(deps.db, deps.store, orgId, draftId, { ...found, aiGenerated: found.source === "ai" });
+  return addDraftImage(deps.db, deps.store, orgId, draftId, { ...found, aiGenerated: found.source === "ai" });
 }

@@ -133,11 +133,11 @@ export const x = {
     }
     return data.id;
   },
-  async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, mediaId?: string): Promise<PublishResult> {
+  async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, mediaIds: string[] = []): Promise<PublishResult> {
     const res = await request("X", doFetch, "https://api.x.com/2/tweets", {
       method: "POST",
       headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ text, ...(replyTo ? { reply: { in_reply_to_tweet_id: replyTo.id } } : {}), ...(mediaId ? { media: { media_ids: [mediaId] } } : {}) }),
+      body: JSON.stringify({ text, ...(replyTo ? { reply: { in_reply_to_tweet_id: replyTo.id } } : {}), ...(mediaIds.length ? { media: { media_ids: mediaIds.slice(0, 4) } } : {}) }),
     });
     const { data } = (await res.json()) as { data: { id: string } };
     return { externalId: data.id, url: `https://x.com/${account.handle.replace(/^@/, "")}/status/${data.id}` };
@@ -183,16 +183,49 @@ export const linkedin = {
     const { value } = (await init.json()) as { value: { uploadUrl: string; image: string } };
     if (!/^https:\/\/[a-z0-9.-]+\.linkedin\.com\//i.test(value.uploadUrl)) throw new PlatformError("LinkedIn", "rejected", "LinkedIn returned an unexpected upload address.");
     await request("LinkedIn", doFetch, value.uploadUrl, { method: "PUT", headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": image.mime }, body: image.bytes });
+    await linkedin.waitUntilReady(tokens, value.image, doFetch);
     return value.image;
   },
-  async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, image?: { urn: string; alt: string }): Promise<PublishResult> {
+  /**
+   * LinkedIn processes an image after upload; a post made before it's AVAILABLE can show without it.
+   * The versioned read needs more than w_member_social, so the legacy read is tried too; if neither is
+   * allowed, a short wait stands in.
+   */
+  async waitUntilReady(tokens: TokenSet, urn: string, doFetch: FetchLike = fetch, delays: number[] = [600, 900, 1200, 1500, 2000, 2500, 3000]) {
+    const urls = [`https://api.linkedin.com/rest/images/${encodeURIComponent(urn)}`, `https://api.linkedin.com/v2/images/${encodeURIComponent(urn)}`];
+    let readable = true;
+    for (const wait of delays) {
+      await new Promise((r) => setTimeout(r, wait));
+      if (!readable) continue;
+      let status: string | null = null;
+      for (const url of urls) {
+        const res = await doFetch(url, { headers: { Authorization: `Bearer ${tokens.accessToken}`, "LinkedIn-Version": LINKEDIN_VERSION, "X-Restli-Protocol-Version": "2.0.0" }, signal: AbortSignal.timeout(TIMEOUT) }).catch(() => null);
+        if (res?.ok) {
+          status = ((await res.json().catch(() => ({}))) as { status?: string }).status ?? null;
+          break;
+        }
+      }
+      if (status === "AVAILABLE") return;
+      if (status === "PROCESSING_FAILED") throw new PlatformError("LinkedIn", "rejected", "LinkedIn couldn't process the image. Use a JPG or PNG under 5 MB.");
+      if (status === null) {
+        readable = false; // no permission to read the status: wait out the remaining time once, then go on
+        await new Promise((r) => setTimeout(r, 2500));
+        return;
+      }
+    }
+  },
+  async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, images: { urn: string; alt: string }[] = []): Promise<PublishResult> {
     const res = await request("LinkedIn", doFetch, "https://api.linkedin.com/rest/posts", {
       method: "POST",
       headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json", "LinkedIn-Version": LINKEDIN_VERSION, "X-Restli-Protocol-Version": "2.0.0" },
       body: JSON.stringify({
         author: `urn:li:person:${account.accountId}`,
         commentary: escapeLinkedIn(text),
-        ...(image ? { content: { media: { id: image.urn, altText: image.alt.slice(0, 4000) } } } : {}),
+        ...(images.length === 1
+          ? { content: { media: { id: images[0]!.urn, altText: images[0]!.alt.slice(0, 4000) } } }
+          : images.length > 1
+            ? { content: { multiImage: { images: images.map((i) => ({ id: i.urn, altText: i.alt.slice(0, 4000) })) } } }
+            : {}),
         visibility: "PUBLIC",
         distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] },
         lifecycleState: "PUBLISHED",
@@ -296,11 +329,11 @@ export const mastodon = {
     });
     return ((await res.json()) as { id: string }).id;
   },
-  async publish(instance: string, tokens: TokenSet, text: string, idempotencyKey: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, mediaId?: string): Promise<PublishResult> {
+  async publish(instance: string, tokens: TokenSet, text: string, idempotencyKey: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, mediaIds: string[] = []): Promise<PublishResult> {
     const res = await request("Mastodon", doFetch, `https://${instance}/api/v1/statuses`, {
       method: "POST",
       headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify({ status: text, visibility: "public", ...(replyTo ? { in_reply_to_id: replyTo.id } : {}), ...(mediaId ? { media_ids: [mediaId] } : {}) }),
+      body: JSON.stringify({ status: text, visibility: "public", ...(replyTo ? { in_reply_to_id: replyTo.id } : {}), ...(mediaIds.length ? { media_ids: mediaIds.slice(0, 4) } : {}) }),
     });
     const s = (await res.json()) as { id: string; url?: string };
     return { externalId: s.id, url: s.url ?? null };
@@ -340,7 +373,7 @@ export const bluesky = {
     });
     return ((await res.json()) as { blob: unknown }).blob;
   },
-  async publish(service: string, accessJwt: string, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, image?: { blob: unknown; alt: string; width?: number | undefined; height?: number | undefined }): Promise<PublishResult> {
+  async publish(service: string, accessJwt: string, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, images: { blob: unknown; alt: string; width?: number | undefined; height?: number | undefined }[] = []): Promise<PublishResult> {
     const facets = blueskyLinkFacets(text);
     const reply =
       replyTo?.cid && replyTo.rootId && replyTo.rootCid
@@ -358,8 +391,13 @@ export const bluesky = {
           createdAt: new Date().toISOString(),
           ...(facets.length ? { facets } : {}),
           ...reply,
-          ...(image
-            ? { embed: { $type: "app.bsky.embed.images", images: [{ alt: image.alt.slice(0, 2000), image: image.blob, ...(image.width && image.height ? { aspectRatio: { width: image.width, height: image.height } } : {}) }] } }
+          ...(images.length
+            ? {
+                embed: {
+                  $type: "app.bsky.embed.images",
+                  images: images.slice(0, 4).map((image) => ({ alt: image.alt.slice(0, 2000), image: image.blob, ...(image.width && image.height ? { aspectRatio: { width: image.width, height: image.height } } : {}) })),
+                },
+              }
             : {}),
         },
       }),

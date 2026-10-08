@@ -120,7 +120,7 @@ autonomyApi.openapi(
     try {
       const out = await composeIdea(c.get("db"), providers, { orgId: p.orgId, ideaId: c.req.valid("param").id, ...c.req.valid("json") });
       findImagesLater(c, c.get("db"), p.orgId, out.briefId);
-      return c.json({ briefId: out.briefId, drafts: out.drafts.map(toDraft) }, 201);
+      return c.json({ briefId: out.briefId, drafts: out.drafts.map((d) => toDraft(d)) }, 201);
     } catch (error) {
       if (error instanceof IdeaError) return c.json(apiError(error.code, error.message), error.code === "not_found" ? 404 : 409);
       if (error instanceof ComposeError) {

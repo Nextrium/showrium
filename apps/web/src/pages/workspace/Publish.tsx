@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { copyImage, saveFile, useImageFiles, type ImageSize } from "../../components/PostImage";
 import { api, useApi } from "../../lib";
 import type { Draft } from "./shared";
 
@@ -25,6 +26,10 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
   const [error, setError] = useState<string | null>(null);
   const [opened, setOpened] = useState(false);
   const chosen = connectionId || accounts[0]?.id || "";
+  // The post's images, loaded now: the share sheet only opens straight from a click.
+  const { data: imageSettings } = useApi<{ sizes: Partial<Record<string, ImageSize>> }>("/image-settings", { live: false });
+  const files = useImageFiles(draft.images ?? [], imageSettings ? (imageSettings.sizes[draft.platform] ?? "landscape") : "none");
+  const [copiedImage, setCopiedImage] = useState<number | null>(null);
 
   const act = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -63,6 +68,29 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
           : "Your post is copied. Paste it in the app, then mark it as posted.",
     );
   };
+  const firstText = parts ? parts[0]! : draft.text;
+  // Phones (and some computers) can hand the text and the images to the platform's app in one go.
+  const shareData = files.length ? { text: firstText, files: files.map((f) => f.file) } : null;
+  const canShareFiles = Boolean(shareData && typeof navigator.canShare === "function" && navigator.canShare(shareData));
+  const shareWithImages = () => {
+    // Text copied too: some apps take only the images from a share.
+    navigator.clipboard.writeText(firstText).catch(() => undefined);
+    navigator
+      .share(shareData!)
+      .then(() => {
+        setOpened(true);
+        setMessage("Shared. Finish the post in the app (the text is also copied, in case it didn't come through), then mark it as posted.");
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError("Couldn't open sharing. Use the buttons below instead.");
+      });
+  };
+  const copyOneImage = (i: number) =>
+    copyImage(files[i]!.file)
+      .then(() => setCopiedImage(i))
+      .catch(() => setError("This browser can't copy images. Save it instead, then attach it."));
+  const saveAll = () => files.forEach((f) => saveFile(f.url, f.file.name));
   const copyPart = (i: number) => {
     navigator.clipboard.writeText(parts![i]!).then(() => setCopiedPart(i)).catch(() => setError("Couldn't copy. Select the text and copy it yourself."));
   };
@@ -76,13 +104,35 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
   return (
     <div className="form">
       <div className="row">
+        {canShareFiles && <button className="button" onClick={shareWithImages}>Share with {files.length === 1 ? "image" : `${files.length} images`} (free)</button>}
         {postUrl ? (
-          <a className="button" href={postUrl} target="_blank" rel="noopener noreferrer" onClick={tapToPost}>Post it myself (free)</a>
+          <a className={canShareFiles ? "button secondary" : "button"} href={postUrl} target="_blank" rel="noopener noreferrer" onClick={tapToPost}>Post it myself (free)</a>
         ) : (
-          <button className="button" onClick={tapToPost}>Copy for posting (free)</button>
+          <button className={canShareFiles ? "button secondary" : "button"} onClick={tapToPost}>Copy for posting (free)</button>
         )}
         {opened && <button className="button secondary" disabled={busy} onClick={markPosted}>I've posted it</button>}
       </div>
+      {files.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-xl border border-line p-3">
+          <span className="text-[13px] text-ink-2">
+            {files.length === 1 ? "The image" : `The ${files.length} images`} for this post{parts ? " (add to the first part)" : ""}: copy and paste {files.length === 1 ? "it" : "each one"} into the post, or save and attach.
+          </span>
+          <ul className="m-0 flex list-none flex-wrap gap-2.5 p-0" aria-label="Images to add to the post">
+            {files.map((f, i) => (
+              <li key={f.image.id} className="flex w-[148px] flex-col gap-1.5">
+                <img src={f.url} alt={f.image.alt} className="h-[96px] w-full rounded-lg border border-line object-cover" />
+                <div className="flex gap-1.5">
+                  {typeof ClipboardItem !== "undefined" && (
+                    <button type="button" className="button secondary" onClick={() => void copyOneImage(i)} aria-label={`Copy image ${i + 1}`}>{copiedImage === i ? "Copied" : "Copy"}</button>
+                  )}
+                  <button type="button" className="button secondary" onClick={() => saveFile(f.url, f.file.name)} aria-label={`Save image ${i + 1}`}>Save</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {files.length > 1 && <button type="button" className="button secondary self-start" onClick={saveAll}>Save all {files.length}</button>}
+        </div>
+      )}
       {opened && parts && (
         <ol className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Thread parts to post as replies">
           {parts.slice(1).map((part, n) => (
