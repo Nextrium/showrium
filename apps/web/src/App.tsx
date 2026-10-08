@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { authClient, isWebsite, usePath } from "./lib";
 import { Link } from "./ui/Link";
 import { Home } from "./pages/Home";
@@ -6,7 +7,8 @@ import { Join } from "./pages/Join";
 import { Privacy, Terms } from "./pages/Legal";
 import { SignIn } from "./pages/SignIn";
 import { ResetPassword } from "./pages/ResetPassword";
-import { Workspace } from "./pages/Workspace";
+// The signed-in app is loaded only when needed, so the website stays light for visitors.
+const Workspace = lazy(() => import("./pages/Workspace").then((m) => ({ default: m.Workspace })));
 
 export { Link } from "./ui/Link";
 
@@ -64,7 +66,13 @@ function Footer() {
 export function App() {
   const path = usePath();
   // The signed-in app has its own full-screen shell (sidebar, tab bar), not the website frame.
-  if (path === "/app" || path.startsWith("/app/")) return <Workspace path={path} />;
+  if (path === "/app" || path.startsWith("/app/")) {
+    return (
+      <Suspense fallback={<p role="status" className="grid min-h-dvh place-items-center text-sm text-muted">Opening your workspace…</p>}>
+        <Workspace path={path} />
+      </Suspense>
+    );
+  }
   // app.showrium.com has no marketing page: its front door is the app (which asks you to sign in).
   if (path === "/" && window.location.hostname === "app.showrium.com") {
     window.location.replace("/app");

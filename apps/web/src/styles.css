@@ -94,6 +94,7 @@
 
 @layer base {
   html { -webkit-text-size-adjust: 100%; }
+  html, body { overflow-x: clip; }
   body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-size: 15px; line-height: 1.55; }
   a { color: var(--accent-ink); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -207,4 +208,37 @@
   .legal h2 { font-size: 22px; margin-top: 28px; }
   .hp { position: absolute; left: -10000px; width: 1px; height: 1px; opacity: 0; }
   .waitlist { display: grid; gap: 10px; max-width: 560px; }
+}
+
+/* Marketing site motion (src/marketing). Every animation ends in a visible, finished state, so the
+   reduced-motion rule above (which shortens animations to nothing) simply shows the result. */
+@layer components {
+  .mk-reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.7s ease, transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1); }
+  .mk-reveal.mk-shown { opacity: 1; transform: none; }
+  .mk-pop { animation: mk-pop 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+  .mk-slide-in { animation: mk-slide-in 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+  .mk-drop { animation: mk-drop 0.45s cubic-bezier(0.3, 1.4, 0.5, 1) both; }
+  .mk-float { animation: mk-float 3.2s ease-in-out infinite; transform-box: fill-box; }
+  .mk-pulse { animation: mk-pulse 1.2s ease-in-out infinite; }
+  .mk-draw { stroke-dasharray: 1; stroke-dashoffset: 0; animation: mk-draw 2.2s ease both; }
+  .mk-progress { transform-origin: left; animation: mk-progress 5.2s linear both; }
+  .mk-morph { transition: aspect-ratio 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .mk-caret { display: inline-block; width: 2px; height: 1em; margin-left: 1px; vertical-align: -0.15em; background: var(--accent); animation: mk-blink 0.9s steps(1) infinite; }
+  .mk-marquee { animation: mk-marquee 38s linear infinite; }
+  .mk-marquee:hover { animation-play-state: paused; }
+  .mk-fade-edges { mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+  .mk-glow { position: absolute; border-radius: 9999px; filter: blur(70px); opacity: 0.35; pointer-events: none; animation: mk-glow 16s ease-in-out infinite alternate; }
+  .mk-tilt { transition: transform 0.35s ease, box-shadow 0.35s ease; }
+  .mk-tilt:hover { transform: translateY(-4px); box-shadow: 0 18px 40px -24px rgba(0, 0, 0, 0.45); }
+
+  @keyframes mk-pop { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+  @keyframes mk-slide-in { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+  @keyframes mk-drop { from { opacity: 0; transform: translateY(-12px) scale(0.9); } to { opacity: 1; transform: none; } }
+  @keyframes mk-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+  @keyframes mk-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes mk-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes mk-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  @keyframes mk-blink { 50% { opacity: 0; } }
+  @keyframes mk-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  @keyframes mk-glow { from { transform: translate(0, 0) scale(1); } to { transform: translate(40px, 30px) scale(1.15); } }
 }
