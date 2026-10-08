@@ -20,3 +20,4 @@ export * from "./chunk.js";
 export * from "./billing.js";
 export * from "./team.js";
 export * from "./prompts.js";
+export * from "./voice.js";

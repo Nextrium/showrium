@@ -19,7 +19,7 @@ import {
 import { hasErrors } from "@nextrium/policy";
 import type { Provider } from "@nextrium/llm";
 import { composeIdea } from "./autonomy.js";
-import { getOrgPlan } from "./content.js";
+import { getOrgLimits, getOrgPlan } from "./content.js";
 import { recordAudit } from "./orgs.js";
 import { getUsage, PLAN_FEATURES, PLAN_LIMITS, type Plan } from "./plans.js";
 import { API_PUBLISH_PLATFORMS, scheduleDraft } from "./publishing.js";
@@ -261,7 +261,7 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   const platforms = (Object.keys(s.rules) as Platform[]).filter((x) => s.rules[x]?.write && p.platforms.includes(x));
   if (!platforms.length) return { skipped: "no_platforms" as const };
   // Automation spends only the plan's monthly allowance, never credits.
-  if ((await getUsage(db, orgId)).postsGenerated + platforms.length > PLAN_LIMITS[plan].posts) return { skipped: "plan_allowance" as const };
+  if ((await getUsage(db, orgId)).postsGenerated + platforms.length > (await getOrgLimits(db, orgId)).limits.posts) return { skipped: "plan_allowance" as const };
 
   const [row] = await db.select({ log: autopilot.weekLog }).from(autopilot).where(eq(autopilot.orgId, orgId));
   const log = (row?.log ?? []).filter((l) => l.at > now.getTime() - 7 * DAY);

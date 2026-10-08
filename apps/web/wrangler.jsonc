@@ -102,6 +102,40 @@
         "TIKTOK_USE_SANDBOX": "true"
       },
       "observability": { "enabled": true }
+    },
+    // Browser tests only (Playwright, `pnpm e2e`): a local server on :5174 with its own local database
+    // and files, and the fake AI. Never deployed: the database id is a placeholder that doesn't exist.
+    // Secrets come from .dev.vars.e2e, written with random values by e2e/global-setup.ts.
+    "e2e": {
+      "name": "showrium-e2e",
+      "workers_dev": false,
+      "preview_urls": false,
+      "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "showrium-media-e2e" }],
+      "ratelimits": [
+        { "name": "AUTH_LIMITER", "namespace_id": "1007", "simple": { "limit": 1000, "period": 60 } },
+        { "name": "API_LIMITER", "namespace_id": "1008", "simple": { "limit": 5000, "period": 60 } },
+        { "name": "WAITLIST_LIMITER", "namespace_id": "1009", "simple": { "limit": 1000, "period": 60 } }
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "showrium-db-e2e",
+          "database_id": "00000000-0000-4000-8000-0000000000e2",
+          "migrations_dir": "../../packages/db/migrations"
+        }
+      ],
+      "vars": {
+        "BETTER_AUTH_URL": "http://localhost:5174",
+        "SITE_URL": "http://localhost:5174",
+        "AUTH_PASSWORD_ENABLED": "true",
+        "SIGNUP_MODE": "allowlist",
+        "BETA_ALLOWED_EMAILS": "@example.com",
+        "PLATFORM_ADMIN_EMAILS": "staff-e2e@example.com",
+        "LLM_MODE": "fake",
+        // Fake product ids so the Billing page lists plans (no checkout is made in tests).
+        "LEMONSQUEEZY_STORE_ID": "e2e",
+        "LEMONSQUEEZY_VARIANTS": "{\"pro:month\":\"1\",\"team:month\":\"2\",\"team_seats:month:2\":\"3\",\"team_seats:month:3\":\"4\",\"team_seats:month:4\":\"5\",\"team_seats:month:5\":\"6\"}"
+      }
     }
   }
 }

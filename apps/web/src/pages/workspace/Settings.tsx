@@ -2,6 +2,7 @@ import { SecurityPanel } from "../../components/Security";
 import { YourData } from "../../components/YourData";
 import { ImageSettingsPanel } from "../../components/PostImage";
 import { useState, type FormEvent } from "react";
+import { WaitlistCard } from "../../components/WaitlistCard";
 import { InvitesCard } from "../../components/InvitesCard";
 import { api, authClient, formatDate, timeAgo, useApi } from "../../lib";
 import { planLabel, ThemePicker } from "../../shell/AppShell";
@@ -194,6 +195,7 @@ export function SettingsPage() {
           <div className="grid gap-5 lg:grid-cols-2">
             <AccessGrants />
             <InvitesCard />
+            <WaitlistCard />
           </div>
         </>
       )}

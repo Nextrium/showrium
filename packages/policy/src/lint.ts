@@ -3,7 +3,7 @@ import type { Platform } from "@nextrium/db";
 import { MAX_THREAD_PARTS, PLATFORM_RULES } from "./rules.js";
 
 export interface LintIssue {
-  code: "too_long" | "empty" | "too_many_hashtags" | "has_link" | "needs_media" | "placeholder" | "control_chars" | "unverified_fact";
+  code: "too_long" | "empty" | "too_many_hashtags" | "has_link" | "needs_media" | "placeholder" | "control_chars" | "unverified_fact" | "unconfirmed_hint";
   severity: "error" | "warn";
   message: string;
 }

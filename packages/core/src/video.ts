@@ -3,7 +3,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { contextItem, draft, videoProject, type Db, type VideoTimeline } from "@nextrium/db";
 import { checkTimeline, generateStructured, TimelineSchema, videoRevisePrompt, videoSystemPrompt, videoUserPrompt, type Provider } from "@nextrium/llm";
 import { getBalance, postCreditTxn } from "./credits.js";
-import { getOrgPlan, getPersona } from "./content.js";
+import { getOrgLimits, getOrgPlan, getPersona } from "./content.js";
 import { newId } from "./ids.js";
 import { addUsage, getUsage, PLAN_LIMITS } from "./plans.js";
 
@@ -36,11 +36,11 @@ export async function createVideo(db: Db, providers: Provider[], input: { orgId:
     throw new VideoError("not_found", "Choose a post or some material for the video.");
   }
 
-  const plan = await getOrgPlan(db, input.orgId);
+  const { limits } = await getOrgLimits(db, input.orgId);
   const used = (await getUsage(db, input.orgId)).videosRendered;
-  const overQuota = used >= PLAN_LIMITS[plan].videos;
+  const overQuota = used >= limits.videos;
   if (overQuota && (await getBalance(db, input.orgId)) < CREDITS_PER_EXTRA_VIDEO) {
-    throw new VideoError("quota_exceeded", `You've used this month's ${PLAN_LIMITS[plan].videos} videos and need ${CREDITS_PER_EXTRA_VIDEO} credits for another.`);
+    throw new VideoError("quota_exceeded", `You've used this month's ${limits.videos} videos and need ${CREDITS_PER_EXTRA_VIDEO} credits for another.`);
   }
 
   let result;
@@ -57,7 +57,7 @@ export async function createVideo(db: Db, providers: Provider[], input: { orgId:
   const id = newId("vid");
   const timeline = { ...result.data, aspect: input.aspect } as VideoTimeline;
   await db.insert(videoProject).values({ id, orgId: input.orgId, draftId: input.draftId ?? null, contextItemId: input.contextItemId ?? null, timeline, model: result.model });
-  const { overage } = await addUsage(db, input.orgId, "videosRendered", 1, PLAN_LIMITS[plan].videos);
+  const { overage } = await addUsage(db, input.orgId, "videosRendered", 1, limits.videos);
   if (overage > 0) {
     await postCreditTxn(db, { orgId: input.orgId, kind: "spend", amount: -CREDITS_PER_EXTRA_VIDEO, idempotencyKey: `video:${id}`, description: "Extra video" }).catch(() => undefined);
   }

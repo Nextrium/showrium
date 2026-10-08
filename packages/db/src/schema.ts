@@ -91,7 +91,10 @@ export const org = sqliteTable("org", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
-  plan: text("plan", { enum: ["free", "lite", "starter", "creator", "pro", "team"] }).notNull().default("free"),
+  // team: shared allowance, up to 5 members. team_seats: paid per member (2-5), each adding an allowance.
+  plan: text("plan", { enum: ["free", "lite", "starter", "creator", "pro", "team", "team_seats"] }).notNull().default("free"),
+  /** Paid members (team_seats only). Billed for the whole period: removing someone doesn't refund or free usage. */
+  seats: integer("seats"),
   // Set on a user's personal workspace. Unique, so concurrent requests can't create two.
   // Deliberately no foreign key: SQLite can't add ON DELETE rules to an existing table, and a
   // plain reference would block deleting the user. Account deletion removes the personal org.
@@ -200,6 +203,8 @@ export const waitlistEntry = sqliteTable("waitlist_entry", {
   email: text("email").notNull().unique(),
   source: text("source").notNull().default("website"),
   invitedAt: integer("invited_at", { mode: "timestamp_ms" }),
+  /** The latest invite sent to this person (its acceptance means they joined). */
+  inviteId: text("invite_id"),
   createdAt: createdAt(),
 });
 
@@ -298,7 +303,8 @@ export const source = sqliteTable(
   (t) => [uniqueIndex("source_org_kind_key_uq").on(t.orgId, t.kind, t.key)],
 );
 
-export const CONTEXT_KINDS = ["manual", "url", "github_release", "github_activity", "rss_item", "voice", "photo", "document", "prompt"] as const;
+// "request": the signed-in person's own instruction to the AI ("Ask the AI"), followed as an instruction.
+export const CONTEXT_KINDS = ["manual", "url", "github_release", "github_activity", "rss_item", "voice", "photo", "document", "prompt", "request"] as const;
 export const contextItem = sqliteTable(
   "context_item",
   {
@@ -318,6 +324,21 @@ export const contextItem = sqliteTable(
   (t) => [index("context_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("context_org_external_uq").on(t.orgId, t.externalId)],
 );
 
+export const STANCES = ["own", "other"] as const;
+export type Stance = (typeof STANCES)[number];
+export type ResearchSource = { url: string; title: string };
+export type BriefResearch = {
+  model: string;
+  subject: string;
+  summary: string;
+  facts: { claim: string; source: string }[];
+  criticism: { point: string; source: string }[];
+  support: { point: string; source: string }[];
+  /** The person's own hints, checked against what was found. */
+  hints: { hint: string; status: "confirmed" | "unconfirmed"; source?: string | undefined }[];
+  sources: ResearchSource[];
+};
+
 export const brief = sqliteTable(
   "brief",
   {
@@ -329,6 +350,12 @@ export const brief = sqliteTable(
     keyPoints: text("key_points", { mode: "json" }).$type<string[]>().notNull(),
     model: text("model").notNull(),
     costMicroUsd: integer("cost_micro_usd").notNull().default(0),
+    /** The person's own instructions for these posts (optional). */
+    instructions: text("instructions"),
+    /** "own": about the person's own work; "other": their view on someone else's. */
+    stance: text("stance", { enum: STANCES }).notNull().default("own"),
+    /** What web research found (only sources the search returned), when research was asked for. */
+    research: text("research", { mode: "json" }).$type<BriefResearch>(),
     createdAt: createdAt(),
   },
   (t) => [index("brief_org_idx").on(t.orgId, t.createdAt)],
@@ -406,6 +433,7 @@ export const usageCounter = sqliteTable(
     postsGenerated: integer("posts_generated").notNull().default(0),
     videosRendered: integer("videos_rendered").notNull().default(0),
     xApiPosts: integer("x_api_posts").notNull().default(0),
+    researchRuns: integer("research_runs").notNull().default(0),
   },
   (t) => [uniqueIndex("usage_org_period_uq").on(t.orgId, t.period)],
 );
@@ -601,7 +629,7 @@ export const insight = sqliteTable(
 // Phase 6: billing and teams.
 // ---------------------------------------------------------------------------
 
-export const PAID_PLANS = ["lite", "starter", "creator", "pro", "team"] as const;
+export const PAID_PLANS = ["lite", "starter", "creator", "pro", "team", "team_seats"] as const;
 export type PaidPlan = (typeof PAID_PLANS)[number];
 export const BILLING_PROVIDERS = ["paystack", "lemonsqueezy"] as const;
 export type BillingProvider = (typeof BILLING_PROVIDERS)[number];
@@ -615,6 +643,8 @@ export const subscription = sqliteTable(
     provider: text("provider", { enum: BILLING_PROVIDERS }).notNull(),
     plan: text("plan", { enum: PAID_PLANS }).notNull(),
     interval: text("interval", { enum: ["month", "year"] }).notNull(),
+    /** Paid members, for team_seats. */
+    seats: integer("seats"),
     status: text("status", { enum: ["active", "past_due", "cancelled", "expired"] }).notNull(),
     providerSubscriptionId: text("provider_subscription_id").notNull(),
     providerCustomerId: text("provider_customer_id"),

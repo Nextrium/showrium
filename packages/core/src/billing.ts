@@ -12,26 +12,42 @@ import { creditEntry, creditTxn, org, paymentEvent, subscription, type BillingPr
 import { getBalance, postCreditTxn } from "./credits.js";
 import { newId } from "./ids.js";
 import { recordAudit } from "./orgs.js";
-import type { Plan } from "./plans.js";
+import { TEAM_SEATS_MAX, TEAM_SEATS_MIN, type Plan } from "./plans.js";
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 export type Interval = "month" | "year";
 
-/** Prices in US cents (cost-model-and-pricing.md). Lite is sold through Paystack only (card fees). */
-export const PLAN_PRICES: Record<Exclude<PaidPlan, "team">, Partial<Record<Interval, number>>> = {
+/**
+ * Prices in US cents (cost-model-and-pricing.md). Lite is sold through Paystack only (card fees).
+ * team: shared by up to 5 members, at Pro's price. team_seats: the price PER MEMBER (2-5 members).
+ */
+export const PLAN_PRICES: Record<PaidPlan, Partial<Record<Interval, number>>> = {
   lite: { month: 100 },
   starter: { month: 300, year: 3000 },
   creator: { month: 600, year: 6000 },
   pro: { month: 1000, year: 10000 },
+  team: { month: 1000, year: 10000 },
+  team_seats: { month: 800, year: 8000 },
 };
+
+/** What a plan costs for the period, in US cents (per-member Team: per member times members). */
+export function planPriceCents(plan: PaidPlan, interval: Interval, seats?: number): number | null {
+  const each = PLAN_PRICES[plan][interval];
+  if (!each) return null;
+  if (plan !== "team_seats") return each;
+  if (!seats || !Number.isInteger(seats) || seats < TEAM_SEATS_MIN || seats > TEAM_SEATS_MAX) return null;
+  return each * seats;
+}
 export const CREDIT_PACKS = {
   c500: { credits: 500, usdCents: 500 },
   c1100: { credits: 1100, usdCents: 1000 },
 } as const;
 export type CreditPack = keyof typeof CREDIT_PACKS;
 
-export type CheckoutItem = { kind: "plan"; plan: Exclude<PaidPlan, "team">; interval: Interval } | { kind: "credits"; pack: CreditPack };
-export const itemKey = (item: CheckoutItem) => (item.kind === "plan" ? `${item.plan}:${item.interval}` : `credits:${item.pack}`);
+export type CheckoutItem = { kind: "plan"; plan: PaidPlan; interval: Interval; seats?: number | undefined } | { kind: "credits"; pack: CreditPack };
+/** The item's key (used to find the provider's plan or product). A per-member Team has one per number of members. */
+export const itemKey = (item: CheckoutItem) =>
+  item.kind === "plan" ? (item.plan === "team_seats" ? `team_seats:${item.interval}:${item.seats}` : `${item.plan}:${item.interval}`) : `credits:${item.pack}`;
 
 export interface BillingConfig {
   /** Signs our checkout custom data (derived from a server secret). */
@@ -126,7 +142,9 @@ export async function createCheckout(
     item: CheckoutItem;
   },
 ): Promise<string> {
-  if (input.item.kind === "plan" && !PLAN_PRICES[input.item.plan][input.item.interval]) throw new BillingError("not_available", "That plan isn't sold with that billing period.");
+  if (input.item.kind === "plan" && planPriceCents(input.item.plan, input.item.interval, input.item.seats) === null) {
+    throw new BillingError("not_available", input.item.plan === "team_seats" ? `Choose ${TEAM_SEATS_MIN} to ${TEAM_SEATS_MAX} members.` : "That plan isn't sold with that billing period.");
+  }
   if (!providersFor(cfg, input.item).includes(input.provider)) throw new BillingError("not_configured", "This payment option isn't set up yet.");
   const key = itemKey(input.item);
   const custom = await signCustom(cfg.signingSecret, input.orgId, key);
@@ -135,7 +153,7 @@ export async function createCheckout(
   try {
     if (input.provider === "paystack") {
       const p = cfg.paystack!;
-      const usdCents = input.item.kind === "credits" ? CREDIT_PACKS[input.item.pack].usdCents : PLAN_PRICES[input.item.plan][input.item.interval]!;
+      const usdCents = input.item.kind === "credits" ? CREDIT_PACKS[input.item.pack].usdCents : planPriceCents(input.item.plan, input.item.interval, input.item.seats)!;
       res = await doFetch("https://api.paystack.co/transaction/initialize", {
         method: "POST",
         headers: {
@@ -206,15 +224,17 @@ export async function getSubscription(db: Db, orgId: string) {
   return row ?? null;
 }
 
-export async function setOrgPlan(db: Db, orgId: string, plan: Exclude<Plan, "staff">, meta: { actorUserId?: string | null; reason: string }) {
-  const [row] = await db.update(org).set({ plan }).where(eq(org.id, orgId)).returning({ id: org.id });
+export async function setOrgPlan(db: Db, orgId: string, plan: Exclude<Plan, "staff">, meta: { actorUserId?: string | null; reason: string; seats?: number | null | undefined }) {
+  // Paid members are only kept for a per-member Team.
+  const seats = plan === "team_seats" ? (meta.seats ?? null) : null;
+  const [row] = await db.update(org).set({ plan, seats }).where(eq(org.id, orgId)).returning({ id: org.id });
   if (row)
     await recordAudit(db, {
       orgId,
       actorUserId: meta.actorUserId ?? null,
       action: "plan.changed",
       target: orgId,
-      meta: { plan, reason: meta.reason },
+      meta: { plan, reason: meta.reason, ...(seats ? { seats } : {}) },
     });
   return Boolean(row);
 }
@@ -230,6 +250,7 @@ async function applySubscription(
     provider: BillingProvider;
     plan: PaidPlan;
     interval: Interval;
+    seats?: number | null | undefined;
     status: SubStatus;
     providerSubscriptionId: string;
     providerCustomerId: string | null;
@@ -247,12 +268,12 @@ async function applySubscription(
     if (s.status === "active") return "conflict";
     return "applied"; // an old or other subscription ending doesn't affect the active one
   }
-  const values = { ...s, updatedAt: new Date() };
+  const values = { ...s, seats: s.seats ?? null, updatedAt: new Date() };
   await db
     .insert(subscription)
     .values({ id: newId("sub"), ...values })
     .onConflictDoUpdate({ target: subscription.orgId, set: values });
-  await setOrgPlan(db, s.orgId, KEEPS_PLAN.includes(s.status) ? s.plan : "free", { reason: `${s.provider} subscription ${s.status}` });
+  await setOrgPlan(db, s.orgId, KEEPS_PLAN.includes(s.status) ? s.plan : "free", { reason: `${s.provider} subscription ${s.status}`, seats: s.seats });
   return "applied";
 }
 
@@ -354,9 +375,14 @@ async function finish(db: Db, id: string, outcome: string, orgId: string | null)
   await db.update(paymentEvent).set({ outcome, orgId }).where(eq(paymentEvent.id, id));
   return outcome;
 }
-const parsePlanKey = (key: string): { plan: PaidPlan; interval: Interval } | null => {
-  const [plan, interval] = key.split(":");
-  return plan && plan in PLAN_PRICES && (interval === "month" || interval === "year") ? { plan: plan as PaidPlan, interval } : null;
+export const parsePlanKey = (key: string): { plan: PaidPlan; interval: Interval; seats?: number } | null => {
+  const [plan, interval, seatsText] = key.split(":");
+  if (!plan || !(plan in PLAN_PRICES) || (interval !== "month" && interval !== "year")) return null;
+  if (plan === "team_seats") {
+    const seats = Number(seatsText);
+    return planPriceCents("team_seats", interval, seats) === null ? null : { plan: "team_seats", interval, seats };
+  }
+  return seatsText === undefined ? { plan: plan as PaidPlan, interval } : null;
 };
 const reverse = (map: Record<string, string>, value: string | number | undefined | null) => Object.entries(map).find(([, v]) => String(v) === String(value))?.[0] ?? null;
 const addInterval = (from: Date, interval: Interval) => new Date(from.getTime() + (interval === "year" ? 366 : 31) * 86_400_000);
@@ -438,6 +464,7 @@ export async function handlePaystackEvent(db: Db, cfg: BillingConfig, e: Paystac
           .where(eq(subscription.id, sub.id));
         await setOrgPlan(db, sub.orgId, sub.plan, {
           reason: "paystack renewal",
+          seats: sub.seats,
         });
         return finish(db, eventId, "renewed", sub.orgId);
       }
@@ -451,7 +478,7 @@ export async function handlePaystackEvent(db: Db, cfg: BillingConfig, e: Paystac
       if (!sub) return finish(db, eventId, "unknown_subscription", null);
       const next = d.subscription?.next_payment_date ? new Date(d.subscription.next_payment_date) : addInterval(now, sub.interval);
       await db.update(subscription).set({ status: "active", currentPeriodEnd: next, updatedAt: now }).where(eq(subscription.id, sub.id));
-      await setOrgPlan(db, sub.orgId, sub.plan, { reason: "paystack renewal" });
+      await setOrgPlan(db, sub.orgId, sub.plan, { reason: "paystack renewal", seats: sub.seats });
       return finish(db, eventId, "renewed", sub.orgId);
     }
     if (e.event === "refund.processed" && d.transaction_reference) {

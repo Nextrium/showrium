@@ -19,7 +19,7 @@ export type Draft = {
   partsPosted?: number;
   images: DraftImage[];
   ownImages: boolean;
-  source?: { mode: string; kind: string | null; title: string | null; url: string | null; contextItemId: string | null } | null;
+  source?: DraftSource | null;
 };
 type ImageFileInfo = { mime: string; bytes: number; width?: number; height?: number };
 export type DraftImage = {
@@ -32,6 +32,16 @@ export type DraftImage = {
   shared: boolean;
   original: ImageFileInfo;
   variants: Partial<Record<"square" | "portrait" | "landscape", ImageFileInfo>>;
+};
+export type DraftSource = {
+  mode: string;
+  kind: string | null;
+  title: string | null;
+  url: string | null;
+  contextItemId: string | null;
+  instructions?: string | null;
+  stance?: "own" | "other";
+  research?: { summary: string; sources: { url: string; title: string }[]; hints: { hint: string; status: "confirmed" | "unconfirmed"; source?: string }[] } | null;
 };
 export type Persona = {
   displayName: string;

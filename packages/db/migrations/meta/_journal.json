@@ -127,6 +127,27 @@
       "when": 1791479699157,
       "tag": "0017_even_rumiko_fujikawa",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1791490792262,
+      "tag": "0018_familiar_matthew_murdock",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1791492139400,
+      "tag": "0019_easy_boom_boom",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1791492636944,
+      "tag": "0020_dapper_ultimo",
+      "breakpoints": true
     }
   ]
 }

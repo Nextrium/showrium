@@ -11,6 +11,7 @@ import {
   ComposeError,
   DraftStateError,
   getBalance,
+  getOrgLimits,
   getOrgPlan,
   getUsage,
   listDrafts,
@@ -35,9 +36,9 @@ const TOOLS = {
     description: "The workspace's plan, this month's usage and its credit balance.",
     input: z.object({}),
     run: async ({ db, orgId }) => {
-      const plan = await getOrgPlan(db, orgId);
+      const { plan, limits } = await getOrgLimits(db, orgId);
       const usage = await getUsage(db, orgId);
-      return { plan, posts: { used: usage.postsGenerated, limit: PLAN_LIMITS[plan].posts }, videos: { used: usage.videosRendered, limit: PLAN_LIMITS[plan].videos }, credits: await getBalance(db, orgId) };
+      return { plan, posts: { used: usage.postsGenerated, limit: limits.posts }, videos: { used: usage.videosRendered, limit: limits.videos }, credits: await getBalance(db, orgId) };
     },
   }),
   add_context: tool({

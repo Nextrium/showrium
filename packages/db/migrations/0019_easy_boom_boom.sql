@@ -1,0 +1,1 @@
+ALTER TABLE `waitlist_entry` ADD `invite_id` text;

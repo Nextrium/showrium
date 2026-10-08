@@ -177,6 +177,8 @@ describe("team", () => {
     const owner = await user("p6own@example.com");
     expect((await owner.call("POST", "/team/invites", { email: "p6mem@example.com", role: "editor" })).status).toBe(402); // free: 1 seat
     await env.DB.prepare("UPDATE org SET plan = 'pro' WHERE id = ?").bind(owner.orgId).run();
+    expect((await owner.call("POST", "/team/invites", { email: "p6mem@example.com", role: "editor" })).status).toBe(402); // Pro: one person
+    await env.DB.prepare("UPDATE org SET plan = 'team' WHERE id = ?").bind(owner.orgId).run();
     const inv = await owner.call("POST", "/team/invites", { email: "P6mem@example.com", role: "editor" });
     expect(inv.status).toBe(201);
     const { link } = (await inv.json()) as { link: string };
@@ -202,7 +204,7 @@ describe("team", () => {
   });
 
   it("protects owners and personal workspaces", async () => {
-    const owner = await user("p6own2@example.com", "pro");
+    const owner = await user("p6own2@example.com", "team");
     const team = (await (await owner.call("GET", "/team")).json()) as { members: { id: string; role: string }[] };
     const me = team.members[0]!;
     expect((await owner.call("PATCH", `/team/members/${me.id}`, { role: "admin" })).status).toBe(409); // last owner
@@ -332,7 +334,7 @@ describe("phase 6 review fixes", () => {
   });
 
   it("revokes the API keys of removed members", async () => {
-    const owner = await user("p6keys@example.com", "pro");
+    const owner = await user("p6keys@example.com", "team");
     const { link } = (await (await owner.call("POST", "/team/invites", { email: "p6keysadm@example.com", role: "admin" })).json()) as { link: string };
     const admin = await user("p6keysadm@example.com");
     await env.DB.prepare("UPDATE user SET email_verified = 1 WHERE id = ?").bind(admin.userId).run();

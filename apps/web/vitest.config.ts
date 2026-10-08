@@ -22,7 +22,7 @@ export default defineConfig(async () => {
     LEMONSQUEEZY_API_KEY: "ls_test_" + crypto.randomUUID(),
     LEMONSQUEEZY_WEBHOOK_SECRET: crypto.randomUUID(),
     LEMONSQUEEZY_STORE_ID: "1",
-    LEMONSQUEEZY_VARIANTS: JSON.stringify({ "creator:year": "111", "starter:month": "333", "lite:month": "444", "credits:c500": "222" }),
+    LEMONSQUEEZY_VARIANTS: JSON.stringify({ "creator:year": "111", "starter:month": "333", "lite:month": "444", "credits:c500": "222", "team:month": "666", "team_seats:month:3": "555" }),
   };
   const shared = {
     setupFiles: ["./test/apply-migrations.ts"],

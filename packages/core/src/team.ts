@@ -4,7 +4,7 @@
 import { and, asc, count, eq, gt, isNull } from "drizzle-orm";
 import { apiKey, membership, org, teamInvite, user, type Db, type Role } from "@nextrium/db";
 import { hashApiKey as sha256Hex } from "./api-keys.js";
-import { getOrgPlan } from "./content.js";
+import { getOrgLimits, getOrgPlan } from "./content.js";
 import { newId } from "./ids.js";
 import { recordAudit } from "./orgs.js";
 import { PLAN_FEATURES } from "./plans.js";
@@ -62,9 +62,19 @@ export async function inviteMember(db: Db, input: { orgId: string; email: string
   const { members, invites } = await listMembers(db, input.orgId);
   if (members.some((m) => m.email.toLowerCase() === email)) throw new TeamError("exists", "That person is already a member.");
   if (invites.some((i) => i.email === email)) throw new TeamError("exists", "That person already has an invitation. Revoke it to send a new one.");
-  const plan = await getOrgPlan(db, input.orgId);
-  const seats = PLAN_FEATURES[plan].seats;
-  if (members.length + invites.length >= seats) throw new TeamError("seats", `The ${plan} plan includes ${seats} seat${seats === 1 ? "" : "s"}. Upgrade to add teammates.`);
+  // Members and open invitations both hold a seat. Seats are paid for the whole period, so a removed
+  // member's seat can go to someone new, but usage this month isn't reset.
+  const { plan, seats } = await getOrgLimits(db, input.orgId);
+  if (members.length + invites.length >= seats) {
+    throw new TeamError(
+      "seats",
+      plan === "team_seats"
+        ? `Your Team plan is paid for ${seats} members. Add a member to your plan in Billing first.`
+        : plan === "team" || plan === "staff"
+          ? `Your plan includes ${seats} members.`
+          : "Only one person per plan. Switch to a Team plan in Billing to add teammates.",
+    );
+  }
   const token = randomToken();
   const row = { id: newId("tmi"), orgId: input.orgId, email, role: input.role, tokenHash: await sha256Hex(token), invitedByUserId: input.actor.userId, expiresAt: new Date(now + TEAM_INVITE_TTL_MS) };
   await db.insert(teamInvite).values(row);

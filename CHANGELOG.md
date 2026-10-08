@@ -12,6 +12,9 @@ The first release of Showrium to app.showrium.com, for invited testers.
   - YouTube channels and podcasts
   - photos and documents (iPhone photos included)
   - a daily question matched to your work
+- **New post in one click:** type or paste, add a link, or record a voice note; "Write posts" saves it and writes in one step, and says what's missing if it can't yet.
+- **Ask the AI:** tell it what to write (it follows your instructions), choose "about my own work" or "my view on someone else's work", and optionally let it research the web first. Every researched post lists its sources and which of your hints were confirmed.
+- **Voice notes you can check:** names you type help the transcription; you see and edit the transcript before anything is written, and unclear recordings are flagged.
 - **Ideas and Posts:** a list with a detail panel, and every post shows where it came from.
 - **Threads and long posts:** "Write as a thread" for X, Bluesky, Threads and Mastodon, with each part editable. Long posts on X for Premium accounts.
 - **Up to 4 images per post:**
@@ -27,7 +30,8 @@ The first release of Showrium to app.showrium.com, for invited testers.
   - posting days and time
 - **Insights:** likes, replies and themes from your audience, where platforms allow it.
 - **Video (early):** explainer videos with a voice-over and captions, made on your device.
-- **Teams and billing:** workspaces, roles, invites, an audit log, plans (Paystack, Lemon Squeezy) and credits.
+- **Teams and billing:** workspaces, roles, invites, an audit log, plans (Paystack, Lemon Squeezy) and credits. Plans are for one person; Team (shared, up to 5 people at Pro's price) and Team (per member, 2 to 5) are for working together.
+- **Waitlist invites:** staff invite people from the waitlist in one click; each gets their own Free workspace.
 - **For developers:** a REST API with docs, a TypeScript SDK and an MCP server.
 - **Design:** responsive from 320 px phones to wide screens, with light and dark themes.
 

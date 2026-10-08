@@ -8,7 +8,7 @@ import { decryptJson, encryptJson, pkceChallenge, randomToken } from "./crypto.j
 import { newId } from "./ids.js";
 import { imagesForPublishing, type ImageStore } from "./images.js";
 import { recordAudit } from "./orgs.js";
-import { getOrgPlan } from "./content.js";
+import { getOrgLimits, getOrgPlan } from "./content.js";
 import { addUsage, CREDITS_PER_X_API_POST, CREDITS_PER_X_API_POST_WITH_LINK, PLAN_LIMITS } from "./plans.js";
 
 export interface PlatformConfigs {
@@ -236,15 +236,15 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   // X charges per API post: plan allowance first, then credits (links cost more). Each part is a post.
   const partCharge: number[] = remaining.map(() => 0);
   if (conn.platform === "x") {
-    const plan = await getOrgPlan(db, input.orgId);
-    const { overage } = await addUsage(db, input.orgId, "xApiPosts", remaining.length, PLAN_LIMITS[plan].xApiPosts);
+    const xLimit = (await getOrgLimits(db, input.orgId)).limits.xApiPosts;
+    const { overage } = await addUsage(db, input.orgId, "xApiPosts", remaining.length, xLimit);
     for (let i = remaining.length - overage; i < remaining.length; i++) partCharge[i] = /https?:\/\//i.test(remaining[i]!) ? CREDITS_PER_X_API_POST_WITH_LINK : CREDITS_PER_X_API_POST;
     const charged = partCharge.reduce((a, b) => a + b, 0);
     if (charged > 0) {
       try {
         await postCreditTxn(db, { orgId: input.orgId, kind: "spend", amount: -charged, idempotencyKey: `x-post:${d.id}:${startAt}`, description: remaining.length > 1 ? `X thread via API (${remaining.length} posts)` : "X post via API" });
       } catch (error) {
-        await addUsage(db, input.orgId, "xApiPosts", -remaining.length, PLAN_LIMITS[plan].xApiPosts);
+        await addUsage(db, input.orgId, "xApiPosts", -remaining.length, xLimit);
         await db.update(draft).set({ status: d.status, updatedAt: new Date() }).where(eq(draft.id, d.id));
         if (error instanceof InsufficientCreditsError) throw new PublishError("insufficient_credits", `Posting to X through the API needs ${charged} credits. Use tap-to-post (free) or add credits.`);
         throw error;
@@ -290,8 +290,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
       const sentNow = posted.length - startAt;
       const unsent = remaining.length - sentNow;
       const refund = partCharge.slice(sentNow).reduce((a, b) => a + b, 0);
-      const plan = await getOrgPlan(db, input.orgId);
-      if (unsent > 0) await addUsage(db, input.orgId, "xApiPosts", -unsent, PLAN_LIMITS[plan].xApiPosts).catch(() => undefined);
+      if (unsent > 0) await addUsage(db, input.orgId, "xApiPosts", -unsent, (await getOrgLimits(db, input.orgId)).limits.xApiPosts).catch(() => undefined);
       if (refund > 0) {
         await postCreditTxn(db, { orgId: input.orgId, kind: "refund", amount: refund, idempotencyKey: `x-refund:${d.id}:${Date.now()}`, description: "Refund: X post failed" }).catch(() => undefined);
       }

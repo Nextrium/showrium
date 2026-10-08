@@ -7,6 +7,7 @@ import {
   createIdeas,
   CREDITS_PER_EXTRA_UPLOAD,
   getBalance,
+  getOrgLimits,
   getOrgPlan,
   getPersona,
   InsufficientCreditsError,
@@ -84,8 +85,8 @@ const TYPES: Record<string, Kind> = {
 export const UPLOAD_TYPES = Object.keys(TYPES);
 
 async function uploadAllowance(db: Db, orgId: string) {
-  const [plan, used, balance] = await Promise.all([getOrgPlan(db, orgId), uploadsToday(db, orgId), getBalance(db, orgId)]);
-  return { used, limit: PLAN_LIMITS[plan].uploadsPerDay, creditsPerExtra: CREDITS_PER_EXTRA_UPLOAD, balance };
+  const [{ limits }, used, balance] = await Promise.all([getOrgLimits(db, orgId), uploadsToday(db, orgId), getBalance(db, orgId)]);
+  return { used, limit: limits.uploadsPerDay, creditsPerExtra: CREDITS_PER_EXTRA_UPLOAD, balance };
 }
 
 materialApi.get("/contexts/upload/allowance", async (c) => c.json(await uploadAllowance(c.get("db"), c.get("principal").orgId), 200));

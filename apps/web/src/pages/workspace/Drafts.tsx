@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ResearchNotes } from "../../components/ResearchNotes";
 import { api, formatDate, setUnsaved, timeAgo, useApi } from "../../lib";
 import { PublishControls } from "./Publish";
 import { IssueList, MODES, usePlatforms, type Draft } from "./shared";
@@ -22,6 +23,7 @@ export const SOURCE_KINDS: Record<string, { label: string; icon: IconName }> = {
   photo: { label: "Your photo", icon: "photo" },
   document: { label: "Your document", icon: "doc" },
   prompt: { label: "Daily question", icon: "comment" },
+  request: { label: "Your request to the AI", icon: "ideas" },
 };
 
 const STATUSES = [
@@ -290,6 +292,8 @@ function PostDetail({ id, onSelect }: { id: string; onSelect: (id: string) => vo
           </div>
         </div>
       </section>
+
+      <ResearchNotes source={draft.source} />
 
       <section className="flex flex-col gap-2">
         <SectionLabel>Post</SectionLabel>

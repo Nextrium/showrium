@@ -12,7 +12,8 @@ import {
   recordAudit,
   revokeApiKey,
 } from "@nextrium/core";
-import { createInvite, isInviteUsable, isPlatformAdmin, joinWaitlist, listInvites, revokeInvite } from "@nextrium/core";
+import { createInvite, inviteFromWaitlist, isInviteUsable, isPlatformAdmin, joinWaitlist, listInvites, listWaitlist, revokeInvite } from "@nextrium/core";
+import { actionEmail, sendEmail } from "./email.js";
 import { setCookie } from "hono/cookie";
 import { INVITE_COOKIE } from "./auth.js";
 import { connectionsApi } from "./connections-api.js";
@@ -402,6 +403,91 @@ api.openapi(
     if (!(await revokeInvite(c.get("db"), id))) return c.json(apiError("not_found", "No pending invite with that ID."), 404);
     await recordAudit(c.get("db"), { orgId: admin.orgId, actorUserId: admin.userId, action: "invite.revoked", target: id });
     return c.body(null, 204);
+  },
+);
+
+// --- Waitlist: invite people in one click (staff only) ------------------------------------
+
+const WaitlistEntrySchema = z
+  .object({
+    id: z.string(),
+    email: z.string(),
+    source: z.string(),
+    joinedListAt: z.string(),
+    invitedAt: z.string().nullable(),
+    status: z.enum(["waiting", "invited", "invite_expired", "joined"]),
+    joinedAt: z.string().nullable(),
+  })
+  .openapi("WaitlistEntry");
+
+api.openapi(
+  createRoute({
+    method: "get",
+    path: "/admin/waitlist",
+    tags: ["Invites"],
+    responses: { 200: { description: "Everyone on the waitlist, newest first", content: { "application/json": { schema: z.object({ data: z.array(WaitlistEntrySchema) }) } } }, ...errors },
+  }),
+  async (c) => {
+    if (!platformAdmin(c)) return c.json(apiError("forbidden", "Only Showrium staff can see the waitlist."), 403);
+    const rows = await listWaitlist(c.get("db"));
+    return c.json(
+      { data: rows.map((r) => ({ ...r, joinedListAt: r.joinedListAt.toISOString(), invitedAt: r.invitedAt?.toISOString() ?? null, joinedAt: r.joinedAt?.toISOString() ?? null })) },
+      200,
+    );
+  },
+);
+
+api.openapi(
+  createRoute({
+    method: "post",
+    path: "/admin/waitlist/invite",
+    tags: ["Invites"],
+    request: { body: { required: true, content: { "application/json": { schema: z.object({ ids: z.array(z.string().max(64)).min(1).max(50) }) } } } },
+    responses: {
+      200: {
+        description: "One result per person. When the email couldn't be sent, the link is returned so it can be shared by hand.",
+        content: {
+          "application/json": {
+            schema: z.object({ data: z.array(z.object({ id: z.string(), email: z.string(), sent: z.boolean(), link: z.string().nullable() })), skipped: z.number() }),
+          },
+        },
+      },
+      ...errors,
+    },
+  }),
+  async (c) => {
+    const admin = platformAdmin(c);
+    if (!admin) return c.json(apiError("forbidden", "Only Showrium staff can invite people."), 403);
+    const { ids } = c.req.valid("json");
+    const created = await inviteFromWaitlist(c.get("db"), { entryIds: ids, adminUserId: admin.userId });
+    const origin = new URL(c.env.BETTER_AUTH_URL).origin;
+    const data = [];
+    for (const inv of created) {
+      const link = `${origin}/invite?token=${encodeURIComponent(inv.token)}`;
+      let sent = false;
+      try {
+        sent = (
+          await sendEmail(
+            c.env,
+            actionEmail({
+              to: inv.email,
+              subject: "Your Showrium invite is here",
+              intro:
+                "Thanks for joining the Showrium waitlist. Your invite is ready: it creates your own Showrium account and workspace on the Free plan. You can upgrade any time.",
+              button: "Create my account",
+              url: link,
+              outro: "This link works once, for 7 days. If you didn't ask to join, you can ignore this email.",
+            }),
+          )
+        ).sent;
+      } catch (error) {
+        console.error("waitlist invite email failed", error instanceof Error ? error.message : error);
+      }
+      await recordAudit(c.get("db"), { orgId: admin.orgId, actorUserId: admin.userId, action: "waitlist.invited", target: inv.entryId, meta: { sent } });
+      // The link is only returned when it wasn't emailed (so staff can share it themselves).
+      data.push({ id: inv.entryId, email: inv.email, sent, link: sent ? null : link });
+    }
+    return c.json({ data, skipped: new Set(ids).size - created.length }, 200);
   },
 );
 

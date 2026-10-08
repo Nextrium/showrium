@@ -9,8 +9,10 @@ import {
   org,
   persona,
   source,
+  type BriefResearch,
   type ContentMode,
   type Db,
+  type Stance,
   type DraftStatus,
   type Platform,
 } from "@nextrium/db";
@@ -23,7 +25,9 @@ import {
   generateStructured,
   repairUserPrompt,
   RepairSchema,
+  runResearch,
   type Provider,
+  type ResearchProvider,
 } from "@nextrium/llm";
 import { checkFacts, hasErrors, lintPost, lintThread, THREAD_PLATFORMS, X_LONG_MAX, X_LONG_SUBSCRIPTIONS, type LintIssue } from "@nextrium/policy";
 import { getBalance, InsufficientCreditsError, postCreditTxn } from "./credits.js";
@@ -31,7 +35,7 @@ import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
 import { recordAudit } from "./orgs.js";
 import type { IngestedItem } from "./ingest.js";
-import { addUsage, CREDITS_PER_EXTRA_POST, getUsage, PLAN_LIMITS, type Plan } from "./plans.js";
+import { addUsage, CREDITS_PER_EXTRA_POST, CREDITS_PER_EXTRA_RESEARCH, getUsage, limitsFor, seatsFor, type Limits, type Plan } from "./plans.js";
 
 // --- Persona ----------------------------------------------------------------
 
@@ -87,9 +91,10 @@ export class SourceLimitError extends Error {
   }
 }
 
-export async function addSource(db: Db, orgId: string, plan: Plan, kind: "github_repo" | "rss" | "page", key: string) {
+export async function addSource(db: Db, orgId: string, _plan: Plan, kind: "github_repo" | "rss" | "page", key: string) {
   const existing = await db.select({ id: source.id }).from(source).where(eq(source.orgId, orgId));
-  if (existing.length >= PLAN_LIMITS[plan].sources) throw new SourceLimitError(PLAN_LIMITS[plan].sources);
+  const { sources: limit } = (await getOrgLimits(db, orgId)).limits;
+  if (existing.length >= limit) throw new SourceLimitError(limit);
   const [row] = await db
     .insert(source)
     .values({ id: newId("src"), orgId, kind, key })
@@ -120,7 +125,7 @@ export async function markSourceChecked(db: Db, orgId: string, id: string, error
 
 export class ComposeError extends Error {
   constructor(
-    readonly code: "persona_required" | "context_not_found" | "no_platforms" | "quota_exceeded" | "ai_unavailable",
+    readonly code: "persona_required" | "context_not_found" | "no_platforms" | "quota_exceeded" | "ai_unavailable" | "research_unavailable" | "research_empty",
     message: string,
   ) {
     super(message);
@@ -133,6 +138,13 @@ export async function getOrgPlan(db: Db, orgId: string): Promise<Plan> {
   const [row] = await db.select({ plan: org.plan, fullAccess: org.fullAccess }).from(org).where(eq(org.id, orgId));
   if (row?.fullAccess) return "staff";
   return (row?.plan ?? "free") as Plan;
+}
+
+/** The plan, its allowance (scaled by paid seats for a per-member Team) and how many members it allows. */
+export async function getOrgLimits(db: Db, orgId: string): Promise<{ plan: Plan; limits: Limits; seats: number }> {
+  const [row] = await db.select({ plan: org.plan, fullAccess: org.fullAccess, seats: org.seats }).from(org).where(eq(org.id, orgId));
+  const plan: Plan = row?.fullAccess ? "staff" : ((row?.plan ?? "free") as Plan);
+  return { plan, limits: limitsFor(plan, row?.seats), seats: seatsFor(plan, row?.seats) };
 }
 
 /** Platform admins only (checked by the caller): grant or remove full access for a workspace. Audited. */
@@ -164,11 +176,21 @@ export function lintDraft(platform: Platform, text: string, parts: string[] | nu
 
 export const joinParts = (parts: string[]) => parts.map((p) => p.trim()).join("\n\n");
 
-export async function compose(
-  db: Db,
-  providers: Provider[],
-  input: { orgId: string; contextItemId: string; mode: ContentMode; platforms: Platform[]; thread?: boolean | undefined },
-) {
+export type ComposeInput = {
+  orgId: string;
+  contextItemId: string;
+  /** "auto": the writer picks the style from the request. */
+  mode: ContentMode | "auto";
+  platforms: Platform[];
+  thread?: boolean | undefined;
+  /** The person's own instructions for these posts. */
+  instructions?: string | undefined;
+  stance?: Stance | undefined;
+  /** Look up facts on the web first (uses the research allowance, then credits). */
+  research?: boolean | undefined;
+};
+
+export async function compose(db: Db, providers: Provider[], input: ComposeInput, opts: { research?: ResearchProvider[] } = {}) {
   const platforms = [...new Set(input.platforms)];
   const threadFor = input.thread ? platforms.filter((p) => THREAD_PLATFORMS.includes(p)) : [];
   if (!platforms.length) throw new ComposeError("no_platforms", "Choose at least one platform.");
@@ -179,13 +201,44 @@ export async function compose(
     .from(contextItem)
     .where(and(eq(contextItem.orgId, input.orgId), eq(contextItem.id, input.contextItemId)));
   if (!ctx) throw new ComposeError("context_not_found", "That item wasn't found in your workspace.");
+  // "Ask the AI": the saved item is the person's own request, so it's followed as an instruction.
+  const isRequest = ctx.kind === "request";
+  const instructions = [isRequest ? ctx.body : "", input.instructions?.trim() ?? ""].filter(Boolean).join("\n\n").slice(0, 6000) || null;
+  const material = isRequest ? { title: "", body: "" } : { title: ctx.title, body: ctx.body };
+  const stance: Stance = input.stance ?? "own";
 
   // Quota pre-check: posts left this month plus credits must cover the request.
-  const plan = await getOrgPlan(db, input.orgId);
+  const { limits } = await getOrgLimits(db, input.orgId);
   const used = (await getUsage(db, input.orgId)).postsGenerated;
-  const left = Math.max(0, PLAN_LIMITS[plan].posts - used);
+  const left = Math.max(0, limits.posts - used);
   if (left < platforms.length && (await getBalance(db, input.orgId)) < (platforms.length - left) * CREDITS_PER_EXTRA_POST) {
-    throw new ComposeError("quota_exceeded", `You've used this month's ${PLAN_LIMITS[plan].posts} posts and don't have enough credits for ${platforms.length} more.`);
+    throw new ComposeError("quota_exceeded", `You've used this month's ${limits.posts} posts and don't have enough credits for ${platforms.length} more.`);
+  }
+
+  // Research first, when asked: facts from the web, each with a link the search returned.
+  let research: BriefResearch | null = null;
+  let researchCost = 0;
+  if (input.research) {
+    if (!opts.research?.length) throw new ComposeError("research_unavailable", "Web research isn't set up in this environment.");
+    const researchLeft = limits.research - (await getUsage(db, input.orgId)).researchRuns;
+    const postCredits = Math.max(0, platforms.length - left) * CREDITS_PER_EXTRA_POST;
+    if (researchLeft <= 0 && (await getBalance(db, input.orgId)) < CREDITS_PER_EXTRA_RESEARCH + postCredits) {
+      throw new ComposeError("quota_exceeded", `You've used this month's ${limits.research} web researches. Each extra one is ${CREDITS_PER_EXTRA_RESEARCH} credits.`);
+    }
+    try {
+      const body = `${material.title}\n${material.body}`.trim();
+      const found = await runResearch(opts.research, { request: instructions ?? body, material: instructions && body ? body : undefined });
+      researchCost = found.costMicroUsd;
+      research = { model: found.model, subject: found.subject, summary: found.summary, facts: found.facts, criticism: found.criticism, support: found.support, hints: found.hints, sources: found.sources };
+    } catch (error) {
+      console.error("research failed", error);
+      throw new ComposeError("research_unavailable", "Web research didn't work just now. Try again in a minute, or write without research.");
+    }
+    if (!research.facts.length && !research.criticism.length && !research.support.length) {
+      // Nothing reliable found: don't write a post that pretends otherwise. The search still counts (it cost money).
+      await chargeResearch(db, input.orgId, limits, `research:${newId("txn")}`);
+      throw new ComposeError("research_empty", "The web search found nothing reliable about this. Add the facts you know (with links if you have them), or write without research.");
+    }
   }
 
   const system = composeSystemPrompt(who);
@@ -194,7 +247,7 @@ export async function compose(
   try {
     result = await generateStructured(
       providers,
-      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: ctx.title, contextBody: ctx.body, thread: threadFor, xLong }), maxTokens: 8000 },
+      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research }), maxTokens: 8000 },
       ComposeSchema,
       (out) => checkVariants(out, platforms),
     );
@@ -203,10 +256,17 @@ export async function compose(
     throw new ComposeError("ai_unavailable", "The writing engine is busy right now. Please try again in a minute.");
   }
 
-  let cost = result.costMicroUsd;
+  // Why a fallback model wrote this (kept in the logs, so a failing provider is noticed).
+  if (result.attempts.length) console.warn("compose fell back", { model: result.model, attempts: result.attempts });
+  let cost = result.costMicroUsd + researchCost;
   const variants: { platform: Platform; text: string; parts: string[] | null; issues: LintIssue[] }[] = [];
-  const source = `${ctx.title}
-${ctx.body}`;
+  // What a post may state: the material, the person's own request, and what research found (with its links).
+  const source = [
+    ctx.title,
+    ctx.body,
+    instructions ?? "",
+    ...(research ? [research.summary, ...research.facts.map((f) => `${f.claim} ${f.source}`), ...research.criticism.map((f) => `${f.point} ${f.source}`), ...research.support.map((f) => `${f.point} ${f.source}`)] : []),
+  ].join("\n");
   for (const v of result.data.variants.filter((x) => platforms.includes(x.platform))) {
     // Threads: each part cleaned and checked; one repair attempt for up to 3 parts that are too long.
     const wanted = threadFor.includes(v.platform) ? (v.parts ?? []).map(cleanPost).filter(Boolean) : [];
@@ -254,25 +314,33 @@ ${ctx.body}`;
     variants.push({ platform: v.platform, text, parts: null, issues: [...issues, ...checkFacts(text, source)] });
   }
 
+  // Hints research couldn't confirm: the person checks they're written as their own knowledge.
+  const unconfirmed = research?.hints.filter((h) => h.status === "unconfirmed").length ?? 0;
+  const researchIssue: LintIssue[] = unconfirmed
+    ? [{ code: "unconfirmed_hint", severity: "warn", message: `${unconfirmed} of your hints weren't found in any source. Check the post presents them as what you know, not as reported fact.` }]
+    : [];
   const briefId = newId("brf");
-  const rows = variants.map((v) => ({ id: newId("drf"), orgId: input.orgId, briefId, platform: v.platform, text: v.text, parts: v.parts, issues: v.issues }));
+  const rows = variants.map((v) => ({ id: newId("drf"), orgId: input.orgId, briefId, platform: v.platform, text: v.text, parts: v.parts, issues: [...v.issues, ...researchIssue] }));
   await db.batch([
     db.insert(brief).values({
       id: briefId,
       orgId: input.orgId,
       contextItemId: ctx.id,
-      mode: input.mode,
+      mode: input.mode === "auto" ? (result.data.mode ?? "expert_take") : input.mode,
       angle: result.data.angle,
       keyPoints: result.data.key_points,
-      model: result.model,
+      model: research ? `${result.model} + ${research.model}` : result.model,
       costMicroUsd: cost,
+      instructions,
+      stance,
+      research,
     }),
     db.insert(draft).values(rows),
   ]);
 
   // Charge usage after success. A concurrent request can push slightly past the limit;
   // the extra is billed in credits when available (cost per post is ~$0.00003).
-  const { overage } = await addUsage(db, input.orgId, "postsGenerated", rows.length, PLAN_LIMITS[plan].posts);
+  const { overage } = await addUsage(db, input.orgId, "postsGenerated", rows.length, limits.posts);
   if (overage > 0) {
     try {
       await postCreditTxn(db, { orgId: input.orgId, kind: "spend", amount: -overage * CREDITS_PER_EXTRA_POST, idempotencyKey: `compose:${briefId}`, description: `${overage} extra post${overage === 1 ? "" : "s"}` });
@@ -282,7 +350,21 @@ ${ctx.body}`;
     }
   }
 
-  return { briefId, model: result.model, angle: result.data.angle, drafts: await listDrafts(db, input.orgId, { briefId }) };
+  if (research) await chargeResearch(db, input.orgId, limits, `research:${briefId}`);
+
+  return { briefId, model: result.model, angle: result.data.angle, research, drafts: await listDrafts(db, input.orgId, { briefId }) };
+}
+
+/** Counts a web research; beyond the plan's allowance it's paid in credits (when there are enough). */
+async function chargeResearch(db: Db, orgId: string, limits: Limits, idempotencyKey: string) {
+  const { overage } = await addUsage(db, orgId, "researchRuns", 1, limits.research);
+  if (!overage) return;
+  try {
+    await postCreditTxn(db, { orgId, kind: "spend", amount: -CREDITS_PER_EXTRA_RESEARCH, idempotencyKey, description: "Web research" });
+  } catch (error) {
+    if (!(error instanceof InsufficientCreditsError)) throw error;
+    console.warn("research overage without credits after concurrent compose", { orgId });
+  }
 }
 
 // --- Drafts -----------------------------------------------------------------
@@ -294,7 +376,18 @@ export async function listDrafts(db: Db, orgId: string, filter: { status?: Draft
   return db.select().from(draft).where(and(...conditions)).orderBy(desc(draft.createdAt)).limit(200);
 }
 
-export type DraftSource = { mode: string; kind: string | null; title: string | null; url: string | null; contextItemId: string | null };
+export type DraftSource = {
+  mode: string;
+  kind: string | null;
+  title: string | null;
+  url: string | null;
+  contextItemId: string | null;
+  /** The person's own instructions, and whether it's about their work or someone else's. */
+  instructions: string | null;
+  stance: Stance;
+  /** What web research found: its links, and which of the person's hints it confirmed. */
+  research: { summary: string; sources: { url: string; title: string }[]; hints: BriefResearch["hints"] } | null;
+};
 
 /** Where each draft came from (its brief's mode and material), keyed by brief id. */
 export async function draftSources(db: Db, orgId: string, briefIds: (string | null)[]): Promise<Map<string, DraftSource>> {
@@ -302,11 +395,21 @@ export async function draftSources(db: Db, orgId: string, briefIds: (string | nu
   const out = new Map<string, DraftSource>();
   for (const chunk of chunkRows(ids, 2)) {
     const rows = await db
-      .select({ id: brief.id, mode: brief.mode, contextItemId: brief.contextItemId, kind: contextItem.kind, title: contextItem.title, url: contextItem.url })
+      .select({ id: brief.id, mode: brief.mode, contextItemId: brief.contextItemId, kind: contextItem.kind, title: contextItem.title, url: contextItem.url, instructions: brief.instructions, stance: brief.stance, research: brief.research })
       .from(brief)
       .leftJoin(contextItem, eq(contextItem.id, brief.contextItemId))
       .where(and(eq(brief.orgId, orgId), inArray(brief.id, chunk)));
-    for (const r of rows) out.set(r.id, { mode: r.mode, kind: r.kind, title: r.title, url: r.url, contextItemId: r.contextItemId });
+    for (const r of rows)
+      out.set(r.id, {
+        mode: r.mode,
+        kind: r.kind,
+        title: r.title,
+        url: r.url,
+        contextItemId: r.contextItemId,
+        instructions: r.instructions,
+        stance: r.stance,
+        research: r.research ? { summary: r.research.summary, sources: r.research.sources, hints: r.research.hints } : null,
+      });
   }
   return out;
 }

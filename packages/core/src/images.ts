@@ -5,7 +5,7 @@
 import { and, asc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { brief, contextItem, draft, imageSetting, postImage, type Db, type ImageFile, type ImageSize, type ImageSource, type Platform } from "@nextrium/db";
 import { chunkRows } from "./chunk.js";
-import { getOrgPlan } from "./content.js";
+import { getOrgLimits, getOrgPlan } from "./content.js";
 import { newId } from "./ids.js";
 import { PLAN_LIMITS } from "./plans.js";
 import { assertSafeUrl, safeFetchBytes, safeFetchText } from "./safe-fetch.js";
@@ -457,9 +457,9 @@ export async function findImage(
   }
   // 4. AI, when allowed and within the daily limit.
   if (want("ai") && opts.allowAi && deps.ai) {
-    const plan = await getOrgPlan(deps.db, orgId);
-    if ((await aiImagesToday(deps.db, orgId)) >= PLAN_LIMITS[plan].uploadsPerDay) {
-      if (opts.only === "ai") throw new ImageError("limit", `You've made today's ${PLAN_LIMITS[plan].uploadsPerDay} AI images. Try again tomorrow, or use a photo or a card.`);
+    const { uploadsPerDay } = (await getOrgLimits(deps.db, orgId)).limits;
+    if ((await aiImagesToday(deps.db, orgId)) >= uploadsPerDay) {
+      if (opts.only === "ai") throw new ImageError("limit", `You've made today's ${uploadsPerDay} AI images. Try again tomorrow, or use a photo or a card.`);
       return null;
     }
     const bytes = await generateAiImage(deps.ai, postText).catch(() => null);

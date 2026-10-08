@@ -1,6 +1,6 @@
 // Phase 2 API: persona, context, sources, voice notes, compose, drafts, usage.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { CONTENT_MODES, DRAFT_STATUSES, PLATFORMS } from "@nextrium/db";
+import { CONTENT_MODES, DRAFT_STATUSES, PLATFORMS, STANCES } from "@nextrium/db";
 import {
   addContextItems,
   addSource,
@@ -9,6 +9,7 @@ import {
   compose,
   ComposeError,
   DraftStateError,
+  getOrgLimits,
   getOrgPlan,
   getPersona,
   getSource,
@@ -18,6 +19,8 @@ import {
   ingestUrl,
   listContextItems,
   listDrafts,
+  checkTranscript,
+  whisperOptions,
   imagesForDrafts,
   type ImageRow,
   autoScheduleApproved,
@@ -37,7 +40,7 @@ import {
   type Permission,
 } from "@nextrium/core";
 import { PLATFORM_RULES } from "@nextrium/policy";
-import { aiProviders } from "./ai.js";
+import { aiProviders, researchProviders } from "./ai.js";
 import { ImageSummary, findImagesLater, toImageSummary } from "./images-api.js";
 import { apiError, requirePrincipal, type AppEnv } from "./principal.js";
 
@@ -151,6 +154,10 @@ contentApi.openapi(
       z.discriminatedUnion("kind", [
         z.object({ kind: z.literal("manual"), title: z.string().trim().max(300).default(""), body: z.string().trim().min(10).max(20000) }),
         z.object({ kind: z.literal("url"), url: z.string().trim().max(2000) }),
+        // "Ask the AI": the person's own instruction, followed when writing.
+        z.object({ kind: z.literal("request"), body: z.string().trim().min(10).max(4000) }),
+        // A voice note's transcript, checked and edited by the person before saving.
+        z.object({ kind: z.literal("voice"), title: z.string().trim().max(300).default(""), body: z.string().trim().min(10).max(20000) }),
       ]),
     ),
     responses: { 201: json(z.object({ id: z.string(), title: z.string() }), "Created"), ...errs },
@@ -160,8 +167,10 @@ contentApi.openapi(
     const input = c.req.valid("json");
     const { orgId } = c.get("principal");
     let item;
-    if (input.kind === "manual") {
-      item = { externalId: null, title: input.title, body: input.body, url: null };
+    if (input.kind === "request") {
+      item = { externalId: null, title: input.body.split("\n")[0]!.slice(0, 80), body: input.body, url: null };
+    } else if (input.kind === "manual" || input.kind === "voice") {
+      item = { externalId: null, title: input.title || (input.kind === "voice" ? "Voice note" : ""), body: input.body, url: null };
     } else {
       try {
         item = await ingestUrl(input.url);
@@ -183,22 +192,48 @@ contentApi.openapi(
     method: "post",
     path: "/contexts/voice",
     tags: ["Content"],
-    request: body(z.object({ audioBase64: z.string().min(100).max(MAX_AUDIO_BASE64).regex(/^[A-Za-z0-9+/=]+$/), title: z.string().trim().max(300).default("") })),
-    responses: { 201: json(z.object({ id: z.string(), title: z.string(), body: z.string() }), "Transcribed"), 503: json(Err, "Not available"), ...errs },
+    request: body(
+      z.object({
+        audioBase64: z.string().min(100).max(MAX_AUDIO_BASE64).regex(/^[A-Za-z0-9+/=]+$/),
+        title: z.string().trim().max(300).default(""),
+        /** Names or words in the note, to help with spelling (e.g. a product name). */
+        hint: z.string().trim().max(300).default(""),
+        /** false: only transcribe, so the person can check and edit before it's saved. */
+        save: z.boolean().default(true),
+      }),
+    ),
+    responses: {
+      200: json(z.object({ text: z.string(), unclear: z.string().nullable() }), "Transcribed, not saved"),
+      201: json(z.object({ id: z.string(), title: z.string(), body: z.string() }), "Transcribed and saved"),
+      422: json(Err, "Unclear recording"),
+      503: json(Err, "Not available"),
+      ...errs,
+    },
   }),
   async (c) => {
     if (denied(c, "content.write")) return c.json(forbidden("add material"), 403);
     if (!c.env.AI) return c.json(apiError("voice_unavailable", "Voice notes aren't available in this environment."), 503);
-    const { audioBase64, title } = c.req.valid("json");
+    const { audioBase64, title, hint, save } = c.req.valid("json");
     let text = "";
     try {
-      const out = (await c.env.AI.run("@cf/openai/whisper-large-v3-turbo" as never, { audio: audioBase64 } as never)) as { text?: string };
-      text = (out?.text ?? "").trim();
+      const options = whisperOptions(await getPersona(c.get("db"), c.get("principal").orgId), hint);
+      type Out = { text?: string; transcription_info?: { text?: string } };
+      const ai = c.env.AI;
+      const out = (await ai.run("@cf/openai/whisper-large-v3-turbo" as never, { audio: audioBase64, ...options } as never).catch((error: unknown) => {
+        // If the model ever refuses the tuning options, transcribe as before rather than fail.
+        console.warn("transcription with options failed, retrying plain", error instanceof Error ? error.message : error);
+        return ai.run("@cf/openai/whisper-large-v3-turbo" as never, { audio: audioBase64 } as never);
+      })) as Out;
+      text = (out?.text ?? out?.transcription_info?.text ?? "").trim();
     } catch (error) {
       console.error("transcription failed", error);
       return c.json(apiError("transcription_failed", "We couldn't transcribe that recording. Try a clearer or shorter one."), 400);
     }
     if (text.length < 10) return c.json(apiError("transcription_empty", "We couldn't hear any speech in that recording."), 400);
+    const check = checkTranscript(text);
+    // Shown to the person to fix; never saved (or written from) without them seeing it.
+    if (!save) return c.json({ text: text.slice(0, 20000), unclear: check.ok ? null : check.reason }, 200);
+    if (!check.ok) return c.json(apiError("transcription_unclear", `${check.reason} Try again somewhere quieter, or type it instead.`), 422);
     const [created] = await addContextItems(c.get("db"), c.get("principal").orgId, "voice", [{ externalId: null, title: title || "Voice note", body: text.slice(0, 20000), url: null }]);
     return c.json({ ...created!, body: text }, 201);
   },
@@ -315,7 +350,22 @@ const DraftSchema = z
     ownImages: z.boolean(),
     // Where the post came from (the material it was written from). Included on reads.
     source: z
-      .object({ mode: z.string(), kind: z.string().nullable(), title: z.string().nullable(), url: z.string().nullable(), contextItemId: z.string().nullable() })
+      .object({
+        mode: z.string(),
+        kind: z.string().nullable(),
+        title: z.string().nullable(),
+        url: z.string().nullable(),
+        contextItemId: z.string().nullable(),
+        instructions: z.string().nullable(),
+        stance: z.enum(STANCES),
+        research: z
+          .object({
+            summary: z.string(),
+            sources: z.array(z.object({ url: z.string(), title: z.string() })),
+            hints: z.array(z.object({ hint: z.string(), status: z.enum(["confirmed", "unconfirmed"]), source: z.string().optional() })),
+          })
+          .nullable(),
+      })
       .nullable()
       .optional(),
   })
@@ -350,12 +400,27 @@ contentApi.openapi(
     method: "post",
     path: "/compose",
     tags: ["Content"],
-    request: body(z.object({ contextItemId: z.string(), mode: z.enum(CONTENT_MODES), platforms: z.array(z.enum(PLATFORMS)).min(1).max(PLATFORMS.length), thread: z.boolean().optional() })),
+    request: body(
+      z.object({
+        contextItemId: z.string(),
+        /** "auto": the writer picks the style from the request. */
+        mode: z.enum([...CONTENT_MODES, "auto"]),
+        platforms: z.array(z.enum(PLATFORMS)).min(1).max(PLATFORMS.length),
+        thread: z.boolean().optional(),
+        /** The person's own instructions for these posts (followed). */
+        instructions: z.string().trim().max(4000).optional(),
+        /** "own": about my work. "other": my view on someone else's work. */
+        stance: z.enum(STANCES).optional(),
+        /** Look up facts on the web first (uses the monthly research allowance, then credits). */
+        research: z.boolean().optional(),
+      }),
+    ),
     responses: {
       201: json(z.object({ briefId: z.string(), model: z.string(), angle: z.string(), drafts: z.array(DraftSchema) }), "Drafts created"),
       402: json(Err, "Out of posts and credits"),
       409: json(Err, "Voice not set up"),
-      503: json(Err, "AI unavailable"),
+      422: json(Err, "Research found nothing reliable"),
+      503: json(Err, "AI or research unavailable"),
       ...errs,
     },
   }),
@@ -365,12 +430,15 @@ contentApi.openapi(
     const providers = aiProviders(c.env);
     if (!providers.length) return c.json(apiError("ai_unavailable", "The writing engine isn't configured in this environment."), 503);
     try {
-      const out = await compose(c.get("db"), providers, { orgId: c.get("principal").orgId, ...input });
-      findImagesLater(c, c.get("db"), c.get("principal").orgId, out.briefId);
-      return c.json({ ...out, drafts: out.drafts.map((d) => toDraft(d)) }, 201);
+      const { orgId } = c.get("principal");
+      const out = await compose(c.get("db"), providers, { orgId, ...input }, { research: researchProviders(c.env) });
+      findImagesLater(c, c.get("db"), orgId, out.briefId);
+      const sources = await draftSources(c.get("db"), orgId, [out.briefId]);
+      return c.json({ briefId: out.briefId, model: out.model, angle: out.angle, drafts: out.drafts.map((d) => ({ ...toDraft(d), source: sources.get(out.briefId) ?? null })) }, 201);
     } catch (error) {
       if (error instanceof ComposeError) {
-        const status = error.code === "quota_exceeded" ? 402 : error.code === "persona_required" ? 409 : error.code === "ai_unavailable" ? 503 : error.code === "context_not_found" ? 404 : 400;
+        const status =
+          error.code === "quota_exceeded" ? 402 : error.code === "persona_required" ? 409 : error.code === "ai_unavailable" || error.code === "research_unavailable" ? 503 : error.code === "research_empty" ? 422 : error.code === "context_not_found" ? 404 : 400;
         return c.json(apiError(error.code, error.message), status);
       }
       throw error;
@@ -467,9 +535,8 @@ contentApi.openapi(
   }),
   async (c) => {
     const { orgId } = c.get("principal");
-    const plan = await getOrgPlan(c.get("db"), orgId);
+    const { plan, limits } = await getOrgLimits(c.get("db"), orgId);
     const usage = await getUsage(c.get("db"), orgId);
-    const limits = PLAN_LIMITS[plan];
     return c.json(
       { plan, period: new Date().toISOString().slice(0, 7), posts: { used: usage.postsGenerated, limit: limits.posts }, videos: { used: usage.videosRendered, limit: limits.videos }, sources: { limit: limits.sources } },
       200,

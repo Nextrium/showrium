@@ -602,6 +602,128 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/waitlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Everyone on the waitlist, newest first */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: components["schemas"]["WaitlistEntry"][];
+                        };
+                    };
+                };
+                /** @description Not signed in, or the API key is invalid */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not allowed */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/waitlist/invite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        ids: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description One result per person. When the email couldn't be sent, the link is returned so it can be shared by hand. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: {
+                                id: string;
+                                email: string;
+                                sent: boolean;
+                                link: string | null;
+                            }[];
+                            skipped: number;
+                        };
+                    };
+                };
+                /** @description Not signed in, or the API key is invalid */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not allowed */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/invites/accept": {
         parameters: {
             query?: never;
@@ -986,6 +1108,16 @@ export interface paths {
                         /** @enum {string} */
                         kind: "url";
                         url: string;
+                    } | {
+                        /** @enum {string} */
+                        kind: "request";
+                        body: string;
+                    } | {
+                        /** @enum {string} */
+                        kind: "voice";
+                        /** @default  */
+                        title?: string;
+                        body: string;
                     };
                 };
             };
@@ -1088,11 +1220,27 @@ export interface paths {
                         audioBase64: string;
                         /** @default  */
                         title?: string;
+                        /** @default  */
+                        hint?: string;
+                        /** @default true */
+                        save?: boolean;
                     };
                 };
             };
             responses: {
-                /** @description Transcribed */
+                /** @description Transcribed, not saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            text: string;
+                            unclear: string | null;
+                        };
+                    };
+                };
+                /** @description Transcribed and saved */
                 201: {
                     headers: {
                         [name: string]: unknown;
@@ -1149,6 +1297,20 @@ export interface paths {
                 };
                 /** @description Not found */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description Unclear recording */
+                422: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -1591,9 +1753,13 @@ export interface paths {
                     "application/json": {
                         contextItemId: string;
                         /** @enum {string} */
-                        mode: "smile" | "teach" | "expert_take" | "build_in_public" | "promote";
+                        mode: "smile" | "teach" | "expert_take" | "build_in_public" | "promote" | "auto";
                         platforms: ("linkedin" | "x" | "instagram" | "facebook" | "threads" | "bluesky" | "mastodon" | "tiktok" | "youtube_shorts")[];
                         thread?: boolean;
+                        instructions?: string;
+                        /** @enum {string} */
+                        stance?: "own" | "other";
+                        research?: boolean;
                     };
                 };
             };
@@ -1696,7 +1862,21 @@ export interface paths {
                         };
                     };
                 };
-                /** @description AI unavailable */
+                /** @description Research found nothing reliable */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: {
+                                code: string;
+                                message: string;
+                            };
+                        };
+                    };
+                };
+                /** @description AI or research unavailable */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -5725,10 +5905,19 @@ export interface paths {
                                 insights: boolean;
                                 seats: number;
                             };
+                            limits: {
+                                posts: number;
+                                xApiPosts: number;
+                                videos: number;
+                                sources: number;
+                                uploadsPerDay: number;
+                                research: number;
+                            };
                             subscription: {
                                 provider: string;
                                 plan: string;
                                 interval: string;
+                                seats: number | null;
                                 status: string;
                                 currentPeriodEnd: string | null;
                             } | null;
@@ -5737,9 +5926,10 @@ export interface paths {
                                     /** @enum {string} */
                                     kind: "plan";
                                     /** @enum {string} */
-                                    plan: "lite" | "starter" | "creator" | "pro";
+                                    plan: "lite" | "starter" | "creator" | "pro" | "team" | "team_seats";
                                     /** @enum {string} */
                                     interval: "month" | "year";
+                                    seats?: number;
                                 } | {
                                     /** @enum {string} */
                                     kind: "credits";
@@ -5857,9 +6047,10 @@ export interface paths {
                             /** @enum {string} */
                             kind: "plan";
                             /** @enum {string} */
-                            plan: "lite" | "starter" | "creator" | "pro";
+                            plan: "lite" | "starter" | "creator" | "pro" | "team" | "team_seats";
                             /** @enum {string} */
                             interval: "month" | "year";
+                            seats?: number;
                         } | {
                             /** @enum {string} */
                             kind: "credits";
@@ -7262,7 +7453,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        plan: "free" | "lite" | "starter" | "creator" | "pro" | "team";
+                        plan: "free" | "lite" | "starter" | "creator" | "pro" | "team" | "team_seats";
                         note: string;
                     };
                 };
@@ -8798,6 +8989,16 @@ export interface components {
             expiresAt: string;
             createdAt: string;
         };
+        WaitlistEntry: {
+            id: string;
+            email: string;
+            source: string;
+            joinedListAt: string;
+            invitedAt: string | null;
+            /** @enum {string} */
+            status: "waiting" | "invited" | "invite_expired" | "joined";
+            joinedAt: string | null;
+        };
         Persona: {
             displayName: string;
             /** @default  */
@@ -8863,6 +9064,22 @@ export interface components {
                 title: string | null;
                 url: string | null;
                 contextItemId: string | null;
+                instructions: string | null;
+                /** @enum {string} */
+                stance: "own" | "other";
+                research: {
+                    summary: string;
+                    sources: {
+                        url: string;
+                        title: string;
+                    }[];
+                    hints: {
+                        hint: string;
+                        /** @enum {string} */
+                        status: "confirmed" | "unconfirmed";
+                        source?: string;
+                    }[];
+                } | null;
             } | null;
         };
         PostImage: {

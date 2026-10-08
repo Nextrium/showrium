@@ -105,7 +105,10 @@ export function Invite() {
 
       {state === "valid" && !isPending && !session && (
         <>
-          <p className="note">Create your account in the way you prefer. The invite works with any email for the next 30 minutes on this device.</p>
+          <p className="note">
+            This creates your own Showrium account and workspace on the Free plan; you can upgrade any time. Create it in the way you prefer. The invite works with any email for
+            the next 30 minutes on this device.
+          </p>
           {auth?.google && (
             <Button variant="secondary" onClick={() => social("google")}>
               Continue with Google

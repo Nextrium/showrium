@@ -1,20 +1,37 @@
 import { useState, type FormEvent } from "react";
 import { api, formatDate, useApi } from "../lib";
 
-type Item = { kind: "plan"; plan: string; interval: "month" | "year" } | { kind: "credits"; pack: "c500" | "c1100" };
+type Item = { kind: "plan"; plan: string; interval: "month" | "year"; seats?: number } | { kind: "credits"; pack: "c500" | "c1100" };
 type Billing = {
   plan: string;
   features: { autopilot: string; insights: boolean; seats: number };
-  subscription: { provider: string; plan: string; interval: string; status: string; currentPeriodEnd: string | null } | null;
+  limits: { posts: number; xApiPosts: number; videos: number; sources: number; research: number };
+  subscription: { provider: string; plan: string; interval: string; seats: number | null; status: string; currentPeriodEnd: string | null } | null;
   catalog: { item: Item; usdCents: number; providers: ("paystack" | "lemonsqueezy")[] }[];
 };
 const PROVIDER = { paystack: "Pay in naira (Paystack)", lemonsqueezy: "Pay by card, worldwide" };
+export const PLAN_NAMES: Record<string, string> = {
+  free: "Free",
+  lite: "Lite",
+  starter: "Starter",
+  creator: "Creator",
+  pro: "Pro",
+  team: "Team (shared)",
+  team_seats: "Team (per member)",
+  staff: "Full access",
+};
+const PLAN_NOTES: Record<string, string> = {
+  pro: "1 person",
+  team: "up to 5 people share Pro's allowance",
+  team_seats: "2 to 5 people; each paid member adds a Pro-sized allowance",
+};
 const PACK = { c500: "500 credits", c1100: "1,100 credits" };
 const usd = (cents: number) => `$${(cents / 100).toFixed(cents % 100 ? 2 : 0)}`;
 const msg = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
 
 export function BillingCard({ canManage }: { canManage: boolean }) {
   const { data } = useApi<Billing>("/billing");
+  const [members, setMembers] = useState<Record<string, number>>({ month: 2, year: 2 });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const done = new URLSearchParams(window.location.search).get("billing") === "done";
@@ -34,30 +51,64 @@ export function BillingCard({ canManage }: { canManage: boolean }) {
   };
   const sub = data.subscription;
   const active = sub && (sub.status === "active" || sub.status === "past_due" || sub.status === "cancelled");
-  const plans = data.catalog.filter((c) => c.item.kind === "plan" && c.providers.length);
+  const plans = data.catalog.filter((c) => c.item.kind === "plan" && c.item.plan !== "team_seats" && c.providers.length);
+  // Per-member Team: one row per billing period, with a choice of how many members.
+  const seatItems = data.catalog.filter((c) => c.item.kind === "plan" && c.item.plan === "team_seats" && c.providers.length);
+  const seatRows = (["month", "year"] as const)
+    .map((interval) => {
+      const options = seatItems.filter((c) => c.item.kind === "plan" && c.item.interval === interval);
+      const chosen = options.find((c) => c.item.kind === "plan" && c.item.seats === members[interval]) ?? options[0];
+      return chosen ? { interval, options, chosen } : null;
+    })
+    .filter((r) => r !== null);
   const packs = data.catalog.filter((c) => c.item.kind === "credits" && c.providers.length);
 
   return (
     <section className="card" aria-labelledby="billing-title">
       <h2 className="h3" id="billing-title">Plan and billing</h2>
       <p className="note">
-        You're on <strong>{data.plan}</strong>: autopilot up to "{data.features.autopilot}", audience themes {data.features.insights ? "included" : "not included"}, {data.features.seats} seat{data.features.seats === 1 ? "" : "s"}.
+        You're on <strong>{PLAN_NAMES[data.plan] ?? data.plan}</strong>: autopilot up to "{data.features.autopilot}", audience themes {data.features.insights ? "included" : "not included"},{" "}
+        {data.features.seats} {data.features.seats === 1 ? "person" : "people"}. This month: {data.limits.posts} posts, {data.limits.videos} videos, {data.limits.research} web researches.
       </p>
       {done && <p className="note" role="status">Thanks! Your payment is being confirmed; this page updates within a minute.</p>}
       {sub && active && (
         <p className="note">
-          {sub.plan} ({sub.interval}ly) via {sub.provider}: {sub.status === "cancelled" ? "cancelled, ends" : sub.status === "past_due" ? "payment failed, retrying until" : "renews"} {sub.currentPeriodEnd ? formatDate(sub.currentPeriodEnd) : "soon"}.
+          {PLAN_NAMES[sub.plan] ?? sub.plan}{sub.seats ? ` for ${sub.seats} members` : ""} ({sub.interval}ly) via {sub.provider}: {sub.status === "cancelled" ? "cancelled, ends" : sub.status === "past_due" ? "payment failed, retrying until" : "renews"} {sub.currentPeriodEnd ? formatDate(sub.currentPeriodEnd) : "soon"}.
         </p>
       )}
       {canManage && active && <button className="button secondary" disabled={busy} onClick={() => go("/billing/portal")}>Manage billing</button>}
+      {canManage && active && sub?.plan === "team_seats" && (
+        <p className="note">Members are paid for the whole period: removing someone doesn't refund their seat or reset this month's usage. To change the number of members, write to support@showrium.com.</p>
+      )}
       {canManage && !active && plans.length > 0 && (
         <div className="table-wrap">
           <table>
             <tbody>
               {plans.map((c) => (
                 <tr key={`${c.item.kind === "plan" && c.item.plan}-${c.item.kind === "plan" && c.item.interval}`}>
-                  <td>{c.item.kind === "plan" && c.item.plan} <span className="muted">{usd(c.usdCents)}/{c.item.kind === "plan" && c.item.interval}</span></td>
+                  <td>
+                    {c.item.kind === "plan" && (PLAN_NAMES[c.item.plan] ?? c.item.plan)} <span className="muted">{usd(c.usdCents)}/{c.item.kind === "plan" && c.item.interval}</span>
+                    {c.item.kind === "plan" && PLAN_NOTES[c.item.plan] && <span className="block text-[12.5px] text-muted">{PLAN_NOTES[c.item.plan]}</span>}
+                  </td>
                   <td className="num">{c.providers.map((p) => <button key={p} className="button secondary" disabled={busy} onClick={() => go("/billing/checkout", { provider: p, item: c.item })}>{PROVIDER[p]}</button>)}</td>
+                </tr>
+              ))}
+              {seatRows.map(({ interval, options, chosen }) => (
+                <tr key={`team_seats-${interval}`}>
+                  <td>
+                    {PLAN_NAMES.team_seats}{" "}
+                    <span className="muted">
+                      {usd(chosen.usdCents)}/{interval} ({usd(chosen.usdCents / (chosen.item.kind === "plan" ? chosen.item.seats ?? 1 : 1))} per member)
+                    </span>
+                    <span className="block text-[12.5px] text-muted">{PLAN_NOTES.team_seats}</span>
+                    <label className="mt-1 flex items-center gap-2 text-[13px]">
+                      Members
+                      <select value={chosen.item.kind === "plan" ? chosen.item.seats : 2} onChange={(e) => setMembers((m) => ({ ...m, [interval]: Number(e.target.value) }))} aria-label={`Members, ${interval}ly Team`}>
+                        {options.map((o) => o.item.kind === "plan" && <option key={o.item.seats} value={o.item.seats}>{o.item.seats}</option>)}
+                      </select>
+                    </label>
+                  </td>
+                  <td className="num">{chosen.providers.map((p) => <button key={p} className="button secondary" disabled={busy} onClick={() => go("/billing/checkout", { provider: p, item: chosen.item })}>{PROVIDER[p]}</button>)}</td>
                 </tr>
               ))}
             </tbody>
@@ -76,7 +127,7 @@ export function BillingCard({ canManage }: { canManage: boolean }) {
           </div>
         </>
       )}
-      {!plans.length && !packs.length && <p className="note">Paid plans open soon. During the beta, ask us if you need more.</p>}
+      {!plans.length && !seatRows.length && !packs.length && <p className="note">Paid plans open soon. During the beta, ask us if you need more.</p>}
       {error && <p className="error" role="alert">{error}</p>}
     </section>
   );
@@ -118,6 +169,7 @@ export function TeamCard({ canManage, myEmail }: { canManage: boolean; myEmail: 
     <section className="card" aria-labelledby="team-title">
       <h2 className="h3" id="team-title">Team</h2>
       <p className="note">{used} of {data.seats} seat{data.seats === 1 ? "" : "s"} used. Roles: viewers read; editors write; approvers approve and publish; admins manage everything but owners.</p>
+      {data.seats === 1 && <p className="note">Each plan is for one person. To work with others, switch to a Team plan in Billing.</p>}
       <div className="table-wrap">
         <table>
           <tbody>

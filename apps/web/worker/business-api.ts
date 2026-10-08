@@ -33,6 +33,10 @@ import {
   setOrgPlan,
   TeamError,
   verifySignature,
+  getOrgLimits,
+  planPriceCents,
+  TEAM_SEATS_MAX,
+  TEAM_SEATS_MIN,
   type CheckoutItem,
 } from "@nextrium/core";
 import { INVITE_COOKIE } from "./auth.js";
@@ -62,7 +66,13 @@ const onlyManagers = (what: string) => apiError("forbidden", `Only workspace own
 // --- Billing --------------------------------------------------------------------------------
 
 const ItemSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("plan"), plan: z.enum(["lite", "starter", "creator", "pro"]), interval: z.enum(["month", "year"]) }),
+  z.object({
+    kind: z.literal("plan"),
+    plan: z.enum(["lite", "starter", "creator", "pro", "team", "team_seats"]),
+    interval: z.enum(["month", "year"]),
+    /** Per-member Team only: how many members to pay for (2-5). */
+    seats: z.number().int().min(TEAM_SEATS_MIN).max(TEAM_SEATS_MAX).optional(),
+  }),
   z.object({ kind: z.literal("credits"), pack: z.enum(["c500", "c1100"]) }),
 ]);
 
@@ -77,7 +87,11 @@ businessApi.openapi(
           plan: z.string(),
           fullAccess: z.boolean(),
           features: z.object({ autopilot: z.string(), insights: z.boolean(), seats: z.number() }),
-          subscription: z.object({ provider: z.string(), plan: z.string(), interval: z.string(), status: z.string(), currentPeriodEnd: z.string().nullable() }).nullable(),
+          /** This month's allowance (a per-member Team: per member times paid members). */
+          limits: z.object({ posts: z.number(), xApiPosts: z.number(), videos: z.number(), sources: z.number(), uploadsPerDay: z.number(), research: z.number() }),
+          subscription: z
+            .object({ provider: z.string(), plan: z.string(), interval: z.string(), seats: z.number().nullable(), status: z.string(), currentPeriodEnd: z.string().nullable() })
+            .nullable(),
           catalog: z.array(z.object({ item: ItemSchema, usdCents: z.number(), providers: z.array(z.enum(["paystack", "lemonsqueezy"])) })),
         }),
       ),
@@ -88,20 +102,29 @@ businessApi.openapi(
     const { orgId } = c.get("principal");
     const db = c.get("db");
     const cfg = billingConfig(c.env);
-    const plan = await getOrgPlan(db, orgId);
+    const { plan, limits, seats } = await getOrgLimits(db, orgId);
     const sub = await getSubscription(db, orgId);
-    const items: { item: CheckoutItem; usdCents: number }[] = [
-      ...Object.entries(PLAN_PRICES).flatMap(([p, prices]) =>
-        Object.entries(prices).map(([interval, usdCents]) => ({ item: { kind: "plan" as const, plan: p as "lite", interval: interval as "month" }, usdCents: usdCents! })),
+    const seatCounts = Array.from({ length: TEAM_SEATS_MAX - TEAM_SEATS_MIN + 1 }, (_, i) => TEAM_SEATS_MIN + i);
+    const planItems: { item: CheckoutItem; usdCents: number | null }[] = (Object.keys(PLAN_PRICES) as (keyof typeof PLAN_PRICES)[]).flatMap((p) =>
+      (["month", "year"] as const).flatMap((interval): { item: CheckoutItem; usdCents: number | null }[] =>
+        p === "team_seats"
+          ? seatCounts.map((n) => ({ item: { kind: "plan", plan: p, interval, seats: n }, usdCents: planPriceCents(p, interval, n) }))
+          : [{ item: { kind: "plan", plan: p, interval }, usdCents: planPriceCents(p, interval) }],
       ),
+    );
+    const items: { item: CheckoutItem; usdCents: number }[] = [
+      ...planItems.filter((x): x is { item: CheckoutItem; usdCents: number } => x.usdCents !== null),
       ...Object.entries(CREDIT_PACKS).map(([pack, v]) => ({ item: { kind: "credits" as const, pack: pack as "c500" }, usdCents: v.usdCents })),
     ];
     return c.json(
       {
         plan,
         fullAccess: plan === "staff",
-        features: PLAN_FEATURES[plan],
-        subscription: sub ? { provider: sub.provider, plan: sub.plan, interval: sub.interval, status: sub.status, currentPeriodEnd: sub.currentPeriodEnd?.toISOString() ?? null } : null,
+        features: { ...PLAN_FEATURES[plan], seats },
+        limits,
+        subscription: sub
+          ? { provider: sub.provider, plan: sub.plan, interval: sub.interval, seats: sub.seats ?? null, status: sub.status, currentPeriodEnd: sub.currentPeriodEnd?.toISOString() ?? null }
+          : null,
         catalog: items.map((i) => ({ ...i, providers: providersFor(cfg, i.item) })),
       },
       200,
@@ -223,7 +246,7 @@ businessApi.openapi(
     const { members, invites } = await listMembers(db, orgId);
     return c.json(
       {
-        seats: PLAN_FEATURES[await getOrgPlan(db, orgId)].seats,
+        seats: (await getOrgLimits(db, orgId)).seats,
         members: members.map((m) => ({ id: m.id, name: m.name, email: m.email, role: m.role, createdAt: m.createdAt.toISOString() })),
         invites: invites.map((i) => ({ id: i.id, email: i.email, role: i.role, expiresAt: i.expiresAt.toISOString() })),
       },

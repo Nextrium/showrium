@@ -1,6 +1,6 @@
 // Builds the AI provider chain from configuration (ADR-0004, benchmark 2026-09-27):
 // DeepSeek V4 Flash -> Gemini 3.1 Flash-Lite (both via OpenRouter) -> Workers AI (free).
-import { fakeProvider, openRouterProvider, workersAiProvider, type Provider } from "@nextrium/llm";
+import { fakeProvider, fakeResearchProvider, openRouterProvider, openRouterResearchProvider, workersAiProvider, type Provider, type ResearchProvider } from "@nextrium/llm";
 import type { Env } from "./env.js";
 
 /** The fake provider only ever runs on localhost (tests, local dev), never in a deployed environment. */
@@ -35,6 +35,7 @@ function fakeReply(user: string): string {
   const threaded = (user.match(/For ([a-z_, ]+): write a thread\./)?.[1] ?? "").split(",").map((s) => s.trim());
   const parts = ["Retries used to fail silently. Here's what we changed.", "Each retry now waits a little longer than the last.", "A small random delay stops every client retrying at once."];
   return JSON.stringify({
+    ...(user.includes("choose the best one for the request") ? { mode: "expert_take" } : {}),
     angle: "What changed and why it matters",
     key_points: ["The main change", "Why it helps"],
     variants: ids.map((platform) =>
@@ -51,10 +52,53 @@ export function aiProviders(env: Env): Provider[] {
   if (env.OPENROUTER_API_KEY) {
     const common = { apiKey: env.OPENROUTER_API_KEY, appUrl: env.SITE_URL };
     providers.push(
-      openRouterProvider({ ...common, model: "deepseek/deepseek-v4-flash", price: { input: 0.047, output: 0.094 } }),
+      // OpenRouter list prices per million tokens, checked 2026-10-08.
+      openRouterProvider({ ...common, model: "deepseek/deepseek-v4-flash", price: { input: 0.0131, output: 1.28 } }),
       openRouterProvider({ ...common, model: "google/gemini-3.1-flash-lite", price: { input: 0.25, output: 1.5 } }),
     );
   }
   if (env.AI) providers.push(workersAiProvider({ ai: env.AI, model: "@cf/meta/llama-3.1-8b-instruct" }));
   return providers;
+}
+
+/**
+ * Web research (benchmark 2026-10-08 on a real request: DeepSeek V4 Pro with Exa search found the
+ * most, every link checked; Perplexity Sonar is the fallback, with a different search engine).
+ */
+export function researchProviders(env: Env): ResearchProvider[] {
+  if (fakeAllowed(env)) return [fakeResearchProvider((req) => fakeResearch(req.user))];
+  if (!env.OPENROUTER_API_KEY) return [];
+  const common = { apiKey: env.OPENROUTER_API_KEY, appUrl: env.SITE_URL };
+  return [
+    openRouterResearchProvider({ ...common, model: "deepseek/deepseek-v4-pro", extra: { reasoning: { enabled: false }, plugins: [{ id: "web", engine: "exa", max_results: 8 }] } }),
+    openRouterResearchProvider({ ...common, model: "perplexity/sonar", extra: { web_search_options: { search_context_size: "medium" } } }),
+  ];
+}
+
+/** Deterministic research for tests: one real-looking finding, and one with a link the search never returned. */
+function fakeResearch(user: string) {
+  const citations = [
+    { url: "https://news.example/lagos-life", title: "Lagos Life goes viral" },
+    { url: "https://news.example/offer", title: "Creator turns down offer" },
+  ];
+  if (user.includes("NOTHING-FOUND")) return { text: JSON.stringify({ subject: "", summary: "", facts: [], found_enough: false }), citations, costMicroUsd: 7000 };
+  return {
+    text: JSON.stringify({
+      subject: "Lagos Life",
+      summary: "A browser game by a UK-based Nigerian developer that went viral.",
+      facts: [
+        { claim: "Lagos Life passed 1 million players.", source: "https://news.example/lagos-life" },
+        { claim: "A made-up claim.", source: "https://invented.example/nope" },
+      ],
+      criticism: [{ point: "Some called the $1B valuation unrealistic.", source: "https://news.example/offer" }],
+      support: [],
+      hints: [
+        { hint: "She turned down a $100K offer.", status: "confirmed", source: "https://www.news.example/offer/" },
+        { hint: "Two live database migrations.", status: "confirmed", source: "https://invented.example/db" },
+      ],
+      found_enough: true,
+    }),
+    citations,
+    costMicroUsd: 15000,
+  };
 }
