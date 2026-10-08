@@ -7,7 +7,7 @@ import { createAuth } from "./auth.js";
 import type { Env } from "./env.js";
 
 export type Principal =
-  | { kind: "user"; userId: string; orgId: string; role: Role }
+  | { kind: "user"; userId: string; email: string; orgId: string; role: Role }
   | { kind: "api_key"; apiKeyId: string; orgId: string; role: "admin" };
 
 export type AppVariables = { db: Db; principal: Principal };
@@ -20,6 +20,8 @@ export function apiError(code: string, message: string) {
 }
 
 export const requirePrincipal = createMiddleware<AppEnv>(async (c, next) => {
+  // Several sub-apps guard overlapping paths (e.g. /drafts/*); resolve the caller only once.
+  if (c.get("principal")) return next();
   const db = createDb(c.env.DB);
   c.set("db", db);
 
@@ -50,7 +52,7 @@ export const requirePrincipal = createMiddleware<AppEnv>(async (c, next) => {
     membership = await resolveMembership(db, session.user.id);
   }
   if (!membership) return c.json(apiError("no_workspace", "You don't have access to this workspace."), 403);
-  c.set("principal", { kind: "user", userId: session.user.id, orgId: membership.orgId, role: membership.role });
+  c.set("principal", { kind: "user", userId: session.user.id, email: session.user.email, orgId: membership.orgId, role: membership.role });
   return next();
 });
 

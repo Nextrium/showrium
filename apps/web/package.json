@@ -8,28 +8,38 @@
     "deploy": "vite build && wrangler deploy",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@hono/zod-openapi": "1.6.3",
     "@nextrium/core": "workspace:*",
     "@nextrium/db": "workspace:*",
+    "@nextrium/llm": "workspace:*",
+    "@nextrium/platforms": "workspace:*",
+    "@nextrium/policy": "workspace:*",
     "better-auth": "1.7.6",
+    "heic-to": "1.5.2",
     "hono": "4.13.9",
+    "qrcode-generator": "^2.0.4",
     "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "zod": "4.6.5"
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.60.2",
     "@cloudflare/vitest-pool-workers": "0.22.0",
     "@cloudflare/workers-types": "^5.20260926.1",
+    "@playwright/test": "1.63.0",
+    "@tailwindcss/vite": "4.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "6.1.1",
+    "axe-core": "^4.13.0",
+    "tailwindcss": "4.3.3",
     "typescript": "^7.0.2",
     "vite": "8.3.1",
     "vitest": "^4.1.11",
-    "wrangler": "4.141.0"
+    "wrangler": "4.141.0",
+    "zod": "4.6.5"
   }
 }

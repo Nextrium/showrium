@@ -1,0 +1,1 @@
+ALTER TABLE `subscription` ADD `provider_updated_at` integer;

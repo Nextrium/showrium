@@ -2,7 +2,7 @@
 
 const DraftNote = () => (
   <p className="draft">
-    Draft for the private beta, last updated 27 September 2026 (rev. 3). Questions: legal@showrium.com.
+    Draft for the private beta, last updated 29 September 2026 (rev. 4). Questions: legal@showrium.com.
   </p>
 );
 
@@ -20,8 +20,9 @@ export function Privacy() {
       <ul>
         <li><strong>Waitlist:</strong> if you join the waitlist, just your email address, used only to send your invite and product updates you can opt out of.</li>
         <li><strong>Account details:</strong> name, email, profile picture and sign-in method.</li>
-        <li><strong>Content you give us:</strong> text, voice notes, links, repositories and files you connect, plus the drafts we create with you.</li>
+        <li><strong>Content you give us:</strong> text, voice notes, links, repositories, feeds, photos and documents you upload or connect, your answers to the daily question, plus the drafts and images we create with you.</li>
         <li><strong>Sign-in and connected accounts:</strong> access tokens from GitHub, Google or social platforms, stored encrypted, and the posts, comments and statistics those platforms let us read.</li>
+        <li><strong>Email:</strong> the messages we send you (confirming your email, resetting your password, invites) and whether they were delivered.</li>
         <li><strong>Usage and billing:</strong> actions in the app, credit balance and transactions, and payment records from our payment providers. We never see or store full card numbers.</li>
       </ul>
 
@@ -29,28 +30,33 @@ export function Privacy() {
       <ul>
         <li>To create, schedule and publish content when you ask us to.</li>
         <li>To learn your voice and interests <em>for your account only</em>. We don't use your content to train AI models shared with other customers.</li>
+        <li>To find an image for a post: your own photo, the preview image of a link you shared, a screenshot of that page, or, if you allow it, an AI-made image that is always labelled as AI.</li>
         <li>To run, secure and improve the service, prevent abuse, and meet legal duties.</li>
       </ul>
 
       <h2>Who processes it</h2>
       <p>
-        We use service providers that process data for us under contract: Cloudflare (hosting, storage), AI model
-        providers reached through OpenRouter and Cloudflare (to write drafts), and payment processors. Social platforms
-        receive the content you choose to publish. We don't sell personal data.
+        We use service providers that process data for us under contract: Cloudflare (hosting, database, file storage,
+        page screenshots and some AI models), AI model providers reached through OpenRouter (to write drafts), Brevo (to
+        send account emails), and our payment processors Paystack and Lemon Squeezy. Social platforms receive only the
+        content you choose to publish. We don't sell personal data or share it for advertising.
       </p>
 
       <h2>Where it's stored and for how long</h2>
       <p>
         Data is stored on Cloudflare's global network and may be processed outside Nigeria, with safeguards required by
-        the Nigeria Data Protection Act 2023 and, for users in the EU/UK, the GDPR. We keep account data while your
-        account is open. To close your account and delete your data, email legal@showrium.com; we complete deletion
-        within 30 days, except records we must keep by law.
+        the Nigeria Data Protection Act 2023 and, for users in the EU/UK, the GDPR. Your files and images are private: only
+        members of your workspace can see them. We keep account data while your account is open. You can delete your
+        account yourself in Settings → Your data: your account, and every workspace where you're the only member, are
+        deleted at once with their posts, files and connected accounts. Backups roll over within 30 days. Payment
+        records are kept by our payment processors for as long as tax law requires; we keep only the event type, not
+        your name or email.
       </p>
 
       <h2>Your rights</h2>
       <p>
         You can access, correct, export or delete your data, withdraw consent, and disconnect any social account at any
-        time. Email legal@showrium.com. You may also complain to the Nigeria Data Protection Commission or your local
+        time. Download a copy or delete your account in Settings → Your data, or email legal@showrium.com. You may also complain to the Nigeria Data Protection Commission or your local
         data protection authority.
       </p>
     </article>

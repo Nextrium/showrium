@@ -1,0 +1,170 @@
+import { useState } from "react";
+import { copyImage, saveFile, useImageFiles, type ImageSize } from "../../components/PostImage";
+import { api, useApi } from "../../lib";
+import type { Draft } from "./shared";
+
+type Connection = { id: string; platform: string; handle: string; status: string };
+const API_PLATFORMS = ["x", "linkedin", "bluesky", "mastodon"];
+const OPEN_APP: Record<string, string> = {
+  facebook: "https://www.facebook.com/",
+  instagram: "https://www.instagram.com/",
+  tiktok: "https://www.tiktok.com/upload",
+  youtube_shorts: "https://studio.youtube.com/",
+};
+
+export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (d: Draft) => void }) {
+  const { data } = useApi<{ data: Connection[] }>("/connections");
+  // Loaded ahead of time so "Post it myself" is a plain link: opening a tab after an await
+  // is treated as an unrequested popup and blocked by browsers.
+  const { data: intent } = useApi<{ url: string | null }>(`/drafts/${draft.id}/intent`, { live: false });
+  const postUrl = intent ? intent.url ?? OPEN_APP[draft.platform] ?? null : null;
+  const accounts = (data?.data ?? []).filter((c) => c.platform === draft.platform && c.status === "active");
+  const [connectionId, setConnectionId] = useState<string>("");
+  const [when, setWhen] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [opened, setOpened] = useState(false);
+  const chosen = connectionId || accounts[0]?.id || "";
+  // The post's images, loaded now: the share sheet only opens straight from a click.
+  const { data: imageSettings } = useApi<{ sizes: Partial<Record<string, ImageSize>> }>("/image-settings", { live: false });
+  const files = useImageFiles(draft.images ?? [], imageSettings ? (imageSettings.sizes[draft.platform] ?? "landscape") : "none");
+  const [copiedImage, setCopiedImage] = useState<number | null>(null);
+
+  const act = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "That didn't work.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const publishNow = () =>
+    act(async () => {
+      const out = await api<{ url: string | null }>(`/drafts/${draft.id}/publish`, { method: "POST", body: JSON.stringify({ connectionId: chosen }) });
+      onChange({ ...draft, status: "published", externalUrl: out.url });
+    });
+  const schedule = () =>
+    act(async () => {
+      await api(`/drafts/${draft.id}/schedule`, { method: "POST", body: JSON.stringify({ connectionId: chosen, at: new Date(when).toISOString() }) });
+      setMessage(`Scheduled for ${new Date(when).toLocaleString()}.`);
+      onChange({ ...draft, status: "scheduled", scheduledAt: new Date(when).toISOString() });
+    });
+  const parts = draft.parts && draft.parts.length > 1 ? draft.parts : null;
+  const [copiedPart, setCopiedPart] = useState<number | null>(null);
+  const tapToPost = () => {
+    // Runs synchronously inside the click, alongside the link opening in a new tab.
+    navigator.clipboard.writeText(parts ? parts[0]! : draft.text).catch(() => undefined);
+    setOpened(true);
+    setMessage(
+      parts
+        ? "The first part is ready to post. Then reply to it with each part below, in order."
+        : intent?.url
+          ? "Opened with your post filled in. Post it there, then mark it as posted."
+          : "Your post is copied. Paste it in the app, then mark it as posted.",
+    );
+  };
+  const firstText = parts ? parts[0]! : draft.text;
+  // Phones (and some computers) can hand the text and the images to the platform's app in one go.
+  const shareData = files.length ? { text: firstText, files: files.map((f) => f.file) } : null;
+  const canShareFiles = Boolean(shareData && typeof navigator.canShare === "function" && navigator.canShare(shareData));
+  const shareWithImages = () => {
+    // Text copied too: some apps take only the images from a share.
+    navigator.clipboard.writeText(firstText).catch(() => undefined);
+    navigator
+      .share(shareData!)
+      .then(() => {
+        setOpened(true);
+        setMessage("Shared. Finish the post in the app (the text is also copied, in case it didn't come through), then mark it as posted.");
+      })
+      .catch((err: unknown) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError("Couldn't open sharing. Use the buttons below instead.");
+      });
+  };
+  const copyOneImage = (i: number) =>
+    copyImage(files[i]!.file)
+      .then(() => setCopiedImage(i))
+      .catch(() => setError("This browser can't copy images. Save it instead, then attach it."));
+  const saveAll = () => files.forEach((f) => saveFile(f.url, f.file.name));
+  const copyPart = (i: number) => {
+    navigator.clipboard.writeText(parts![i]!).then(() => setCopiedPart(i)).catch(() => setError("Couldn't copy. Select the text and copy it yourself."));
+  };
+  const markPosted = () =>
+    act(async () => {
+      await api(`/drafts/${draft.id}/mark-published`, { method: "POST", body: JSON.stringify({ url: null }) });
+      onChange({ ...draft, status: "published" });
+    });
+
+  const canApi = API_PLATFORMS.includes(draft.platform) && accounts.length > 0;
+  return (
+    <div className="form">
+      <div className="row">
+        {canShareFiles && <button className="button" onClick={shareWithImages}>Share with {files.length === 1 ? "image" : `${files.length} images`} (free)</button>}
+        {postUrl ? (
+          <a className={canShareFiles ? "button secondary" : "button"} href={postUrl} target="_blank" rel="noopener noreferrer" onClick={tapToPost}>Post it myself (free)</a>
+        ) : (
+          <button className={canShareFiles ? "button secondary" : "button"} onClick={tapToPost}>Copy for posting (free)</button>
+        )}
+        {opened && <button className="button secondary" disabled={busy} onClick={markPosted}>I've posted it</button>}
+      </div>
+      {files.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-xl border border-line p-3">
+          <span className="text-[13px] text-ink-2">
+            {files.length === 1 ? "The image" : `The ${files.length} images`} for this post{parts ? " (add to the first part)" : ""}: copy and paste {files.length === 1 ? "it" : "each one"} into the post, or save and attach.
+          </span>
+          <ul className="m-0 flex list-none flex-wrap gap-2.5 p-0" aria-label="Images to add to the post">
+            {files.map((f, i) => (
+              <li key={f.image.id} className="flex w-[148px] flex-col gap-1.5">
+                <img src={f.url} alt={f.image.alt} className="h-[96px] w-full rounded-lg border border-line object-cover" />
+                <div className="flex gap-1.5">
+                  {typeof ClipboardItem !== "undefined" && (
+                    <button type="button" className="button secondary" onClick={() => void copyOneImage(i)} aria-label={`Copy image ${i + 1}`}>{copiedImage === i ? "Copied" : "Copy"}</button>
+                  )}
+                  <button type="button" className="button secondary" onClick={() => saveFile(f.url, f.file.name)} aria-label={`Save image ${i + 1}`}>Save</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {files.length > 1 && <button type="button" className="button secondary self-start" onClick={saveAll}>Save all {files.length}</button>}
+        </div>
+      )}
+      {opened && parts && (
+        <ol className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Thread parts to post as replies">
+          {parts.slice(1).map((part, n) => (
+            <li key={n} className="flex items-center justify-between gap-3 rounded-xl border border-line px-3 py-2">
+              <span className="min-w-0 flex-1 truncate text-[13.5px]"><strong className="font-semibold">Reply {n + 1}:</strong> {part}</span>
+              <button type="button" className="button secondary" onClick={() => copyPart(n + 1)}>{copiedPart === n + 1 ? "Copied" : "Copy"}</button>
+            </li>
+          ))}
+        </ol>
+      )}
+      {canApi && (
+        <div className="row">
+          {accounts.length > 1 && (
+            <label>
+              Account
+              <select value={chosen} onChange={(e) => setConnectionId(e.target.value)}>
+                {accounts.map((a) => <option key={a.id} value={a.id}>{a.handle}</option>)}
+              </select>
+            </label>
+          )}
+          <button className="button secondary" disabled={busy} onClick={publishNow}>
+            Publish {parts ? `thread (${parts.length} parts)` : "now"}{draft.platform === "x" ? " (uses X credits)" : ""}
+          </button>
+          <label>
+            Or schedule
+            <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+          </label>
+          <button className="button secondary" disabled={busy || !when} onClick={schedule}>Schedule</button>
+        </div>
+      )}
+      {message && <p className="note" role="status">{message}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+    </div>
+  );
+}
