@@ -1,13 +1,15 @@
 import { expect, type Page } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
+import { DEV_VARS_PATH } from "./dev-vars";
 
 const BASE = "http://localhost:5174";
 
 /** A new signed-in account with its voice set up (through the API, as the app does). */
 export async function signUp(page: Page, platforms = ["linkedin", "bluesky"]) {
-  const email = `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
-  const password = `e2e-${Math.random().toString(36).slice(2)}-Aa1!`;
+  const email = `e2e-${randomUUID()}@example.com`;
+  const password = `e2e-${randomUUID()}-Aa1!`;
   const headers = { Origin: BASE, "Content-Type": "application/json" };
   const res = await page.request.post("/api/auth/sign-up/email", { headers, data: { email, name: "E2E Tester", password } });
   expect(res.status(), await res.text()).toBe(200);
@@ -62,7 +64,7 @@ export async function expectNoSidewaysScroll(page: Page) {
 
 /** Signs in as the e2e staff account (created on first use; its password is in .dev.vars.e2e). */
 export async function signInStaff(page: Page) {
-  const vars = readFileSync(new URL("../.dev.vars.e2e", import.meta.url), "utf8");
+  const vars = readFileSync(DEV_VARS_PATH, "utf8");
   const password = vars.match(/^E2E_STAFF_PASSWORD=(.+)$/m)?.[1]?.trim();
   if (!password) throw new Error("Delete apps/web/.dev.vars.e2e and run again (it predates the staff account).");
   const headers = { Origin: BASE, "Content-Type": "application/json" };

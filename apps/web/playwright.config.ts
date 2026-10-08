@@ -2,6 +2,10 @@
 // They run against a local server on :5174 using the "e2e" Worker environment: its own local
 // database and files, the fake AI, and random secrets per machine. Run with `pnpm e2e`.
 import { defineConfig, devices } from "@playwright/test";
+import { ensureDevVars } from "./e2e/dev-vars";
+
+// Before anything else: the test server reads these when it starts (it starts before globalSetup).
+ensureDevVars();
 
 export default defineConfig({
   testDir: "./e2e",
