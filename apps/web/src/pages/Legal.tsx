@@ -94,6 +94,14 @@ export function Terms() {
         through app stores follow that store's refund rules.
       </p>
 
+      <h2>Open source</h2>
+      <p>
+        Showrium's source code is published at{" "}
+        <a href="https://github.com/Nextrium/showrium" target="_blank" rel="noopener noreferrer">github.com/Nextrium/showrium</a> under the GNU AGPL-3.0, with a
+        commercial licence available from Nextrium. These terms cover your use of the Showrium service; the code licences cover the
+        code. The Showrium name and logo are Nextrium's trademarks.
+      </p>
+
       <h2>Liability</h2>
       <p>
         The service is provided "as is" during the beta. To the extent the law allows, our total liability is limited to

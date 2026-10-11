@@ -4,6 +4,11 @@
 
 The first release of Showrium to app.showrium.com, for invited testers.
 
+### Open source
+- Showrium is open source under the **GNU AGPL-3.0**, with a **commercial licence** from Nextrium for uses the AGPL doesn't fit (LICENSING.md). The TypeScript SDK is **Apache-2.0**.
+- Contributors sign a **Contributor License Agreement** once (CLA.md), checked automatically on pull requests.
+- New: CONTRIBUTING.md, SECURITY.md (private vulnerability reports), TRADEMARKS.md, a "Source code" link in the site footer, and an "Open source" section in the Terms.
+
 ### For people
 - **Write once, post everywhere:** one idea, link, photo, document or voice note becomes a post for each platform you use, in your voice. Nothing posts without your approval unless you switch it on.
 - **Sources for everyone:**

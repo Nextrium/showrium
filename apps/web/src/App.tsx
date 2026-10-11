@@ -57,6 +57,7 @@ function Footer() {
       <nav aria-label="Legal">
         <Link to="/privacy">Privacy</Link>
         <Link to="/terms">Terms</Link>
+        <a href="https://github.com/Nextrium/showrium" target="_blank" rel="noopener noreferrer">Source code</a>
         <span>support@showrium.com</span>
       </nav>
     </footer>

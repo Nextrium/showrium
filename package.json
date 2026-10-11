@@ -1,6 +1,7 @@
 {
   "name": "@nextrium/showrium",
   "private": true,
+  "license": "AGPL-3.0-only",
   "description": "Showrium by Nextrium: one context in, platform-native content out.",
   "packageManager": "pnpm@10.24.0",
   "engines": {

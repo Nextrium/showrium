@@ -1,6 +1,7 @@
 {
   "name": "@nextrium/showrium-sdk",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
