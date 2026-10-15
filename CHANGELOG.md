@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.0: private beta (unreleased)
+## v0.1.0: private beta (2026-10-15)
 
 The first release of Showrium to app.showrium.com, for invited testers.
 
