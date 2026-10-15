@@ -10,16 +10,15 @@ Data lives in Cloudflare D1. The schema and migrations are in `packages/db`, and
 
 ## Local development
 
-```bash
-# once: local secret + local database
-node -e "console.log('BETTER_AUTH_SECRET=' + require('crypto').randomBytes(32).toString('base64url'))" > .dev.vars
-pnpm exec wrangler d1 migrations apply showrium-db --local
+First set up `.dev.vars` and the local database as described in "Run it locally" in the [main README](../../README.md). Then:
 
+```bash
 pnpm dev    # http://localhost:5173
-pnpm test   # runs against a local D1 inside the Workers runtime
+pnpm test   # server tests, against a local D1 inside the Workers runtime
+pnpm e2e    # browser tests (Playwright), on their own server at :5174
 ```
 
-Email and password sign-in is enabled locally only. Password hashing needs more CPU than Cloudflare's free plan allows per request (10 ms), so production uses GitHub and Google sign-in.
+Email and password sign-in is on locally, on preview and in production. GitHub and Google sign-in are optional.
 
 ## Deploying
 

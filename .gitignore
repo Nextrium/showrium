@@ -27,3 +27,6 @@ tools/*/out/
 
 # Local assistant preview config
 .claude/
+# Playwright output
+test-results/
+playwright-report/

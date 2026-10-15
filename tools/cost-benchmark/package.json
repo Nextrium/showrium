@@ -1,6 +1,7 @@
 {
   "name": "@nextrium/showrium-cost-benchmark",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "Measures real per-post AI cost across the primary model and fallbacks.",
   "scripts": {

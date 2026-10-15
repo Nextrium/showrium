@@ -1,6 +1,7 @@
 {
   "name": "@nextrium/core",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -10,6 +11,9 @@
   },
   "dependencies": {
     "@nextrium/db": "workspace:*",
+    "@nextrium/llm": "workspace:*",
+    "@nextrium/platforms": "workspace:*",
+    "@nextrium/policy": "workspace:*",
     "drizzle-orm": "0.45.3",
     "ulid": "^3.0.2"
   },
