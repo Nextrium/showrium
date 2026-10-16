@@ -209,6 +209,40 @@ export const waitlistEntry = sqliteTable("waitlist_entry", {
 });
 
 // ---------------------------------------------------------------------------
+// Showrium staff (admin app). The PLATFORM_ADMIN_EMAILS secret lists the owners; everyone else is
+// invited here with a role. Removing someone sets revokedAt (never a hard delete).
+// ---------------------------------------------------------------------------
+
+export const STAFF_ROLES = ["owner", "support", "finance"] as const;
+export type StaffRole = (typeof STAFF_ROLES)[number];
+
+export const staffMember = sqliteTable("staff_member", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull().unique(),
+  role: text("role", { enum: STAFF_ROLES }).notNull(),
+  invitedByUserId: text("invited_by_user_id"),
+  /** The account invite sent with it (lets them sign up while sign-up is closed). */
+  inviteId: text("invite_id"),
+  acceptedAt: integer("accepted_at", { mode: "timestamp_ms" }),
+  revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+  createdAt: createdAt(),
+});
+
+/** Everything done in the admin app: who (their verified email), what, to what. Never edited or deleted by the app. */
+export const adminAudit = sqliteTable(
+  "admin_audit",
+  {
+    id: text("id").primaryKey(),
+    actorEmail: text("actor_email").notNull(),
+    action: text("action").notNull(),
+    target: text("target"),
+    meta: text("meta", { mode: "json" }).$type<Record<string, unknown>>(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("admin_audit_created_idx").on(t.createdAt)],
+);
+
+// ---------------------------------------------------------------------------
 // Invites: single-use links created by platform admins. They let a person create an
 // account with any sign-in email, in waitlist or allowlist mode. Only a token hash is stored.
 // ---------------------------------------------------------------------------

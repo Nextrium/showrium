@@ -1,0 +1,10 @@
+# Admin app: strict headers, no indexing, no framing.
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  X-Robots-Tag: noindex, nofollow
+  Referrer-Policy: no-referrer
+  Cross-Origin-Opener-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'

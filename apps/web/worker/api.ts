@@ -12,8 +12,8 @@ import {
   recordAudit,
   revokeApiKey,
 } from "@nextrium/core";
-import { createInvite, inviteFromWaitlist, isInviteUsable, isPlatformAdmin, joinWaitlist, listInvites, listWaitlist, revokeInvite } from "@nextrium/core";
-import { actionEmail, sendEmail } from "./email.js";
+import { createInvite, inviteFromWaitlist, isInviteUsable, joinWaitlist, staffCan, staffRoleFor, type StaffPermission, listInvites, listWaitlist, revokeInvite } from "@nextrium/core";
+import { sendEmail, waitlistInviteEmail } from "./email.js";
 import { setCookie } from "hono/cookie";
 import { INVITE_COOKIE } from "./auth.js";
 import { connectionsApi } from "./connections-api.js";
@@ -120,10 +120,15 @@ api.use("/api-keys/*", requirePrincipal);
 api.use("/api-keys", requirePrincipal);
 api.use("/admin/*", requirePrincipal);
 
-/** Platform admin = a signed-in user (never an API key) whose verified email is on PLATFORM_ADMIN_EMAILS. */
-function platformAdmin(c: { get: (k: "principal") => import("./principal.js").Principal; env: { PLATFORM_ADMIN_EMAILS?: string } }) {
+/**
+ * Showrium staff: a signed-in user (never an API key) who is an owner (PLATFORM_ADMIN_EMAILS) or an
+ * invited staff member with a verified email, holding the given permission.
+ */
+async function staff(c: { get: ((k: "principal") => import("./principal.js").Principal) & ((k: "db") => import("@nextrium/db").Db); env: { PLATFORM_ADMIN_EMAILS?: string } }, permission: StaffPermission) {
   const principal = c.get("principal");
-  return principal.kind === "user" && isPlatformAdmin(principal.email, c.env.PLATFORM_ADMIN_EMAILS) ? principal : null;
+  if (principal.kind !== "user") return null;
+  const role = await staffRoleFor(c.get("db"), { userId: principal.userId, email: principal.email }, c.env.PLATFORM_ADMIN_EMAILS);
+  return staffCan(role, permission) ? principal : null;
 }
 
 const OrgSchema = z
@@ -155,7 +160,7 @@ api.openapi(
     const workspace = await getOrg(c.get("db"), principal.orgId);
     if (!workspace) return c.json(apiError("no_workspace", "Workspace not found."), 403);
     return c.json(
-      { principal: { kind: principal.kind, role: principal.role, isPlatformAdmin: Boolean(platformAdmin(c)) }, workspace },
+      { principal: { kind: principal.kind, role: principal.role, isPlatformAdmin: Boolean(await staff(c, "overview")) }, workspace },
       200,
     );
   },
@@ -346,7 +351,7 @@ api.openapi(
     },
   }),
   async (c) => {
-    const admin = platformAdmin(c);
+    const admin = await staff(c, "waitlist");
     if (!admin) return c.json(apiError("forbidden", "Only Showrium staff can create invites."), 403);
     const created = await createInvite(c.get("db"), { createdByUserId: admin.userId, note: c.req.valid("json").note ?? null });
     await recordAudit(c.get("db"), { orgId: admin.orgId, actorUserId: admin.userId, action: "invite.created", target: created.id });
@@ -366,7 +371,7 @@ api.openapi(
     },
   }),
   async (c) => {
-    if (!platformAdmin(c)) return c.json(apiError("forbidden", "Only Showrium staff can see invites."), 403);
+    if (!(await staff(c, "waitlist"))) return c.json(apiError("forbidden", "Only Showrium staff can see invites."), 403);
     const now = Date.now();
     const rows = await listInvites(c.get("db"));
     return c.json(
@@ -397,7 +402,7 @@ api.openapi(
     },
   }),
   async (c) => {
-    const admin = platformAdmin(c);
+    const admin = await staff(c, "waitlist");
     if (!admin) return c.json(apiError("forbidden", "Only Showrium staff can revoke invites."), 403);
     const { id } = c.req.valid("param");
     if (!(await revokeInvite(c.get("db"), id))) return c.json(apiError("not_found", "No pending invite with that ID."), 404);
@@ -428,7 +433,7 @@ api.openapi(
     responses: { 200: { description: "Everyone on the waitlist, newest first", content: { "application/json": { schema: z.object({ data: z.array(WaitlistEntrySchema) }) } } }, ...errors },
   }),
   async (c) => {
-    if (!platformAdmin(c)) return c.json(apiError("forbidden", "Only Showrium staff can see the waitlist."), 403);
+    if (!(await staff(c, "waitlist"))) return c.json(apiError("forbidden", "Only Showrium staff can see the waitlist."), 403);
     const rows = await listWaitlist(c.get("db"));
     return c.json(
       { data: rows.map((r) => ({ ...r, joinedListAt: r.joinedListAt.toISOString(), invitedAt: r.invitedAt?.toISOString() ?? null, joinedAt: r.joinedAt?.toISOString() ?? null })) },
@@ -456,7 +461,7 @@ api.openapi(
     },
   }),
   async (c) => {
-    const admin = platformAdmin(c);
+    const admin = await staff(c, "waitlist");
     if (!admin) return c.json(apiError("forbidden", "Only Showrium staff can invite people."), 403);
     const { ids } = c.req.valid("json");
     const created = await inviteFromWaitlist(c.get("db"), { entryIds: ids, adminUserId: admin.userId });
@@ -469,15 +474,7 @@ api.openapi(
         sent = (
           await sendEmail(
             c.env,
-            actionEmail({
-              to: inv.email,
-              subject: "Your Showrium invite is here",
-              intro:
-                "Thanks for joining the Showrium waitlist. Your invite is ready: it creates your own Showrium account and workspace on the Free plan. You can upgrade any time.",
-              button: "Create my account",
-              url: link,
-              outro: "This link works once, for 7 days. If you didn't ask to join, you can ignore this email.",
-            }),
+            waitlistInviteEmail(inv.email, link),
           )
         ).sent;
       } catch (error) {

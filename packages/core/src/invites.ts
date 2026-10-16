@@ -16,7 +16,7 @@ export function looksLikeInviteToken(token: string | undefined | null): token is
   return typeof token === "string" && token.startsWith(TOKEN_PREFIX) && token.length >= 40 && token.length <= 100;
 }
 
-export async function createInvite(db: Db, input: { createdByUserId: string; note?: string | null; now?: number }) {
+export async function createInvite(db: Db, input: { createdByUserId: string | null; note?: string | null; now?: number }) {
   const token = randomToken();
   const now = input.now ?? Date.now();
   const row = {

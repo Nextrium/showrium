@@ -21,3 +21,6 @@ export * from "./billing.js";
 export * from "./team.js";
 export * from "./prompts.js";
 export * from "./voice.js";
+export * from "./staff.js";
+export * from "./email.js";
+export * from "./admin.js";
