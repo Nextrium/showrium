@@ -1,2 +1,7 @@
 # Test-only secret removed in the following commit (vitest now generates one per run).
 67183934c2b69ae930236f68de5a9cd1cd441a8e:apps/web/vitest.config.ts:generic-api-key:13
+
+# Cloudflare Access AUD tag in apps/admin/wrangler.jsonc: a public application identifier (it is inside
+# every Access token), not a secret.
+8ff05cb0d4dba4c625aae2fddc0eb110b6c74638:apps/admin/wrangler.jsonc:generic-api-key:26
+8ff05cb0d4dba4c625aae2fddc0eb110b6c74638:apps/admin/wrangler.jsonc:generic-api-key:34
