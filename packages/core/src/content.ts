@@ -35,6 +35,7 @@ import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
 import { recordAudit } from "./orgs.js";
 import type { IngestedItem } from "./ingest.js";
+import { openingOf, recentPosts, repeats } from "./repetition.js";
 import { addUsage, CREDITS_PER_EXTRA_POST, CREDITS_PER_EXTRA_RESEARCH, getUsage, limitsFor, seatsFor, type Limits, type Plan } from "./plans.js";
 
 // --- Persona ----------------------------------------------------------------
@@ -242,12 +243,15 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   }
 
   const system = composeSystemPrompt(who);
+  // Recent posts on these platforms: their openings go to the writer to avoid, and new posts are checked against them.
+  const recent = await recentPosts(db, input.orgId, platforms);
+  const recentOpenings = [...new Set(recent.map((r) => openingOf(r.text)).filter((o) => o.length >= 12))].slice(0, 8);
   const xLong = platforms.includes("x") && (await xLongAllowed(db, input.orgId));
   let result;
   try {
     result = await generateStructured(
       providers,
-      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research }), maxTokens: 8000 },
+      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research, recentOpenings }), maxTokens: 8000 },
       ComposeSchema,
       (out) => checkVariants(out, platforms),
     );
@@ -320,7 +324,11 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
     ? [{ code: "unconfirmed_hint", severity: "warn", message: `${unconfirmed} of your hints weren't found in any source. Check the post presents them as what you know, not as reported fact.` }]
     : [];
   const briefId = newId("brf");
-  const rows = variants.map((v) => ({ id: newId("drf"), orgId: input.orgId, briefId, platform: v.platform, text: v.text, parts: v.parts, issues: [...v.issues, ...researchIssue] }));
+  const rows = variants.map((v) => {
+    const same = repeats(v.text, recent.filter((r) => r.platform === v.platform).map((r) => r.text));
+    const repeatIssue: LintIssue[] = same.repeated ? [{ code: "too_similar", severity: "warn", message: `${same.reason} Rewrite it before posting.` }] : [];
+    return { id: newId("drf"), orgId: input.orgId, briefId, platform: v.platform, text: v.text, parts: v.parts, issues: [...v.issues, ...researchIssue, ...repeatIssue] };
+  });
   await db.batch([
     db.insert(brief).values({
       id: briefId,

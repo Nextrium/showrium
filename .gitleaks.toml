@@ -1,0 +1,10 @@
+# Secret scan (gitleaks) settings: the built-in rules, plus known public values that look like keys.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Cloudflare Access AUD tags (apps/admin/wrangler.jsonc): public application identifiers carried in every Access token, not secrets"
+regexes = [
+  '''4d64371e028eea6629869a58cd0f634e0fc058434f5b6365067a68b317c00877''',
+  '''5d81b1d956fece393140f17a33463fdd5ded994af8138f7fc0cd8d1efcc4e1aa''',
+]

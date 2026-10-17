@@ -29,6 +29,8 @@ import {
   saveAutopilot,
   saveLegacyAutopilot,
   autoScheduleApproved,
+  bestWindow,
+  learnWindows,
   updateDraft,
   type Permission,
 } from "@nextrium/core";
@@ -43,7 +45,7 @@ export const autonomyApi = new OpenAPIHono<AppEnv>({
     if (!result.success) return c.json(apiError("invalid_request", result.error.issues.map((i) => i.message).join("; ")), 400);
   },
 });
-for (const path of ["/ideas", "/ideas/*", "/autopilot", "/engagement", "/insights", "/insights/*", "/analytics", "/drafts/bulk-approve", "/drafts/:id/engagement", "/drafts/:id/engagement/*"]) {
+for (const path of ["/ideas", "/ideas/*", "/autopilot", "/autopilot/*", "/engagement", "/insights", "/insights/*", "/analytics", "/drafts/bulk-approve", "/drafts/:id/engagement", "/drafts/:id/engagement/*"]) {
   autonomyApi.use(path, requirePrincipal);
 }
 
@@ -139,9 +141,16 @@ const AutomationInput = z
   .object({
     findIdeas: z.boolean(),
     rules: z.partialRecord(z.enum(PLATFORMS), Rule),
+    /** The balance of styles: each style's share (0 to 10). */
     mix: z.partialRecord(z.enum(CONTENT_MODES), z.number().int().min(0).max(14)),
     days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
     publishHourUtc: z.number().int().min(0).max(23),
+    /** IANA timezone for the days and times of day (e.g. "Africa/Lagos"). Kept as is when left out. */
+    timezone: z.string().trim().min(1).max(64).optional(),
+    /** Times of day to post in. Kept as is when left out. */
+    windows: z.array(z.enum(["morning", "midday", "afternoon", "evening"])).min(1).max(4).optional(),
+    /** Posts per day per platform (each platform has its own limit). Kept as is when left out. */
+    perDay: z.partialRecord(z.enum(PLATFORMS), z.number().int().min(1).max(5)).optional(),
   })
   .openapi("Automation");
 // The earlier single-level shape, still accepted.
@@ -155,6 +164,9 @@ const LegacyInput = z
   })
   .openapi("AutopilotLegacy");
 const AutomationOut = AutomationInput.extend({
+  timezone: z.string(),
+  windows: z.array(z.enum(["morning", "midday", "afternoon", "evening"])),
+  perDay: z.partialRecord(z.enum(PLATFORMS), z.number()),
   level: z.enum(AUTOPILOT_LEVELS),
   mode: z.enum(CONTENT_MODES),
   platforms: z.array(z.enum(PLATFORMS)),
@@ -177,13 +189,39 @@ autonomyApi.openapi(
     if (denied(p, "workspace.manage")) return c.json(forbidden("change automation"), 403);
     try {
       const input = c.req.valid("json");
-      const s = "rules" in input ? await saveAutopilot(c.get("db"), p.orgId, input) : await saveLegacyAutopilot(c.get("db"), p.orgId, input);
-      await recordAudit(c.get("db"), { orgId: p.orgId, ...actor(p), action: "autopilot.updated", meta: { level: s.level, rules: s.rules, mix: s.mix, findIdeas: s.findIdeas } });
+      let s;
+      if ("rules" in input) {
+        const current = await getAutopilot(c.get("db"), p.orgId);
+        s = await saveAutopilot(c.get("db"), p.orgId, { ...input, timezone: input.timezone ?? current.timezone, windows: input.windows ?? current.windows, perDay: input.perDay ?? current.perDay });
+      } else s = await saveLegacyAutopilot(c.get("db"), p.orgId, input);
+      await recordAudit(c.get("db"), { orgId: p.orgId, ...actor(p), action: "autopilot.updated", meta: { level: s.level, rules: s.rules, mix: s.mix, findIdeas: s.findIdeas, perDay: s.perDay, windows: s.windows, timezone: s.timezone } });
       return c.json(out(s), 200);
     } catch (error) {
       if (error instanceof AutopilotError) return error.code === "plan_required" ? c.json(apiError("plan_required", error.message), 402) : c.json(apiError("invalid_autopilot", error.message), 409);
       throw error;
     }
+  },
+);
+
+/** What the posting-time learning has found so far, per platform (from the account's own engagement). */
+autonomyApi.openapi(
+  createRoute({
+    method: "get",
+    path: "/autopilot/timing",
+    tags: ["Autonomy"],
+    responses: { 200: json(z.object({ data: z.array(z.object({ platform: z.enum(PLATFORMS), best: z.enum(["morning", "midday", "afternoon", "evening"]).nullable(), posts: z.number() })) })), ...errs },
+  }),
+  async (c) => {
+    const { orgId } = c.get("principal");
+    const s = await getAutopilot(c.get("db"), orgId);
+    const platforms = Object.keys(s.perDay) as (typeof PLATFORMS)[number][];
+    const data = [];
+    for (const platform of platforms) {
+      const stats = await learnWindows(c.get("db"), orgId, platform, s.timezone);
+      const best = bestWindow(stats);
+      data.push({ platform, best: best?.window ?? null, posts: Object.values(stats).reduce((a, x) => a + (x?.n ?? 0), 0) });
+    }
+    return c.json({ data }, 200);
   },
 );
 

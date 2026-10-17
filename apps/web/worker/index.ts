@@ -140,7 +140,7 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
       const job = cronJob(event.scheduledTime);
       const result =
         job === "sources" ? await runSourcePolling(db, {}, now)
-        : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now, 1, autoImages(env, db)))
+        : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now, 3, autoImages(env, db)))
         : job === "engagement" ? await runEngagementSync(db, fetch, now)
         : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now) };
       console.log("cron", job, result);

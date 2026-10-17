@@ -1,6 +1,8 @@
-// Sprint 3: automation you can combine. Independent switches per platform (write drafts, schedule
-// when approved, approve for me), a weekly mix of styles, and the days and hour to post.
-// Every function filters by orgId. Replies are never automated.
+// Automation you can combine: independent switches per platform (write drafts, schedule when
+// approved, approve for me), a balance of styles, posts per day per platform, and the days and
+// windows to post in, in the person's timezone (v2, 2026-10-17). Posting times are learned from
+// engagement (timing.ts); repeats are flagged (repetition.ts). Every function filters by orgId.
+// Replies, likes, follows and messages are never automated.
 import { and, asc, eq, gte, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import {
   autopilot,
@@ -21,13 +23,15 @@ import type { Provider } from "@nextrium/llm";
 import { composeIdea } from "./autonomy.js";
 import { getOrgLimits, getOrgPlan } from "./content.js";
 import { recordAudit } from "./orgs.js";
-import { getUsage, PLAN_FEATURES, PLAN_LIMITS, type Plan } from "./plans.js";
+import { getUsage, PLAN_FEATURES, type Plan } from "./plans.js";
 import { API_PUBLISH_PLATFORMS, scheduleDraft } from "./publishing.js";
+import { isTimezone, learnWindows, localDay, localParts, pickSlot, PLATFORM_DAILY_MAX, takenTimes, WINDOW_NAMES, type PostingWindow } from "./timing.js";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
-const MAX_PER_WEEK = 14;
+/** The style balance: each style's share, 0 to 10. */
+const MAX_WEIGHT = 10;
 
 /** Never approved automatically: X's automation rules. (Scheduling a post you approved is fine.) */
 export const AUTOPILOT_EXCLUDED: Platform[] = ["x"];
@@ -40,6 +44,9 @@ export type Automation = {
   mix: Partial<Record<ContentMode, number>>;
   days: number[];
   publishHourUtc: number;
+  timezone: string;
+  windows: PostingWindow[];
+  perDay: Partial<Record<Platform, number>>;
 };
 /** The earlier single-level settings; still accepted by the API. */
 export type LegacyAutopilot = { level: AutopilotLevel; mode: ContentMode; platforms: Platform[]; postsPerWeek: number; publishHourUtc: number };
@@ -71,7 +78,7 @@ export function levelOf(rules: Automation["rules"]): AutopilotLevel {
   return "coach";
 }
 
-export function fromLegacy(l: LegacyAutopilot): Omit<Automation, "findIdeas" | "days"> {
+export function fromLegacy(l: LegacyAutopilot): Omit<Automation, "findIdeas" | "days" | "timezone" | "windows" | "perDay"> {
   const full = l.level === "autopilot";
   const write = l.level !== "coach";
   // The old full autopilot never posted to X, so X keeps only "write drafts".
@@ -83,17 +90,41 @@ export function fromLegacy(l: LegacyAutopilot): Omit<Automation, "findIdeas" | "
 export async function saveLegacyAutopilot(db: Db, orgId: string, l: LegacyAutopilot) {
   if (l.level !== "coach" && !l.platforms.length) throw new AutopilotError("Choose at least one platform for autopilot.");
   const current = await getAutopilot(db, orgId);
-  return saveAutopilot(db, orgId, { ...fromLegacy(l), findIdeas: current.findIdeas, days: current.days });
+  return saveAutopilot(db, orgId, { ...fromLegacy(l), findIdeas: current.findIdeas, days: current.days, timezone: current.timezone, windows: current.windows, perDay: current.perDay });
 }
 
 const total = (mix: Automation["mix"]) => Object.values(mix).reduce<number>((a, b) => a + (b ?? 0), 0);
+
+/** Posts per day for each platform that writes: the saved number, at least 1, within the platform's limit. */
+function perDayFor(rules: Automation["rules"], saved: Partial<Record<Platform, number>>): Partial<Record<Platform, number>> {
+  const out: Partial<Record<Platform, number>> = {};
+  for (const p of Object.keys(rules) as Platform[]) {
+    if (!rules[p]?.write && !rules[p]?.schedule) continue;
+    out[p] = Math.min(PLATFORM_DAILY_MAX[p], Math.max(1, Math.round(saved[p] ?? 1)));
+  }
+  return out;
+}
 
 // --- Settings -----------------------------------------------------------------------------------
 
 export async function getAutopilot(db: Db, orgId: string) {
   const [row] = await db.select().from(autopilot).where(eq(autopilot.orgId, orgId));
   if (!row) {
-    return { findIdeas: true, rules: {}, mix: { build_in_public: 3 }, days: ALL_DAYS, publishHourUtc: 14, level: "coach" as AutopilotLevel, mode: "build_in_public" as ContentMode, platforms: [] as Platform[], postsPerWeek: 3, lastRunAt: null as Date | null };
+    return {
+      findIdeas: true,
+      rules: {},
+      mix: { build_in_public: 3 },
+      days: ALL_DAYS,
+      publishHourUtc: 14,
+      timezone: "UTC",
+      windows: [...WINDOW_NAMES],
+      perDay: {} as Partial<Record<Platform, number>>,
+      level: "coach" as AutopilotLevel,
+      mode: "build_in_public" as ContentMode,
+      platforms: [] as Platform[],
+      postsPerWeek: 3,
+      lastRunAt: null as Date | null,
+    };
   }
   // Rows saved before Sprint 3 have only the single level: read them as switches.
   const legacy = Object.keys(row.rules).length === 0 && row.level !== "coach";
@@ -106,6 +137,9 @@ export async function getAutopilot(db: Db, orgId: string) {
     mix,
     days: row.days.length ? row.days : ALL_DAYS,
     publishHourUtc: row.publishHourUtc,
+    timezone: isTimezone(row.timezone) ? row.timezone : "UTC",
+    windows: (row.windows.length ? row.windows : WINDOW_NAMES) as PostingWindow[],
+    perDay: perDayFor(rules, row.perDay),
     level: levelOf(rules),
     mode: row.mode,
     platforms: (Object.keys(rules) as Platform[]).filter((p) => rules[p]?.write),
@@ -146,10 +180,19 @@ export async function saveAutopilot(db: Db, orgId: string, input: Automation) {
   const mix: Automation["mix"] = {};
   for (const m of CONTENT_MODES) {
     const n = Math.round(input.mix[m] ?? 0);
-    if (n > 0) mix[m] = Math.min(MAX_PER_WEEK, n);
+    if (n > 0) mix[m] = Math.min(MAX_WEIGHT, n);
   }
-  if (wants.write && total(mix) < 1) throw new AutopilotError("Choose at least one post a week in your style mix.");
-  if (total(mix) > MAX_PER_WEEK) throw new AutopilotError(`Up to ${MAX_PER_WEEK} posts a week.`);
+  if (wants.write && total(mix) < 1) throw new AutopilotError("Choose at least one style.");
+  if (!isTimezone(input.timezone)) throw new AutopilotError("Choose a valid timezone.");
+  const windows = WINDOW_NAMES.filter((w) => input.windows.includes(w));
+  if (!windows.length) throw new AutopilotError("Choose at least one time of day to post.");
+  for (const [platform, n] of Object.entries(input.perDay) as [Platform, number][]) {
+    if (n > PLATFORM_DAILY_MAX[platform]) throw new AutopilotError(`${platform} allows up to ${PLATFORM_DAILY_MAX[platform]} automated post${PLATFORM_DAILY_MAX[platform] === 1 ? "" : "s"} a day.`);
+  }
+  // More posts a day than chosen windows can't fit (one post per window).
+  const perDay = perDayFor(rules, input.perDay);
+  const most = Math.max(0, ...Object.values(perDay).map((n) => n ?? 0));
+  if (most > windows.length) throw new AutopilotError(`${most} posts a day need at least ${most} times of day (one post per time of day).`);
   const days = [...new Set(input.days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
   if (!days.length) throw new AutopilotError("Choose at least one day to post on.");
 
@@ -160,11 +203,14 @@ export async function saveAutopilot(db: Db, orgId: string, input: Automation) {
     mix,
     days,
     publishHourUtc: Math.min(23, Math.max(0, Math.round(input.publishHourUtc))),
+    timezone: input.timezone,
+    windows,
+    perDay,
     level: levelOf(rules),
     // Legacy columns, kept in step for older clients.
     mode: top,
     platforms: used.filter((x) => rules[x]!.write),
-    postsPerWeek: Math.max(1, total(mix)),
+    postsPerWeek: Math.max(1, Object.values(perDay).reduce<number>((a, b) => a + (b ?? 0), 0) * days.length),
   };
   await db.insert(autopilot).values({ orgId, ...values }).onConflictDoUpdate({ target: autopilot.orgId, set: { ...values, updatedAt: new Date() } });
   return getAutopilot(db, orgId);
@@ -182,16 +228,10 @@ export function nextSlot(now: Date, hourUtc: number, days: number[] = ALL_DAYS):
   return slot;
 }
 
-/** The next slot with nothing else scheduled on that account, so posts don't bunch up. */
-async function nextFreeSlot(db: Db, orgId: string, connectionId: string, now: Date, hourUtc: number, days: number[]) {
-  const taken = await db
-    .select({ at: draft.scheduledAt })
-    .from(draft)
-    .where(and(eq(draft.orgId, orgId), eq(draft.connectionId, connectionId), eq(draft.status, "scheduled"), gte(draft.scheduledAt, now)));
-  const busy = new Set(taken.map((t) => t.at?.getTime()));
-  let slot = nextSlot(now, hourUtc, days);
-  for (let i = 0; i < 60 && busy.has(slot.getTime()); i++) slot = nextSlot(new Date(slot.getTime() - 2 * HOUR + 60_000 + DAY), hourUtc, days);
-  return slot;
+/** The next posting time on an account: in a free window, learned from engagement (see timing.ts). */
+async function nextWindowSlot(db: Db, orgId: string, conn: { id: string; platform: Platform }, now: Date, s: Awaited<ReturnType<typeof getAutopilot>>, rand?: () => number) {
+  const [taken, stats] = await Promise.all([takenTimes(db, orgId, conn.id, now), learnWindows(db, orgId, conn.platform, s.timezone, now)]);
+  return pickSlot({ now, tz: s.timezone, days: s.days, windows: s.windows, perDay: s.perDay[conn.platform] ?? 1, taken, stats, ...(rand ? { rand } : {}) });
 }
 
 /**
@@ -215,7 +255,9 @@ export async function autoScheduleApproved(db: Db, orgId: string, draftIds: stri
     const conn = conns.find((c) => c.id === d.connectionId) ?? conns.find((c) => c.platform === d.platform && API_PUBLISH_PLATFORMS.includes(c.platform));
     if (!conn || !API_PUBLISH_PLATFORMS.includes(conn.platform)) continue;
     try {
-      await scheduleDraft(db, orgId, d.id, { at: await nextFreeSlot(db, orgId, conn.id, now, s.publishHourUtc, s.days), connectionId: conn.id });
+      const at = await nextWindowSlot(db, orgId, conn, now, s);
+      if (!at) continue; // nothing free in the next two weeks: stays approved
+      await scheduleDraft(db, orgId, d.id, { at, connectionId: conn.id });
       scheduled++;
     } catch {
       // Left approved; the person can schedule it by hand.
@@ -226,15 +268,19 @@ export async function autoScheduleApproved(db: Db, orgId: string, draftIds: stri
 
 // --- The weekly run -------------------------------------------------------------------------------
 
-/** The style furthest behind its weekly target (ties: the order in the mix). Null when the week is full. */
+/**
+ * The style that's most behind its share of the last 7 days (the mix is a balance: { teach: 2,
+ * smile: 1 } means two teaching posts for each light one). Ties: the order in the mix. Null if empty.
+ */
 export function pickMode(mix: Automation["mix"], log: { at: number; mode: ContentMode }[], now: Date): ContentMode | null {
   const recent = log.filter((l) => l.at > now.getTime() - 7 * DAY);
-  let best: { mode: ContentMode; gap: number } | null = null;
+  let best: { mode: ContentMode; ratio: number } | null = null;
   for (const m of CONTENT_MODES) {
     const want = mix[m] ?? 0;
     if (!want) continue;
-    const gap = want - recent.filter((l) => l.mode === m).length;
-    if (gap > 0 && (!best || gap > best.gap)) best = { mode: m, gap };
+    const ratio = recent.filter((l) => l.mode === m).length / want;
+    // Ties go to the style with the bigger share.
+    if (!best || ratio < best.ratio || (ratio === best.ratio && want > (mix[best.mode] ?? 0))) best = { mode: m, ratio };
   }
   return best?.mode ?? null;
 }
@@ -258,18 +304,28 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   if (!allowed.write) return { skipped: "coach" as const };
   const [p] = await db.select({ safe: persona.monetizationSafe, platforms: persona.platforms }).from(persona).where(eq(persona.orgId, orgId));
   if (!p) return { skipped: "no_persona" as const };
-  const platforms = (Object.keys(s.rules) as Platform[]).filter((x) => s.rules[x]?.write && p.platforms.includes(x));
-  if (!platforms.length) return { skipped: "no_platforms" as const };
-  // Automation spends only the plan's monthly allowance, never credits.
-  if ((await getUsage(db, orgId)).postsGenerated + platforms.length > (await getOrgLimits(db, orgId)).limits.posts) return { skipped: "plan_allowance" as const };
+  const writing = (Object.keys(s.rules) as Platform[]).filter((x) => s.rules[x]?.write && p.platforms.includes(x));
+  if (!writing.length) return { skipped: "no_platforms" as const };
 
   const [row] = await db.select({ log: autopilot.weekLog }).from(autopilot).where(eq(autopilot.orgId, orgId));
   const log = (row?.log ?? []).filter((l) => l.at > now.getTime() - 7 * DAY);
+  // Today's posts per platform (in the person's timezone), and drafts still waiting for review.
+  const today = localDay(now, s.timezone);
+  const writtenToday = (x: Platform) => log.filter((l) => localDay(new Date(l.at), s.timezone) === today && (l.platforms ?? writing).includes(x)).length;
+  const briefIds = log.flatMap((l) => (l.briefId ? [l.briefId] : []));
+  const waiting = briefIds.length
+    ? await db.select({ platform: draft.platform }).from(draft).where(and(eq(draft.orgId, orgId), inArray(draft.briefId, briefIds), eq(draft.status, "draft")))
+    : [];
+  // Not on a day off, within each platform's posts per day, and never more than two days of unreviewed drafts.
+  const dayOff = !s.days.includes(localParts(now, s.timezone).weekday);
+  const platforms = dayOff
+    ? []
+    : writing.filter((x) => writtenToday(x) < (s.perDay[x] ?? 1) && waiting.filter((w) => w.platform === x).length < 2 * (s.perDay[x] ?? 1));
+  if (!platforms.length) return { skipped: dayOff ? ("day_off" as const) : ("daily_limit" as const) };
+  // Automation spends only the plan's monthly allowance, never credits.
+  if ((await getUsage(db, orgId)).postsGenerated + platforms.length > (await getOrgLimits(db, orgId)).limits.posts) return { skipped: "plan_allowance" as const };
   const mode = pickMode(s.mix, log, now);
-  if (!mode) return { skipped: "weekly_limit" as const };
-  // Spread the week out: with 3 a week, roughly every other day.
-  const last = Math.max(0, ...log.map((l) => l.at));
-  if (last && now.getTime() - last < Math.min(20 * HOUR, (7 * DAY) / Math.max(1, total(s.mix))) * 0.8) return { skipped: "spacing" as const };
+  if (!mode) return { skipped: "no_styles" as const };
 
   const candidates = await db
     .select({ id: idea.id, kind: contextItem.kind, score: idea.score, externalId: contextItem.externalId })
@@ -283,7 +339,7 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
 
   const out = await composeIdea(db, providers, { orgId, ideaId: best.id, mode, platforms });
   await afterCompose?.(orgId, out.briefId).catch(() => undefined);
-  await db.update(autopilot).set({ weekLog: [...log, { at: now.getTime(), mode }] }).where(eq(autopilot.orgId, orgId));
+  await db.update(autopilot).set({ weekLog: [...log, { at: now.getTime(), mode, platforms, briefId: out.briefId }] }).where(eq(autopilot.orgId, orgId));
 
   // "Approve for me": only clean posts (no errors or warnings), from the person's own material
   // (never ideas shaped by audience comments), never X, and never in monetization-safe mode.
@@ -301,10 +357,13 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   return { ideaId: best.id, mode, drafts: out.drafts.length, approved: approved.length, scheduled };
 }
 
-/** Cron: runs workspaces with writing switched on, oldest first, at most every 10 hours each. */
+/**
+ * Cron: runs workspaces with writing switched on, oldest first, at most every 3 hours each (enough
+ * for 5 posts a day; each run writes only for platforms still under their daily number).
+ */
 export async function runAutopilot(db: Db, providers: Provider[], now = new Date(), limit = 1, afterCompose?: AfterCompose) {
   if (!providers.length) return { ran: 0 };
-  const cutoff = new Date(now.getTime() - 10 * HOUR);
+  const cutoff = new Date(now.getTime() - 3 * HOUR);
   const due = await db
     .select({ orgId: autopilot.orgId })
     .from(autopilot)

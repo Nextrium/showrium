@@ -1,7 +1,8 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createDb } from "@nextrium/db";
-import { createIdeas, importTokenKey, nextSlot, pickMode, runAutopilotFor, runSourcePolling, saveConnection, type PublishDeps } from "@nextrium/core";
+import { createIdeas, importTokenKey, nextSlot,
+  windowOf, pickMode, runAutopilotFor, runSourcePolling, saveConnection, type PublishDeps } from "@nextrium/core";
 import { fakeProvider } from "@nextrium/llm";
 
 const BASE = "http://localhost:5173";
@@ -59,20 +60,23 @@ describe("automation switches", () => {
     const c = await user("s3-creator@example.com");
     expect((await c.call("PUT", "/autopilot", settings({ rules: { x: { write: true, schedule: true, approve: true } } }))).status).toBe(409);
     expect((await c.call("PUT", "/autopilot", settings({ rules: { instagram: { ...off, write: true } } }))).status).toBe(409); // not in their platforms
-    expect((await c.call("PUT", "/autopilot", settings({ mix: { teach: 8, smile: 7 }, rules: { bluesky: { ...off, write: true } } }))).status).toBe(409); // 15 a week
+    expect((await c.call("PUT", "/autopilot", settings({ perDay: { bluesky: 4 }, rules: { bluesky: { ...off, write: true } } }))).status).toBe(409); // Bluesky allows up to 3 a day
+    expect((await c.call("PUT", "/autopilot", settings({ perDay: { bluesky: 3 }, windows: ["morning", "evening"], rules: { bluesky: { ...off, write: true } } }))).status).toBe(409); // 3 a day need 3 times of day
+    expect((await c.call("PUT", "/autopilot", settings({ timezone: "Mars/Olympus", rules: { bluesky: { ...off, write: true } } }))).status).toBe(409);
     expect((await c.call("PUT", "/autopilot", settings({ days: [] }))).status).toBe(400);
     await env.DB.prepare("UPDATE persona SET monetization_safe = 1 WHERE org_id = ?").bind(c.orgId).run();
     expect((await c.call("PUT", "/autopilot", settings({ rules: { bluesky: { write: true, schedule: true, approve: true } } }))).status).toBe(409);
     expect((await c.call("PUT", "/autopilot", settings({ rules: { bluesky: { write: true, schedule: true, approve: false } } }))).status).toBe(200);
   });
 
-  it("follows the weekly mix, and posts only on the chosen days", () => {
+  it("keeps the balance of styles, and the old fixed-hour helper still works", () => {
     const now = new Date("2026-09-29T08:00:00Z"); // a Tuesday
     const mix = { build_in_public: 2, teach: 1 };
     expect(pickMode(mix, [], now)).toBe("build_in_public");
     const at = now.getTime() - 3600_000;
     expect(pickMode(mix, [{ at, mode: "build_in_public" }, { at, mode: "build_in_public" }], now)).toBe("teach");
-    expect(pickMode(mix, [{ at, mode: "build_in_public" }, { at, mode: "build_in_public" }, { at, mode: "teach" }], now)).toBeNull();
+    expect(pickMode(mix, [{ at, mode: "build_in_public" }, { at, mode: "build_in_public" }, { at, mode: "teach" }], now)).toBe("build_in_public"); // the balance continues
+    expect(pickMode({}, [], now)).toBeNull();
     // Entries older than a week no longer count.
     expect(pickMode(mix, [{ at: now.getTime() - 8 * 86_400_000, mode: "teach" }], now)).toBe("build_in_public");
     expect(nextSlot(now, 9, [1, 3, 5]).toISOString()).toBe("2026-09-30T09:00:00.000Z"); // Wednesday
@@ -90,12 +94,18 @@ describe("automation switches", () => {
     const li = a.find((d) => d.platform === "linkedin")!;
     const first = (await (await u.call("PATCH", `/drafts/${bsky.id}`, { status: "approved" })).json()) as { draft: { status: string; scheduledAt: string } };
     expect(first.draft.status).toBe("scheduled");
-    expect(new Date(first.draft.scheduledAt).toISOString()).toBe(nextSlot(new Date(), 9, [1, 3, 5]).toISOString());
+    // In a posting window (UTC by default), on an allowed day, at least 2 hours away.
+    const at = new Date(first.draft.scheduledAt);
+    expect(at.getTime()).toBeGreaterThanOrEqual(Date.now() + 2 * 3600_000 - 60_000);
+    expect([1, 3, 5]).toContain(at.getUTCDay());
+    expect(windowOf(at.getUTCHours())).not.toBeNull();
+    // The test writer repeats itself, so the second post is flagged as a repeat; rewriting it clears that.
+    await u.call("PATCH", `/drafts/${b[0]!.id}`, { text: "A light one: our queue finally sleeps through the night." });
     const second = (await (await u.call("POST", "/drafts/bulk-approve", { ids: [b[0]!.id] })).json()) as { approved: string[] };
     expect(second.approved).toHaveLength(1);
     const times = await env.DB.prepare("SELECT scheduled_at FROM draft WHERE org_id = ? AND status = 'scheduled' ORDER BY scheduled_at").bind(u.orgId).all<{ scheduled_at: number }>();
     expect(times.results).toHaveLength(2);
-    expect(times.results[1]!.scheduled_at).toBeGreaterThan(times.results[0]!.scheduled_at); // not the same slot
+    expect(times.results[1]!.scheduled_at - times.results[0]!.scheduled_at).toBeGreaterThanOrEqual(4 * 3600_000); // at least 4 hours apart
     // LinkedIn has the switch off: approving leaves it approved.
     expect(((await (await u.call("PATCH", `/drafts/${li.id}`, { status: "approved" })).json()) as { draft: { status: string } }).draft.status).toBe("approved");
   });
@@ -109,14 +119,17 @@ describe("the automation run", () => {
     const cid = `ctx_${crypto.randomUUID()}`;
     await env.DB.prepare("INSERT INTO context_item (id, org_id, kind, title, body) VALUES (?, ?, 'rss_item', 'How we test queues', 'A long article.')").bind(cid, u.orgId).run();
     await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: cid, title: "How we test queues" }]);
-    const out = await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId);
+    const monday = new Date("2026-10-19T08:00:00Z");
+    const out = await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, monday);
     expect(out).toMatchObject({ mode: "teach", drafts: 2, approved: 1, scheduled: 1 });
     const rows = await env.DB.prepare("SELECT platform, status FROM draft WHERE org_id = ? ORDER BY platform").bind(u.orgId).all<{ platform: string; status: string }>();
     expect(rows.results).toEqual([{ platform: "bluesky", status: "scheduled" }, { platform: "linkedin", status: "draft" }]);
     const log = await env.DB.prepare("SELECT week_log FROM autopilot WHERE org_id = ?").bind(u.orgId).first<{ week_log: string }>();
     expect(JSON.parse(log!.week_log)).toHaveLength(1);
-    // Right away again: too soon (the week is spread out).
-    expect(await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId)).toEqual({ skipped: "spacing" });
+    // Again the same day: each platform's posts for the day are written (1 a day by default).
+    expect(await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, new Date("2026-10-19T12:00:00Z"))).toEqual({ skipped: "daily_limit" });
+    // Saturday isn't a posting day here (Monday, Wednesday, Friday).
+    expect(await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, new Date("2026-10-24T08:00:00Z"))).toEqual({ skipped: "day_off" });
   });
 
   it("reads settings saved before this change as switches", async () => {

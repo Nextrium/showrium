@@ -5,6 +5,7 @@ import {
   createIdeas,
   importTokenKey,
   nextSlot,
+  windowOf,
   pruneExpiredOAuthStates,
   recoverStuckPublishing,
   runAutopilotFor,
@@ -145,10 +146,12 @@ describe("autopilot", () => {
     const bsky = drafts.results.find((r) => r.platform === "bluesky")!;
     const xPost = drafts.results.find((r) => r.platform === "x")!;
     expect(bsky.status).toBe("scheduled");
-    expect(bsky.scheduled_at).toBe(nextSlot(now, 14).getTime());
+    // In a posting window, at least 2 hours after the run.
+    expect(bsky.scheduled_at!).toBeGreaterThanOrEqual(now.getTime() + 2 * 3600_000);
+    expect(windowOf(new Date(bsky.scheduled_at!).getUTCHours())).not.toBeNull();
     expect(xPost.status).toBe("draft"); // X is never posted by autopilot
 
-    // The run is claimed for 20 hours; forcing another run hits the weekly limit of 1.
+    // The run is claimed for 3 hours; forcing another run the same day hits the daily limit of 1.
     const again = await runAutopilot(db, providers, now, 50);
     expect(again.ran).toBe(0);
     await env.DB.prepare("UPDATE autopilot SET last_run_at = NULL WHERE org_id = ?").bind(u.orgId).run();
@@ -293,7 +296,8 @@ describe("phase 5 review fixes", () => {
     const period = new Date().toISOString().slice(0, 7);
     await env.DB.prepare("UPDATE usage_counter SET posts_generated = 400 WHERE org_id = ? AND period = ?").bind(u.orgId, period).run();
     await seedIdea(u.orgId);
-    expect(await runAutopilotFor(db, providers, u.orgId)).toEqual({ skipped: "plan_allowance" });
+    // The next day (so the daily limit doesn't apply first): the month's allowance is used up.
+    expect(await runAutopilotFor(db, providers, u.orgId, new Date(Date.now() + 86_400_000))).toEqual({ skipped: "plan_allowance" });
   });
 
   it("recovers posts stuck in publishing after 15 minutes", async () => {
