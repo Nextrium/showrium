@@ -7,13 +7,16 @@ import { z } from "zod";
 import { createDb, PAID_PLANS, STAFF_ROLES, type Db, type StaffRole } from "@nextrium/db";
 import {
   adminOverview,
+  createInvite,
   inviteFromWaitlist,
   inviteStaff,
   listAdminAudit,
   listFullAccess,
+  listInvites,
   listStaff,
   listWaitlist,
   recordAdminAudit,
+  revokeInvite,
   searchUsers,
   sendEmail,
   setFullAccess,
@@ -106,6 +109,36 @@ app.post("/api/waitlist/invite", async (c) => {
     data.push({ id: inv.entryId, email: inv.email, sent, link: sent ? null : link });
   }
   return c.json({ data, skipped: new Set(input.ids).size - created.length });
+});
+
+// --- Invite links (for people who aren't on the waitlist) ------------------------------------
+// The link is shown once; only its hash is stored. Revoking is soft (an unused link stops working).
+
+const inviteStatus = (i: { acceptedAt: Date | null; revokedAt: Date | null; expiresAt: Date }) =>
+  i.acceptedAt ? "accepted" : i.revokedAt ? "revoked" : i.expiresAt.getTime() <= Date.now() ? "expired" : "pending";
+
+app.get("/api/invites", async (c) => {
+  if (!allowed(c, "waitlist")) return denied(c);
+  const rows = await listInvites(c.get("db"));
+  return c.json({ data: rows.map((i) => ({ id: i.id, note: i.note, status: inviteStatus(i), expiresAt: i.expiresAt.toISOString(), createdAt: i.createdAt.toISOString() })) });
+});
+
+app.post("/api/invites", async (c) => {
+  if (!allowed(c, "waitlist")) return denied(c);
+  const input = await body(c, z.object({ note: z.string().trim().max(120).optional() }));
+  if (!input) return c.json(err("invalid_request", "The note can be up to 120 characters."), 400);
+  const created = await createInvite(c.get("db"), { createdByUserId: null, note: input.note || null });
+  await audit(c, "invite.created", created.id, input.note ? { note: input.note } : undefined);
+  return c.json({ id: created.id, link: inviteLink(c.env, created.token), expiresAt: created.expiresAt.toISOString() }, 201);
+});
+
+app.post("/api/invites/:id/revoke", async (c) => {
+  if (!allowed(c, "waitlist")) return denied(c);
+  const id = c.req.param("id");
+  if (id.length > 64) return c.json(err("invalid_request", "Unknown invite."), 400);
+  if (!(await revokeInvite(c.get("db"), id))) return c.json(err("not_found", "That invite is already used, revoked or unknown."), 404);
+  await audit(c, "invite.revoked", id);
+  return c.json({ ok: true });
 });
 
 // --- Users and workspaces --------------------------------------------------------------------

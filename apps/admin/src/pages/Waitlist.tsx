@@ -1,7 +1,7 @@
 // The waitlist, and a one-click invite that emails each person a single-use link to their own
-// account and workspace (Free plan).
-import { useMemo, useState } from "react";
-import { api, Button, date as formatDate, Info, Panel, useLoad } from "../ui";
+// account and workspace (Free plan). Below it: invite links for people who aren't on the list.
+import { type FormEvent, useMemo, useState } from "react";
+import { api, Button, date as formatDate, Info, Panel, Tag, useLoad } from "../ui";
 
 function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -24,6 +24,100 @@ const TONES: Record<Status, string> = {
 };
 
 export function Waitlist() {
+  return (
+    <div className="flex flex-col gap-5">
+      <WaitlistPanel />
+      <InviteLinks />
+    </div>
+  );
+}
+
+type Invite = { id: string; note: string | null; status: "pending" | "accepted" | "revoked" | "expired"; expiresAt: string; createdAt: string };
+const INVITE_TONES = { pending: "info", accepted: "ok", revoked: "neutral", expired: "warn" } as const;
+const INVITE_LABELS = { pending: "Waiting", accepted: "Used", revoked: "Revoked", expired: "Expired" } as const;
+
+function InviteLinks() {
+  const invites = useLoad<{ data: Invite[] }>("/invites");
+  const [link, setLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const create = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (busy) return;
+    const form = e.currentTarget;
+    const note = String(new FormData(form).get("note") ?? "").trim();
+    setBusy(true);
+    setError(null);
+    try {
+      const out = await api<{ link: string }>("/invites", { method: "POST", body: JSON.stringify(note ? { note } : {}) });
+      setLink(out.link);
+      setCopied(false);
+      form.reset();
+      invites.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't create the link.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const revoke = async (id: string) => {
+    setError(null);
+    try {
+      await api(`/invites/${id}/revoke`, { method: "POST", body: "{}" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't revoke the link.");
+    }
+    invites.reload();
+  };
+  const copy = async () => {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+    } catch {
+      setError("Couldn't copy. Select the link and copy it yourself.");
+    }
+  };
+
+  return (
+    <Panel title="Invite links" info="For someone who isn't on the waitlist. Each link works once, for 7 days, and creates their own account and workspace on the Free plan. It's shown only once.">
+      <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => void create(e)}>
+        <label className="flex min-w-0 flex-1 flex-col gap-1 text-[13px] text-muted">
+          Note
+          <input name="note" maxLength={120} placeholder="e.g. Kemi, design partner" className="min-h-9 rounded-lg border border-line-strong bg-panel px-3 text-[14px] text-ink" />
+        </label>
+        <Button type="submit" variant="primary" disabled={busy}>{busy ? "Creating…" : "Create link"}</Button>
+      </form>
+      {link && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl bg-sunken p-3" role="status">
+          <span className="min-w-0 flex-1 font-mono text-[12.5px] [overflow-wrap:anywhere]">{link}</span>
+          <Button onClick={() => void copy()}>{copied ? "Copied" : "Copy link"}</Button>
+        </div>
+      )}
+      {error && <p role="alert" className="m-0 text-[13.5px] text-danger">{error}</p>}
+      {invites.error && <p role="alert" className="m-0 text-[13.5px] text-danger">{invites.error}</p>}
+      {invites.data?.data.length === 0 && <p className="m-0 text-[13.5px] text-muted">No links yet.</p>}
+      <ul className="m-0 flex list-none flex-col p-0" aria-label="Invite links">
+        {invites.data?.data.map((i) => (
+          <li key={i.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-line py-2.5 last:border-b-0">
+            <span className="w-full min-w-0 text-[14px] [overflow-wrap:anywhere] sm:w-auto sm:flex-1">{i.note || <span className="text-muted">No note</span>}</span>
+            <Tag tone={INVITE_TONES[i.status]}>{INVITE_LABELS[i.status]}</Tag>
+            <span className="text-[12.5px] text-muted">{i.status === "pending" ? `Until ${formatDate(i.expiresAt)}` : formatDate(i.createdAt)}</span>
+            {i.status === "pending" && (
+              <Button onClick={() => void revoke(i.id)} aria-label={`Revoke the link${i.note ? ` for ${i.note}` : ""}`}>
+                Revoke
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Panel>
+  );
+}
+
+function WaitlistPanel() {
   const list = useLoad<{ data: Entry[] }>("/waitlist");
   const [filter, setFilter] = useState<Status | "all">("waiting");
   const [selected, setSelected] = useState<Set<string>>(new Set());

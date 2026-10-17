@@ -1,4 +1,4 @@
-// Staff invite people from the waitlist in one click; an invitee gets their own Free workspace.
+// Staff invite someone from the waitlist; the invitee gets their own Free workspace.
 import { expect, test } from "@playwright/test";
 import { joinWaitlist, signInStaff } from "./helpers";
 
@@ -7,26 +7,17 @@ test("staff invite from the waitlist; the invitee joins their own Free workspace
   const email = `wl-${stamp}@invitee.test`; // not allowlisted: can only join with an invite
   await joinWaitlist(page, email);
   await signInStaff(page);
-  await page.goto("/app/settings");
-  const card = page.locator("section", { has: page.getByRole("heading", { name: "Waitlist" }) });
-  const rows = card.getByRole("list", { name: "Waitlist" });
-  await expect(rows.getByText(email)).toBeVisible();
-  await card.getByRole("button", { name: `Invite ${email}` }).click();
-  // No email service locally: the link is shown to share by hand.
-  await expect(card.getByText(/couldn't be emailed: share these links yourself/)).toBeVisible();
-  await card.getByRole("button", { name: /^Invited \(/ }).click();
-  await expect(rows.getByText(email)).toBeVisible();
-  const link = await page.evaluate(async (e) => {
-    const res = await fetch("/api/v1/admin/waitlist/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [] }) });
-    return [res.status, e];
-  }, email);
-  expect(link[0]).toBe(400); // an empty selection is refused
-
-  // Get a fresh link the way staff would see it (invite again replaces the first).
-  const again = page.waitForResponse("**/api/v1/admin/waitlist/invite");
-  await card.getByRole("button", { name: `Invite again ${email}` }).click();
-  const out = (await (await again).json()) as { data: { link: string }[] };
-  const url = new URL(out.data[0]!.link);
+  // Staff screens live in the admin app now (its own tests); here staff use the same API.
+  type Entry = { id: string; email: string; status: string };
+  const entryFor = async () => ((await (await page.request.get("/api/v1/admin/waitlist")).json()) as { data: Entry[] }).data.find((e) => e.email === email)!;
+  const entry = await entryFor();
+  expect(entry.status).toBe("waiting");
+  const headers = { Origin: "http://localhost:5174", "Content-Type": "application/json" };
+  expect((await page.request.post("/api/v1/admin/waitlist/invite", { headers, data: { ids: [] } })).status()).toBe(400); // an empty selection is refused
+  // No email service locally: the link comes back to share by hand.
+  const out = (await (await page.request.post("/api/v1/admin/waitlist/invite", { headers, data: { ids: [entry.id] } })).json()) as { data: { link: string | null }[] };
+  expect((await entryFor()).status).toBe("invited");
+  const url = new URL(out.data[0]!.link!);
 
   // The invitee, in their own browser.
   const guest = await browser.newContext();
@@ -43,7 +34,5 @@ test("staff invite from the waitlist; the invitee joins their own Free workspace
   expect(me.principal.role).toBe("owner");
   await guest.close();
 
-  await page.reload();
-  await card.getByRole("button", { name: /^Joined \(/ }).click();
-  await expect(rows.getByText(email)).toBeVisible();
+  expect((await entryFor()).status).toBe("joined");
 });

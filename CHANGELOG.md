@@ -9,6 +9,10 @@
 - **Style balance** replaces the weekly mix.
 - **Less text:** explanations on the Automation page sit behind a "?".
 
+### For Showrium staff
+- **Invite links in the admin app:** create a one-off link for someone who isn't on the waitlist (shown once), see each link's status, and revoke unused ones. Every action is logged.
+- The old staff section in the product's Settings is gone; waitlist, invites and full access are in the admin app.
+
 ## v0.1.0: private beta (2026-10-15)
 
 The first release of Showrium to app.showrium.com, for invited testers.

@@ -165,6 +165,38 @@ describe("waitlist", () => {
   });
 });
 
+describe("invite links", () => {
+  it("creates a single-use link shown once, lists it without the token, and revokes it softly", async () => {
+    const made = await call("owner@example.com", "POST", "/invites", { note: "Design partner" });
+    expect(made.status).toBe(201);
+    const { id, link } = (await made.json()) as { id: string; link: string };
+    expect(link).toMatch(/^https:\/\/app\.test\/invite\?token=inv_/);
+    const token = new URL(link).searchParams.get("token")!;
+    const list = await (await call("owner@example.com", "GET", "/invites")).text();
+    expect(list).not.toContain(token); // only the hash is stored
+    expect(JSON.parse(list).data.find((i: { id: string }) => i.id === id)).toMatchObject({ note: "Design partner", status: "pending" });
+
+    expect((await call("owner@example.com", "POST", `/invites/${id}/revoke`, {})).status).toBe(200);
+    expect((await call("owner@example.com", "POST", `/invites/${id}/revoke`, {})).status).toBe(404); // already revoked
+    const after = (await (await call("owner@example.com", "GET", "/invites")).json()) as { data: { id: string; status: string }[] };
+    expect(after.data.find((i) => i.id === id)?.status).toBe("revoked");
+    const row = await env.DB.prepare("SELECT revoked_at FROM invite WHERE id = ?").bind(id).first<{ revoked_at: number | null }>();
+    expect(row?.revoked_at).toBeGreaterThan(0); // kept, marked revoked
+
+    const audit = (await (await call("owner@example.com", "GET", "/audit")).json()) as { data: { action: string; target: string | null }[] };
+    expect(audit.data.filter((a) => a.target === id).map((a) => a.action)).toEqual(expect.arrayContaining(["invite.created", "invite.revoked"]));
+  });
+
+  it("is for owners and support only, refuses long notes and cross-site requests", async () => {
+    await call("owner@example.com", "POST", "/staff", { email: "money@example.com", role: "finance" });
+    expect((await call("money@example.com", "GET", "/invites")).status).toBe(403);
+    expect((await call("money@example.com", "POST", "/invites", {})).status).toBe(403);
+    expect((await call("owner@example.com", "POST", "/invites", { note: "x".repeat(121) })).status).toBe(400);
+    expect((await call("owner@example.com", "POST", "/invites", {}, { Origin: "https://evil.test" })).status).toBe(403);
+    expect((await call(null, "GET", "/invites")).status).toBe(401);
+  });
+});
+
 describe("overview", () => {
   it("returns totals and 14 days, not anyone's content", async () => {
     const o = (await (await call("owner@example.com", "GET", "/overview")).json()) as { users: { total: number }; daily: unknown[] };

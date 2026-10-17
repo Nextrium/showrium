@@ -2,8 +2,6 @@ import { SecurityPanel } from "../../components/Security";
 import { YourData } from "../../components/YourData";
 import { ImageSettingsPanel } from "../../components/PostImage";
 import { useState, type FormEvent } from "react";
-import { WaitlistCard } from "../../components/WaitlistCard";
-import { InvitesCard } from "../../components/InvitesCard";
 import { api, authClient, formatDate, timeAgo, useApi } from "../../lib";
 import { planLabel, ThemePicker } from "../../shell/AppShell";
 import { Alert, Badge, Button, PageHeader, Panel } from "../../ui/kit";
@@ -97,77 +95,6 @@ function ApiKeys({ canManage }: { canManage: boolean }) {
   );
 }
 
-type Grant = { id: string; name: string; note: string | null; at: string | null };
-type Found = { id: string; name: string; plan: string; fullAccess: boolean; role: string };
-
-/** Staff only: give full access to specific workspaces (yours, testers, partners). Audited in each workspace. */
-function AccessGrants() {
-  const grants = useApi<{ data: Grant[] }>("/admin/access");
-  const [found, setFound] = useState<Found[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState("");
-
-  const search = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const email = String(new FormData(e.currentTarget).get("email")).trim();
-    setError(null);
-    try {
-      const out = await api<{ data: Found[] }>(`/admin/orgs?email=${encodeURIComponent(email)}`);
-      setFound(out.data);
-      if (!out.data.length) setError("No account with that email.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Search failed.");
-    }
-  };
-  const setAccess = async (id: string, full: boolean) => {
-    if (note.trim().length < 3) {
-      setError("Add a short note first (why), for the audit log.");
-      return;
-    }
-    setError(null);
-    try {
-      await api(`/admin/orgs/${id}/access`, { method: "PUT", body: JSON.stringify({ full, note: note.trim() }) });
-      setFound((f) => f?.map((w) => (w.id === id ? { ...w, fullAccess: full } : w)) ?? null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't change access.");
-    }
-  };
-
-  return (
-    <Panel title="Full access" id="grants">
-      <p className="m-0 text-sm text-muted">Workspaces with full access skip plan limits (still capped for cost safety). Everyone else stays on their plan. Each change is recorded in that workspace’s audit log.</p>
-      <form className="flex flex-wrap items-end gap-2.5" onSubmit={search}>
-        <label className="min-w-[220px] flex-1">
-          Find a person by email
-          <input name="email" type="email" required placeholder="name@example.com" />
-        </label>
-        <Button variant="secondary">Find</Button>
-      </form>
-      <label>
-        Note (why)
-        <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} placeholder="e.g. Beta tester, Nextrium team" />
-      </label>
-      {error && <Alert>{error}</Alert>}
-      {found?.map((w) => (
-        <div key={w.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-sunken p-3">
-          <span className="min-w-0 flex-1 truncate text-sm"><strong>{w.name}</strong> <span className="text-muted">· {w.role} · {planLabel(w.plan, w.fullAccess)}</span></span>
-          {w.fullAccess ? <Button variant="danger" size="sm" onClick={() => setAccess(w.id, false)}>Remove full access</Button> : <Button size="sm" onClick={() => setAccess(w.id, true)}>Give full access</Button>}
-        </div>
-      ))}
-      <span className="text-sm font-semibold">Current grants</span>
-      {grants.data?.data.length === 0 && <span className="text-sm text-muted">None yet.</span>}
-      <ul className="m-0 flex list-none flex-col gap-2 p-0">
-        {grants.data?.data.map((g) => (
-          <li key={g.id} className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-medium">{g.name}</span>
-            <span className="text-muted">{g.note}{g.at ? ` · ${formatDate(g.at)}` : ""}</span>
-          </li>
-        ))}
-      </ul>
-    </Panel>
-  );
-}
-
 export function SettingsPage() {
   const { data: me } = useApi<Me>("/me");
   const { data: session } = authClient.useSession();
@@ -189,16 +116,6 @@ export function SettingsPage() {
         <ImageSettingsPanel canManage={canManage} />
         {session?.user.email && <YourData canExport={canManage} email={session.user.email} />}
       </div>
-      {me?.principal.isPlatformAdmin && (
-        <>
-          <h2 className="mt-2 font-sans text-base font-semibold tracking-normal text-muted">Showrium staff</h2>
-          <div className="grid gap-5 lg:grid-cols-2">
-            <AccessGrants />
-            <InvitesCard />
-            <WaitlistCard />
-          </div>
-        </>
-      )}
     </>
   );
 }
