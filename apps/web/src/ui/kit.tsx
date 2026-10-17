@@ -1,5 +1,5 @@
 // Showrium UI kit: small, accessible building blocks styled with Tailwind and the design tokens.
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { Link } from "./Link";
 
 const PATHS = {
@@ -235,5 +235,47 @@ export function SaveBar({ dirty, saving, error, savedNote, onSave, onDiscard, sa
         <Button size="sm" disabled={!dirty || saving} onClick={onSave}>{saving ? "Saving…" : saveLabel}</Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * A small "?" with a short explanation, instead of description text on the page. Opens on hover,
+ * keyboard focus or tap; closes when the pointer leaves, focus moves on, or Escape is pressed.
+ */
+export function Info({ children, label = "More information" }: { children: ReactNode; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const [side, setSide] = useState<"center" | "left" | "right">("center");
+  const ref = useRef<HTMLSpanElement>(null);
+  const id = useId();
+  const show = () => {
+    const r = ref.current?.getBoundingClientRect();
+    if (r) setSide(r.left < 140 ? "left" : window.innerWidth - r.right < 140 ? "right" : "center");
+    setOpen(true);
+  };
+  return (
+    <span ref={ref} className="relative inline-flex align-middle" onMouseEnter={show} onMouseLeave={() => setOpen(false)}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-describedby={open ? id : undefined}
+        aria-expanded={open}
+        onFocus={show}
+        onBlur={() => setOpen(false)}
+        onClick={() => (open ? setOpen(false) : show())}
+        onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+        className="inline-flex h-[18px] w-[18px] cursor-help items-center justify-center rounded-full border border-line-strong text-[11px] font-semibold text-muted hover:text-ink"
+      >
+        ?
+      </button>
+      {open && (
+        <span
+          role="tooltip"
+          id={id}
+          className={`absolute top-full z-30 mt-1.5 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-panel p-2.5 text-[12.5px] font-normal leading-snug text-ink-2 shadow-[var(--shadow-card)] ${side === "left" ? "left-0" : side === "right" ? "right-0" : "left-1/2 -translate-x-1/2"}`}
+        >
+          {children}
+        </span>
+      )}
+    </span>
   );
 }

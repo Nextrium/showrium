@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### For people
+- **Automation that posts at good times, not like clockwork:** choose your timezone, days and times of day (morning, midday, afternoon, evening). Each post goes out at a different minute, at most one per time of day and at least 4 hours apart, and Showrium learns which time works best for you.
+- **Posts a day per platform**, within safe limits (X 5; Bluesky, Threads and Mastodon 3; LinkedIn and Facebook 2; Instagram, TikTok and YouTube Shorts 1).
+- **No repeats:** new posts avoid how your recent posts began; a post that repeats a recent one is flagged and never approved automatically.
+- **Style balance** replaces the weekly mix.
+- **Less text:** explanations on the Automation page sit behind a "?".
+
 ## v0.1.0: private beta (2026-10-15)
 
 The first release of Showrium to app.showrium.com, for invited testers.

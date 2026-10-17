@@ -24,3 +24,5 @@ export * from "./voice.js";
 export * from "./staff.js";
 export * from "./email.js";
 export * from "./admin.js";
+export * from "./timing.js";
+export * from "./repetition.js";

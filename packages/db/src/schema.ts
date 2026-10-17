@@ -601,8 +601,15 @@ export const autopilot = sqliteTable(
     mix: text("mix", { mode: "json" }).$type<Partial<Record<ContentMode, number>>>().notNull().default(sql`'{}'`),
     /** Days of the week to post on (0 = Sunday, UTC). */
     days: text("days", { mode: "json" }).$type<number[]>().notNull().default(sql`'[0,1,2,3,4,5,6]'`),
-    /** Styles written in the last 7 days, to follow the mix. */
-    weekLog: text("week_log", { mode: "json" }).$type<{ at: number; mode: ContentMode }[]>().notNull().default(sql`'[]'`),
+    /** What automation wrote in the last 7 days (style, platforms, brief), to follow the mix and daily limits. */
+    weekLog: text("week_log", { mode: "json" }).$type<{ at: number; mode: ContentMode; platforms?: Platform[]; briefId?: string }[]>().notNull().default(sql`'[]'`),
+    // Automation v2 (2026-10-17): posting windows in the person's timezone, and posts per day per platform.
+    /** IANA timezone, e.g. "Africa/Lagos". */
+    timezone: text("timezone").notNull().default("UTC"),
+    /** Which windows to post in: morning, midday, afternoon, evening. */
+    windows: text("windows", { mode: "json" }).$type<("morning" | "midday" | "afternoon" | "evening")[]>().notNull().default(sql`'["morning","midday","afternoon","evening"]'`),
+    /** Posts per day per platform (within each platform's limit). */
+    perDay: text("per_day", { mode: "json" }).$type<Partial<Record<Platform, number>>>().notNull().default(sql`'{}'`),
     lastRunAt: integer("last_run_at", { mode: "timestamp_ms" }),
     updatedAt: updatedAt(),
   },
