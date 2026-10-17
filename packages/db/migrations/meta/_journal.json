@@ -148,6 +148,20 @@
       "when": 1791492636944,
       "tag": "0020_dapper_ultimo",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1792120334797,
+      "tag": "0021_cultured_onslaught",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1792260857200,
+      "tag": "0022_lean_firestar",
+      "breakpoints": true
     }
   ]
 }

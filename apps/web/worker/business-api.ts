@@ -2,6 +2,7 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { setCookie } from "hono/cookie";
 import { createDb, PAID_PLANS, ROLES } from "@nextrium/db";
+import type { Db } from "@nextrium/db";
 import {
   acceptTeamInvite,
   BillingError,
@@ -16,7 +17,9 @@ import {
   handleLemonEvent,
   handlePaystackEvent,
   inviteMember,
-  isPlatformAdmin,
+  staffCan,
+  staffRoleFor,
+  type StaffPermission,
   listAudit,
   listMembers,
   listWorkspaces,
@@ -428,9 +431,12 @@ businessApi.openapi(
 
 // --- Platform admin: plan comps (beta testers, support) ---------------------------------------
 
-function platformAdmin(c: { get: (k: "principal") => Principal; env: { PLATFORM_ADMIN_EMAILS?: string } }) {
+/** A signed-in staff member with the given permission (never an API key), or null. */
+async function staff(c: { get: ((k: "principal") => Principal) & ((k: "db") => Db); env: { PLATFORM_ADMIN_EMAILS?: string } }, permission: StaffPermission) {
   const p = c.get("principal");
-  return p.kind === "user" && isPlatformAdmin(p.email, c.env.PLATFORM_ADMIN_EMAILS) ? p : null;
+  if (p.kind !== "user") return null;
+  const role = await staffRoleFor(c.get("db"), { userId: p.userId, email: p.email }, c.env.PLATFORM_ADMIN_EMAILS);
+  return staffCan(role, permission) ? p : null;
 }
 
 businessApi.openapi(
@@ -442,7 +448,7 @@ businessApi.openapi(
     responses: { 200: json(z.object({ data: z.array(z.object({ id: z.string(), name: z.string(), plan: z.string(), fullAccess: z.boolean(), role: z.string() })) })), ...errs },
   }),
   async (c) => {
-    if (!platformAdmin(c)) return c.json(apiError("forbidden", "Only Showrium staff can look up workspaces."), 403);
+    if (!(await staff(c, "users"))) return c.json(apiError("forbidden", "Only Showrium staff can look up workspaces."), 403);
     const db = c.get("db");
     const userId = await findUserIdByEmail(db, c.req.valid("query").email);
     if (!userId) return c.json({ data: [] }, 200);
@@ -459,7 +465,7 @@ businessApi.openapi(
     responses: { 204: { description: "Changed" }, ...errs },
   }),
   async (c) => {
-    const admin = platformAdmin(c);
+    const admin = await staff(c, "users.manage");
     if (!admin) return c.json(apiError("forbidden", "Only Showrium staff can change plans."), 403);
     const { plan, note } = c.req.valid("json");
     const ok = await setOrgPlan(c.get("db"), c.req.valid("param").id, plan, { actorUserId: admin.userId, reason: `admin: ${note}` });
@@ -478,7 +484,7 @@ businessApi.openapi(
     responses: { 204: { description: "Changed" }, ...errs },
   }),
   async (c) => {
-    const admin = platformAdmin(c);
+    const admin = await staff(c, "users.manage");
     if (!admin) return c.json(apiError("forbidden", "Only Showrium staff can grant access."), 403);
     const { full, note } = c.req.valid("json");
     const ok = await setFullAccess(c.get("db"), c.req.valid("param").id, { full, note, actorUserId: admin.userId });
@@ -495,7 +501,7 @@ businessApi.openapi(
     responses: { 200: json(z.object({ data: z.array(z.object({ id: z.string(), name: z.string(), note: z.string().nullable(), at: z.string().nullable() })) })), ...errs },
   }),
   async (c) => {
-    if (!platformAdmin(c)) return c.json(apiError("forbidden", "Only Showrium staff can see access grants."), 403);
+    if (!(await staff(c, "users.manage"))) return c.json(apiError("forbidden", "Only Showrium staff can see access grants."), 403);
     const rows = await listFullAccess(c.get("db"));
     return c.json({ data: rows.map((r) => ({ id: r.id, name: r.name, note: r.note, at: r.at?.toISOString() ?? null })) }, 200);
   },

@@ -62,7 +62,7 @@ export async function listWaitlist(db: Db, now = Date.now()): Promise<WaitlistRo
  * and records it. People who already joined are skipped. Returns what to email.
  * The link lets them create their own account and workspace (Free plan), never a place in anyone else's.
  */
-export async function inviteFromWaitlist(db: Db, input: { entryIds: string[]; adminUserId: string; now?: number }) {
+export async function inviteFromWaitlist(db: Db, input: { entryIds: string[]; adminUserId: string | null; now?: number }) {
   const ids = [...new Set(input.entryIds)].slice(0, 50);
   if (!ids.length) return [];
   const current = new Map((await listWaitlist(db, input.now)).map((r) => [r.id, r]));

@@ -79,6 +79,16 @@ jobs:
         run: pnpm exec wrangler deploy
       - name: Smoke test
         run: curl --fail --silent --retry 3 --retry-delay 5 "$APP_URL/api/v1/health"
+      # The admin app (admin.showrium.com, admin-preview.showrium.com): its own Worker on the same
+      # database. Closed until Cloudflare Access is set up (it refuses every request without Access).
+      - name: Build admin app
+        working-directory: apps/admin
+        run: pnpm exec vite build
+        env:
+          CLOUDFLARE_ENV: ${{ env.TARGET }}
+      - name: Deploy admin app
+        working-directory: apps/admin
+        run: pnpm exec wrangler deploy
   secret-scan:
     runs-on: ubuntu-latest
     steps:

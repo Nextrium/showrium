@@ -37,6 +37,7 @@ One **Cloudflare Worker** serves the React app and the API, with **D1** (SQLite)
 
 ```
 apps/web                 the Worker: React 19 app (src/) + Hono API (worker/), tests (test/, e2e/)
+apps/admin               the staff-only admin app (admin.showrium.com), behind Cloudflare Access
 packages/core            business logic: workspaces, roles, content, images, publishing, billing, credits
 packages/db              Drizzle schema and SQL migrations
 packages/llm             prompts, the AI provider chain, web research
@@ -47,6 +48,12 @@ tools/cost-benchmark     measures AI cost per post
 ```
 
 The other folders under `apps/` and `packages/` are reserved for later work and are empty for now.
+
+**Admin app.** `apps/admin` is a separate Worker on the same database, for Showrium staff only:
+- overview, waitlist invites, accounts and plans, staff, and an activity log
+- Cloudflare Access signs staff in, and the Worker checks Access's signed token and the person's staff role on every request
+- it offers no destructive operations
+- locally, run `pnpm --filter @nextrium/admin dev` (port 5175) with `ADMIN_DEV_EMAIL` and `PLATFORM_ADMIN_EMAILS` set to the same address in `apps/admin/.dev.vars`
 
 **AI.** Several providers are tried in order, so the app never depends on one:
 - **Writing:** DeepSeek V4 Flash, then Gemini Flash-Lite (both through OpenRouter), then Cloudflare Workers AI.

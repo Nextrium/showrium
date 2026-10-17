@@ -28,4 +28,4 @@ jobs:
           path-to-document: https://github.com/Nextrium/showrium/blob/develop/CLA.md
           branch: cla-signatures
           # Nextrium staff and bots don't sign (Nextrium already owns its staff's work).
-          allowlist: basrahtop,dependabot[bot],github-actions[bot],*[bot]
+          allowlist: Basrahtop,basrahtop,dependabot[bot],github-actions[bot],*[bot]

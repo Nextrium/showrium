@@ -1,5 +1,6 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { looksLikeEmail } from "@nextrium/core";
 import { actionEmail, sendEmail } from "../worker/email";
 import type { Env } from "../worker/env";
 
@@ -30,6 +31,21 @@ describe("transactional email", () => {
     await sendEmail(env({ BREVO_API_KEY: "k", EMAIL_FROM: "Showrium Team <hello@showrium.com>" }), mail, async (_u, init) => ((sender = JSON.parse(String(init!.body)).sender), new Response("{}", { status: 201 })));
     expect(sender).toEqual({ name: "Showrium Team", email: "hello@showrium.com" });
     await expect(sendEmail(env({ BREVO_API_KEY: "secret-key" }), mail, async () => new Response("bad", { status: 401 }))).rejects.toThrow(/^Email provider returned 401$/);
+  });
+
+  it("checks addresses quickly, even on hostile input", async () => {
+    for (const ok of ["ada@example.com", "a.b+c@sub.example.co.uk"]) expect(looksLikeEmail(ok)).toBe(true);
+    for (const bad of ["", "ada", "@example.com", "ada@", "ada@example", "a@b@example.com", "ada @example.com", "<ada@example.com>", "ada@example."]) expect(looksLikeEmail(bad)).toBe(false);
+    const started = Date.now();
+    looksLikeEmail(`a<!@${"!@".repeat(50_000)}`);
+    looksLikeEmail("!.".repeat(50_000));
+    expect(Date.now() - started).toBeLessThan(100);
+    // A bad or hostile EMAIL_FROM falls back to the default sender.
+    for (const from of ["Name <not-an-address>", `${"!@".repeat(5000)}`, "<a@example.com>"]) {
+      let sender: unknown;
+      await sendEmail(env({ BREVO_API_KEY: "k", EMAIL_FROM: from }), mail, async (_u, init) => ((sender = JSON.parse(String(init!.body)).sender), new Response("{}", { status: 201 })));
+      expect(sender).toEqual({ name: "Showrium", email: "support@showrium.com" });
+    }
   });
 
   it("escapes names and links in the HTML", () => {
