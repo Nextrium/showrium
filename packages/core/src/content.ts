@@ -1,6 +1,6 @@
 // Persona, context items, drafts and the compose pipeline. Every function takes orgId and
 // filters by it: tenant isolation lives here, never in the caller.
-import { and, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull } from "drizzle-orm";
 import {
   brief,
   connection,
@@ -36,6 +36,7 @@ import { newId } from "./ids.js";
 import { recordAudit } from "./orgs.js";
 import type { IngestedItem } from "./ingest.js";
 import { openingOf, recentPosts, repeats } from "./repetition.js";
+import { passionForContext } from "./passions.js";
 import { addUsage, CREDITS_PER_EXTRA_POST, CREDITS_PER_EXTRA_RESEARCH, getUsage, limitsFor, seatsFor, type Limits, type Plan } from "./plans.js";
 
 // --- Persona ----------------------------------------------------------------
@@ -93,7 +94,8 @@ export class SourceLimitError extends Error {
 }
 
 export async function addSource(db: Db, orgId: string, _plan: Plan, kind: "github_repo" | "rss" | "page", key: string) {
-  const existing = await db.select({ id: source.id }).from(source).where(eq(source.orgId, orgId));
+  // Passions have their own sources and allowance; only the person's own sources count here.
+  const existing = await db.select({ id: source.id }).from(source).where(and(eq(source.orgId, orgId), isNull(source.passionId)));
   const { sources: limit } = (await getOrgLimits(db, orgId)).limits;
   if (existing.length >= limit) throw new SourceLimitError(limit);
   const [row] = await db
@@ -104,8 +106,9 @@ export async function addSource(db: Db, orgId: string, _plan: Plan, kind: "githu
   return row ?? null;
 }
 
+/** The person's own sources (a passion's sources are listed with the passion). */
 export async function listSources(db: Db, orgId: string) {
-  return db.select().from(source).where(eq(source.orgId, orgId)).orderBy(desc(source.createdAt));
+  return db.select().from(source).where(and(eq(source.orgId, orgId), isNull(source.passionId))).orderBy(desc(source.createdAt));
 }
 
 export async function getSource(db: Db, orgId: string, id: string) {
@@ -191,6 +194,15 @@ export type ComposeInput = {
   research?: boolean | undefined;
 };
 
+/**
+ * A passion's disclosure, exactly as the person wrote it (house-style cleanup never touches it, so "#ad"
+ * survives). Added at the end unless the post already contains it.
+ */
+export function withDisclosure(text: string, disclosure: string): string {
+  const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " ").trim();
+  return norm(text).includes(norm(disclosure)) ? text : `${text.trimEnd()}\n\n${disclosure.trim()}`;
+}
+
 export async function compose(db: Db, providers: Provider[], input: ComposeInput, opts: { research?: ResearchProvider[] } = {}) {
   const platforms = [...new Set(input.platforms)];
   const threadFor = input.thread ? platforms.filter((p) => THREAD_PLATFORMS.includes(p)) : [];
@@ -206,7 +218,9 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   const isRequest = ctx.kind === "request";
   const instructions = [isRequest ? ctx.body : "", input.instructions?.trim() ?? ""].filter(Boolean).join("\n\n").slice(0, 6000) || null;
   const material = isRequest ? { title: "", body: "" } : { title: ctx.title, body: ctx.body };
-  const stance: Stance = input.stance ?? "own";
+  // Material from a passion's sources is someone else's work: written as the person's view of it.
+  const passion = isRequest ? null : await passionForContext(db, input.orgId, ctx.id);
+  const stance: Stance = input.stance ?? (passion ? "other" : "own");
 
   // Quota pre-check: posts left this month plus credits must cover the request.
   const { limits } = await getOrgLimits(db, input.orgId);
@@ -251,7 +265,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   try {
     result = await generateStructured(
       providers,
-      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research, recentOpenings }), maxTokens: 8000 },
+      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research, recentOpenings, passion }), maxTokens: 8000 },
       ComposeSchema,
       (out) => checkVariants(out, platforms),
     );
@@ -269,11 +283,13 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
     ctx.title,
     ctx.body,
     instructions ?? "",
+    ...(passion ? [passion.name, passion.about, passion.disclosure] : []),
     ...(research ? [research.summary, ...research.facts.map((f) => `${f.claim} ${f.source}`), ...research.criticism.map((f) => `${f.point} ${f.source}`), ...research.support.map((f) => `${f.point} ${f.source}`)] : []),
   ].join("\n");
   for (const v of result.data.variants.filter((x) => platforms.includes(x.platform))) {
     // Threads: each part cleaned and checked; one repair attempt for up to 3 parts that are too long.
     const wanted = threadFor.includes(v.platform) ? (v.parts ?? []).map(cleanPost).filter(Boolean) : [];
+    if (wanted.length && passion?.disclosure) wanted[wanted.length - 1] = withDisclosure(wanted[wanted.length - 1]!, passion.disclosure);
     if (wanted.length > 1) {
       const parts = wanted.slice(0, 20);
       let repairs = 0;
@@ -284,7 +300,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
         try {
           const fixed = await generateStructured(providers, { system, user: repairUserPrompt(v.platform, parts[i]!, partIssues.filter((x) => x.severity === "error").map((x) => x.message).join(" ")), maxTokens: 1000 }, RepairSchema);
           cost += fixed.costMicroUsd;
-          const t = cleanPost(fixed.data.text);
+          const t = i === parts.length - 1 && passion?.disclosure ? withDisclosure(cleanPost(fixed.data.text), passion.disclosure) : cleanPost(fixed.data.text);
           if (!hasErrors(lintPost(v.platform, t))) parts[i] = t;
         } catch {
           // The issue stays visible on that part.
@@ -294,7 +310,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
       variants.push({ platform: v.platform, text, parts, issues: [...lintThread(v.platform, parts), ...checkFacts(text, source)] });
       continue;
     }
-    let text = cleanPost(v.text);
+    let text = passion?.disclosure ? withDisclosure(cleanPost(v.text), passion.disclosure) : cleanPost(v.text);
     let issues = lintDraft(v.platform, text, null, xLong);
     // One repair attempt for hard errors (too long, placeholders); otherwise keep and show the issue.
     if (hasErrors(issues)) {
@@ -305,7 +321,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
           RepairSchema,
         );
         cost += fixed.costMicroUsd;
-        const fixedText = cleanPost(fixed.data.text);
+        const fixedText = passion?.disclosure ? withDisclosure(cleanPost(fixed.data.text), passion.disclosure) : cleanPost(fixed.data.text);
         const fixedIssues = lintDraft(v.platform, fixedText, null, xLong);
         if (!hasErrors(fixedIssues)) {
           text = fixedText;

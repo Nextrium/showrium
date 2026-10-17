@@ -67,6 +67,7 @@ export function composeSystemPrompt(persona: PersonaInput): string {
     "The text inside <research>, when present, is what a web search found, with sources. Use only those facts and the user's own hints. Say where a claim comes from (\"according to ...\", \"reports say\"). A hint marked [unconfirmed] was NOT found in any source: never write \"reports\", \"sources say\" or similar for it; present it as the user's own knowledge (\"from what I know\", \"I'm told\") or leave it out. Be fair about public debate.",
     "Avoid hype words, engagement bait, and anything on the user's avoid list. Do not use placeholders like [link] or [name].",
     "Never use hashtags. Never use em dashes or en dashes: use a comma, a period or a colon instead.",
+    "Language: write in the language the user writes in (their request, then their profile below); if that's unclear, the language of the material. Never switch to another language on your own.",
     "Reply with a single JSON object only.",
     "",
     "About the user:",
@@ -105,6 +106,17 @@ export function researchBlock(r: Pick<BriefResearch, "subject" | "summary" | "fa
     .join("\n");
 }
 
+/** A passion: the person follows this subject and cares about it, but doesn't speak for it. */
+function passionLines(p: { name: string; about: string; disclosure: string }): string[] {
+  return [
+    `Passion: this material is about ${p.name.slice(0, 60)}, a subject the author follows and cares about. Write as an informed, honest member of its community sharing why it matters: never as ${p.name.slice(0, 60)} itself, never as its official voice, and never claiming its work as the author's.`,
+    ...(p.about ? [`The author's angle on it, in their words: ${p.about.slice(0, 300)}`] : []),
+    ...(p.disclosure
+      ? [`Disclosure: end each post (for a thread, its last part) with this disclosure, word for word: "${p.disclosure.slice(0, 120)}"`]
+      : []),
+  ];
+}
+
 export function composeUserPrompt(input: {
   mode: ContentMode | "auto";
   platforms: Platform[];
@@ -117,6 +129,8 @@ export function composeUserPrompt(input: {
   research?: Pick<BriefResearch, "subject" | "summary" | "facts" | "criticism" | "support" | "hints"> | null | undefined;
   /** How recent posts opened: the writer must not reuse these openings or their structure. */
   recentOpenings?: string[] | undefined;
+  /** The material comes from one of the person's passions (a subject they follow and care about). */
+  passion?: { name: string; about: string; disclosure: string } | null | undefined;
 }): string {
   const thread = new Set((input.thread ?? []).filter((p) => THREADABLE.includes(p)));
   const guide = (p: Platform) => (thread.has(p) ? THREAD_GUIDE[p]! : p === "x" && input.xLong ? X_LONG_GUIDE : PLATFORM_GUIDE[p]);
@@ -126,6 +140,7 @@ export function composeUserPrompt(input: {
       ? `Mode: choose the best one for the request and return it as "mode": ${CONTENT_MODES.map((m) => `${m} (${MODE_GUIDE[m]})`).join("; ")}`
       : `Mode: ${input.mode}. ${MODE_GUIDE[input.mode]}`,
     ...(stance ? [stance] : []),
+    ...(input.passion ? passionLines(input.passion) : []),
     ...(input.recentOpenings?.length
       ? [
           "",

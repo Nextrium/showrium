@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### For people
+- **Passions:** add the subjects you care about (a project, an ecosystem, a cause) and give each one its own sources: news sites, blogs, YouTube channels, podcasts or GitHub repositories. New items become ideas labelled with the passion, and posts are written as your view, never as its official voice. Switch a passion on or off, or give it dates. An optional disclosure (for example "I'm a Cardano ambassador") is added word for word to every post about it. Free: 1 passion with 3 sources; Lite 1 with 5; Starter 2; Creator 3; Pro and Team 10, with up to 10 sources each. Posts about a passion are never approved automatically.
+- **Posts stay in your language:** the writer no longer switches language on its own.
 - **Automation that posts at good times, not like clockwork:** choose your timezone, days and times of day (morning, midday, afternoon, evening). Each post goes out at a different minute, at most one per time of day and at least 4 hours apart, and Showrium learns which time works best for you.
 - **Posts a day per platform**, within safe limits (X 5; Bluesky, Threads and Mastodon 3; LinkedIn and Facebook 2; Instagram, TikTok and YouTube Shorts 1).
 - **No repeats:** new posts avoid how your recent posts began; a post that repeats a recent one is flagged and never approved automatically.

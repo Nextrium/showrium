@@ -318,6 +318,30 @@ export const persona = sqliteTable("persona", {
   updatedAt: updatedAt(),
 });
 
+/**
+ * Passions: subjects the person cares about and posts on (a project, an ecosystem, a cause), each
+ * with its own sources. Posts about a passion are the person's view of someone else's work.
+ * Off, or outside its dates (UTC days, "YYYY-MM-DD"): its sources aren't checked and automation skips it.
+ */
+export const passion = sqliteTable(
+  "passion",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    /** The person's angle or relationship, in their words (optional). */
+    about: text("about").notNull().default(""),
+    /** Optional disclosure added to posts, e.g. "I'm a Cardano ambassador". */
+    disclosure: text("disclosure").notNull().default(""),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    startsOn: text("starts_on"),
+    endsOn: text("ends_on"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("passion_org_idx").on(t.orgId)],
+);
+
 /** github_repo; rss (a feed); page (a blog or news page without a feed, watched for new article links). */
 export const SOURCE_KINDS = ["github_repo", "rss", "page"] as const;
 export const source = sqliteTable(
@@ -326,6 +350,8 @@ export const source = sqliteTable(
     id: text("id").primaryKey(),
     orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
     kind: text("kind", { enum: SOURCE_KINDS }).notNull(),
+    /** Set when the source belongs to a passion (it then doesn't count against the plan's own sources). */
+    passionId: text("passion_id").references(() => passion.id, { onDelete: "cascade" }),
     /** "owner/repo" for GitHub, a feed URL for RSS, the page URL for a watched page. */
     key: text("key").notNull(),
     /** Watched pages: article links already seen, so only new ones become ideas (newest first, capped). */

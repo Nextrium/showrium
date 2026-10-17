@@ -9,6 +9,7 @@ import {
   engagement,
   idea,
   insight,
+  passion,
   postMetrics,
   source,
   type ContentMode,
@@ -22,6 +23,7 @@ import { PLAN_FEATURES } from "./plans.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
 import { ingestFeed, ingestGithubActivity, ingestWatchedPage, resolveBlogSource } from "./ingest.js";
+import { sourceIsLive } from "./passions.js";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -93,10 +95,12 @@ export async function syncSource(
     }
     let added = 0;
     let ideas = 0;
+    // A passion's ideas carry its name ("Cardano: <title>"), so they're easy to tell apart in Ideas.
+    const [pas] = src.passionId ? await db.select({ name: passion.name }).from(passion).where(and(eq(passion.orgId, src.orgId), eq(passion.id, src.passionId))) : [];
     for (const b of batches) {
       const rows = await addContextItems(db, src.orgId, b.kind, b.items, src.id);
       added += rows.length;
-      ideas += await createIdeas(db, src.orgId, b.kind, rows, sourceLabel(src.key, b.kind));
+      ideas += await createIdeas(db, src.orgId, b.kind, rows, pas?.name ?? sourceLabel(src.key, b.kind));
     }
     await markSourceChecked(db, src.orgId, src.id, null);
     return { added, ideas, error: null };
@@ -117,6 +121,8 @@ export async function runSourcePolling(db: Db, opts: { fetch?: FetchLike | undef
         or(isNull(source.lastCheckedAt), lt(source.lastCheckedAt, new Date(now.getTime() - 6 * HOUR))),
         // "Find ideas" switched off in Automation: sources are checked only when the person asks.
         sql`NOT EXISTS (SELECT 1 FROM autopilot a WHERE a.org_id = ${source.orgId} AND a.find_ideas = 0)`,
+        // A passion that's off or outside its dates isn't checked.
+        sourceIsLive(source.passionId, now.toISOString().slice(0, 10)),
       ),
     )
     .orderBy(asc(source.lastCheckedAt))

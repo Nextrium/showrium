@@ -3,7 +3,15 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { CONTENT_MODES, DRAFT_STATUSES, PLATFORMS, STANCES } from "@nextrium/db";
 import {
   addContextItems,
+  addPassionSource,
   addSource,
+  createPassion,
+  listPassions,
+  PassionError,
+  passionIsLive,
+  removePassion,
+  updatePassion,
+  utcDay,
   assertSafeUrl,
   can,
   compose,
@@ -50,7 +58,7 @@ export const contentApi = new OpenAPIHono<AppEnv>({
   },
 });
 
-for (const path of ["/persona", "/contexts", "/contexts/*", "/sources", "/sources/*", "/compose", "/drafts", "/drafts/*", "/usage", "/platforms"]) {
+for (const path of ["/persona", "/contexts", "/contexts/*", "/sources", "/sources/*", "/compose", "/drafts", "/drafts/*", "/usage", "/platforms", "/passions", "/passions/*"]) {
   contentApi.use(path, requirePrincipal);
 }
 
@@ -241,6 +249,21 @@ contentApi.openapi(
 
 // --- Sources ----------------------------------------------------------------------
 
+const SourceInput = z.discriminatedUnion("kind", [z.object({ kind: z.literal("github_repo"), repo: z.string().trim().regex(GITHUB_REPO_RE, "Use the form owner/repository.") }), z.object({ kind: z.literal("rss"), url: z.string().trim().max(2000) })]);
+
+/** People paste a blog or channel page, not its feed: find the feed, or watch the page itself. */
+async function resolveSourceInput(input: z.infer<typeof SourceInput>): Promise<{ kind: "github_repo" | "rss" | "page"; key: string; note: string | null } | { error: string }> {
+  if (input.kind === "github_repo") return { kind: "github_repo", key: input.repo.toLowerCase(), note: null };
+  try {
+    assertSafeUrl(input.url);
+    const resolved = await resolveBlogSource(input.url);
+    const note = resolved.how === "page" ? "This site has no feed, so Showrium watches the page for new articles." : resolved.how === "feed" ? null : "Found this site's feed and connected that.";
+    return { kind: resolved.kind, key: resolved.key, note };
+  } catch (error) {
+    return { error: error instanceof UnsafeUrlError ? error.message : error instanceof Error ? error.message : "We couldn't read that address." };
+  }
+}
+
 const SourceSchema = z.object({ id: z.string(), kind: z.string(), key: z.string(), lastCheckedAt: z.string().nullable(), lastError: z.string().nullable() }).openapi("Source");
 
 contentApi.openapi(
@@ -256,7 +279,7 @@ contentApi.openapi(
     method: "post",
     path: "/sources",
     tags: ["Sources"],
-    request: body(z.discriminatedUnion("kind", [z.object({ kind: z.literal("github_repo"), repo: z.string().trim().regex(GITHUB_REPO_RE, "Use the form owner/repository.") }), z.object({ kind: z.literal("rss"), url: z.string().trim().max(2000) })])),
+    request: body(SourceInput),
     responses: {
       201: json(z.object({ id: z.string(), kind: z.enum(["github_repo", "rss", "page"]), key: z.string(), note: z.string().nullable() }), "Added"),
       409: json(Err, "Limit reached or already added"),
@@ -265,29 +288,10 @@ contentApi.openapi(
   }),
   async (c) => {
     if (denied(c, "content.write")) return c.json(forbidden("connect sources"), 403);
-    const input = c.req.valid("json");
     const { orgId } = c.get("principal");
-    let kind: "github_repo" | "rss" | "page" = input.kind;
-    let key = input.kind === "github_repo" ? input.repo.toLowerCase() : input.url;
-    let note: string | null = null;
-    if (input.kind === "rss") {
-      // People paste the blog page, not its feed: find the feed, or watch the page itself.
-      try {
-        assertSafeUrl(input.url);
-        const resolved = await resolveBlogSource(input.url);
-        kind = resolved.kind;
-        key = resolved.key;
-        note =
-          resolved.how === "page"
-            ? "This site has no feed, so Showrium watches the page for new articles."
-            : resolved.how === "feed"
-              ? null
-              : "Found this site's feed and connected that.";
-      } catch (error) {
-        const message = error instanceof UnsafeUrlError ? error.message : error instanceof Error ? error.message : "We couldn't read that address.";
-        return c.json(apiError("unreadable_source", message), 400);
-      }
-    }
+    const resolved = await resolveSourceInput(c.req.valid("json"));
+    if ("error" in resolved) return c.json(apiError("unreadable_source", resolved.error), 400);
+    const { kind, key, note } = resolved;
     try {
       const created = await addSource(c.get("db"), orgId, await getOrgPlan(c.get("db"), orgId), kind, key);
       if (!created) return c.json(apiError("already_added", "That source is already connected."), 409);
@@ -323,6 +327,133 @@ contentApi.openapi(
     if (!src) return c.json(apiError("not_found", "No such source in this workspace."), 404);
     const out = await syncSource(c.get("db"), src);
     return c.json({ added: out.added, error: out.error }, 200);
+  },
+);
+
+// --- Passions -----------------------------------------------------------------------
+// Subjects the person cares about, each with its own sources. Removing or checking one of a
+// passion's sources uses the /sources/{id} routes above.
+
+const Day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use dates like 2026-11-01.");
+const PassionFields = z.object({
+  name: z.string().trim().min(1).max(60),
+  about: z.string().max(300).optional(),
+  disclosure: z.string().max(120).optional(),
+  active: z.boolean().optional(),
+  startsOn: Day.nullable().optional(),
+  endsOn: Day.nullable().optional(),
+});
+const PassionSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    about: z.string(),
+    disclosure: z.string(),
+    active: z.boolean(),
+    live: z.boolean(),
+    startsOn: z.string().nullable(),
+    endsOn: z.string().nullable(),
+    sources: z.array(SourceSchema),
+  })
+  .openapi("Passion");
+type PassionRow = { id: string; name: string; about: string; disclosure: string; active: boolean; startsOn: string | null; endsOn: string | null; sources?: { id: string; kind: string; key: string; lastCheckedAt: Date | null; lastError: string | null }[] };
+const toPassion = (p: PassionRow) => ({
+  id: p.id,
+  name: p.name,
+  about: p.about,
+  disclosure: p.disclosure,
+  active: p.active,
+  live: passionIsLive(p, utcDay()),
+  startsOn: p.startsOn,
+  endsOn: p.endsOn,
+  sources: (p.sources ?? []).map((r) => ({ id: r.id, kind: r.kind, key: r.key, lastCheckedAt: r.lastCheckedAt?.toISOString() ?? null, lastError: r.lastError })),
+});
+const actorOf = (p: { kind: "user"; userId: string } | { kind: "api_key"; apiKeyId: string }) => ({ actorUserId: p.kind === "user" ? p.userId : null, actorApiKeyId: p.kind === "api_key" ? p.apiKeyId : null });
+/** A PassionError as an API answer: bad input 400, unknown 404, limits and duplicates 409. */
+function passionFailure(error: unknown): { status: 400 | 404 | 409; body: ReturnType<typeof apiError> } {
+  if (!(error instanceof PassionError)) throw error;
+  const code = error.code === "limit" ? "passion_limit" : error.code === "exists" ? "already_added" : error.code;
+  return { status: error.code === "not_found" ? 404 : error.code === "invalid" ? 400 : 409, body: apiError(code, error.message) };
+}
+
+contentApi.openapi(
+  createRoute({ method: "get", path: "/passions", tags: ["Passions"], responses: { 200: json(z.object({ data: z.array(PassionSchema), limits: z.object({ passions: z.number(), sourcesEach: z.number() }) })), ...errs } }),
+  async (c) => {
+    const { orgId } = c.get("principal");
+    const [rows, { limits }] = await Promise.all([listPassions(c.get("db"), orgId), getOrgLimits(c.get("db"), orgId)]);
+    return c.json({ data: rows.map(toPassion), limits: { passions: limits.passions, sourcesEach: limits.passionSources } }, 200);
+  },
+);
+
+contentApi.openapi(
+  createRoute({ method: "post", path: "/passions", tags: ["Passions"], request: body(PassionFields), responses: { 201: json(PassionSchema, "Created"), 409: json(Err, "Limit reached or name in use"), ...errs } }),
+  async (c) => {
+    if (denied(c, "content.write")) return c.json(forbidden("add passions"), 403);
+    const principal = c.get("principal");
+    const { orgId } = principal;
+    try {
+      const row = await createPassion(c.get("db"), orgId, c.req.valid("json"));
+      await recordAudit(c.get("db"), { orgId, ...actorOf(principal), action: "passion.created", target: row.id, meta: { name: row.name } });
+      return c.json(toPassion(row), 201);
+    } catch (error) {
+      const f = passionFailure(error);
+      return c.json(f.body, f.status);
+    }
+  },
+);
+
+contentApi.openapi(
+  createRoute({ method: "patch", path: "/passions/{id}", tags: ["Passions"], request: { params: z.object({ id: z.string().max(64) }), ...body(PassionFields.partial()) }, responses: { 200: json(PassionSchema), 409: json(Err, "Name in use"), ...errs } }),
+  async (c) => {
+    if (denied(c, "content.write")) return c.json(forbidden("change passions"), 403);
+    const principal = c.get("principal");
+    const { orgId } = principal;
+    try {
+      const row = await updatePassion(c.get("db"), orgId, c.req.valid("param").id, c.req.valid("json"));
+      await recordAudit(c.get("db"), { orgId, ...actorOf(principal), action: "passion.updated", target: row.id, meta: { active: row.active, startsOn: row.startsOn, endsOn: row.endsOn, disclosure: Boolean(row.disclosure) } });
+      const full = (await listPassions(c.get("db"), orgId)).find((p) => p.id === row.id) ?? row;
+      return c.json(toPassion(full), 200);
+    } catch (error) {
+      const f = passionFailure(error);
+      return c.json(f.body, f.status);
+    }
+  },
+);
+
+contentApi.openapi(
+  createRoute({ method: "delete", path: "/passions/{id}", tags: ["Passions"], request: { params: z.object({ id: z.string().max(64) }) }, responses: { 204: { description: "Removed; its sources are no longer watched (posts already written stay)" }, ...errs } }),
+  async (c) => {
+    if (denied(c, "content.write")) return c.json(forbidden("remove passions"), 403);
+    const principal = c.get("principal");
+    const { orgId } = principal;
+    const id = c.req.valid("param").id;
+    if (!(await removePassion(c.get("db"), orgId, id))) return c.json(apiError("not_found", "No such passion in this workspace."), 404);
+    await recordAudit(c.get("db"), { orgId, ...actorOf(principal), action: "passion.removed", target: id });
+    return c.body(null, 204);
+  },
+);
+
+contentApi.openapi(
+  createRoute({
+    method: "post",
+    path: "/passions/{id}/sources",
+    tags: ["Passions"],
+    request: { params: z.object({ id: z.string().max(64) }), ...body(SourceInput) },
+    responses: { 201: json(z.object({ id: z.string(), kind: z.enum(["github_repo", "rss", "page"]), key: z.string(), note: z.string().nullable() }), "Added"), 409: json(Err, "Limit reached or already added"), ...errs },
+  }),
+  async (c) => {
+    if (denied(c, "content.write")) return c.json(forbidden("connect sources"), 403);
+    const { orgId } = c.get("principal");
+    const resolved = await resolveSourceInput(c.req.valid("json"));
+    if ("error" in resolved) return c.json(apiError("unreadable_source", resolved.error), 400);
+    try {
+      const created = await addPassionSource(c.get("db"), orgId, c.req.valid("param").id, resolved.kind, resolved.key);
+      if (!created) return c.json(apiError("already_added", "That source is already connected (here or in Sources)."), 409);
+      return c.json({ id: created.id, kind: resolved.kind, key: resolved.key, note: resolved.note }, 201);
+    } catch (error) {
+      const f = passionFailure(error);
+      return c.json(f.body, f.status);
+    }
   },
 );
 

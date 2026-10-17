@@ -26,3 +26,4 @@ export * from "./email.js";
 export * from "./admin.js";
 export * from "./timing.js";
 export * from "./repetition.js";
+export * from "./passions.js";

@@ -11,6 +11,7 @@ import {
   contextItem,
   draft,
   idea,
+  source,
   persona,
   type AutomationRule,
   type AutopilotLevel,
@@ -23,6 +24,7 @@ import type { Provider } from "@nextrium/llm";
 import { composeIdea } from "./autonomy.js";
 import { getOrgLimits, getOrgPlan } from "./content.js";
 import { recordAudit } from "./orgs.js";
+import { sourceIsLive, utcDay } from "./passions.js";
 import { getUsage, PLAN_FEATURES, type Plan } from "./plans.js";
 import { API_PUBLISH_PLATFORMS, scheduleDraft } from "./publishing.js";
 import { isTimezone, learnWindows, localDay, localParts, pickSlot, PLATFORM_DAILY_MAX, takenTimes, WINDOW_NAMES, type PostingWindow } from "./timing.js";
@@ -328,10 +330,12 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   if (!mode) return { skipped: "no_styles" as const };
 
   const candidates = await db
-    .select({ id: idea.id, kind: contextItem.kind, score: idea.score, externalId: contextItem.externalId })
+    .select({ id: idea.id, kind: contextItem.kind, score: idea.score, externalId: contextItem.externalId, passionId: source.passionId })
     .from(idea)
     .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
-    .where(and(eq(idea.orgId, orgId), eq(idea.status, "new"), gte(idea.createdAt, new Date(now.getTime() - 30 * DAY))))
+    .leftJoin(source, eq(source.id, contextItem.sourceId))
+    // Ideas from a passion that's off or outside its dates wait until it's live again.
+    .where(and(eq(idea.orgId, orgId), eq(idea.status, "new"), gte(idea.createdAt, new Date(now.getTime() - 30 * DAY)), sourceIsLive(source.passionId, utcDay(now))))
     .limit(50);
   if (!candidates.length) return { skipped: "no_ideas" as const };
   // Best score, with a nudge towards material that suits this week's style.
@@ -343,7 +347,8 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
 
   // "Approve for me": only clean posts (no errors or warnings), from the person's own material
   // (never ideas shaped by audience comments), never X, and never in monetization-safe mode.
-  const trusted = TRUSTED_KINDS.includes(best.kind) && !best.externalId?.startsWith("insight:");
+  // A passion's material is someone else's work: posts about it always wait for the person.
+  const trusted = TRUSTED_KINDS.includes(best.kind) && !best.externalId?.startsWith("insight:") && !best.passionId;
   const approved: string[] = [];
   if (allowed.approve && !p.safe && trusted) {
     for (const d of out.drafts) {

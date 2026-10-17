@@ -99,7 +99,7 @@ describe("sources", () => {
     const fakeFetch = async (url: string) => (url === "https://ex.org/blog" ? page() : url === "https://ex.org/blog/one" ? post() : new Response("", { status: 404, headers: { "Content-Type": "text/html" } }));
     const db = createDb(env.DB);
     const src = await env.DB.prepare("SELECT * FROM source WHERE id = ?").bind(id).first();
-    const out = await syncSource(db, { id, orgId: u.orgId, kind: "rss", key: "https://ex.org/blog", seen: [], lastCheckedAt: null, lastError: null, createdAt: new Date() }, { fetch: fakeFetch });
+    const out = await syncSource(db, { id, orgId: u.orgId, kind: "rss", passionId: null, key: "https://ex.org/blog", seen: [], lastCheckedAt: null, lastError: null, createdAt: new Date() }, { fetch: fakeFetch });
     expect(src).toBeTruthy();
     expect(out).toMatchObject({ added: 1, error: null });
     const row = await env.DB.prepare("SELECT kind, last_error FROM source WHERE id = ?").bind(id).first<{ kind: string; last_error: string | null }>();

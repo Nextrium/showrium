@@ -2,18 +2,19 @@
 import { and, eq, sql } from "drizzle-orm";
 import { usageCounter, type Db } from "@nextrium/db";
 
+// passions: subjects with their own sources (owner decision 2026-10-16); passionSources: per passion.
 export const PLAN_LIMITS = {
-  free: { posts: 20, xApiPosts: 0, videos: 2, sources: 1, uploadsPerDay: 3, research: 3 },
-  lite: { posts: 60, xApiPosts: 0, videos: 5, sources: 1, uploadsPerDay: 8, research: 10 },
-  starter: { posts: 150, xApiPosts: 15, videos: 15, sources: 2, uploadsPerDay: 15, research: 20 },
-  creator: { posts: 400, xApiPosts: 50, videos: 40, sources: 5, uploadsPerDay: 30, research: 40 },
-  pro: { posts: 600, xApiPosts: 100, videos: 60, sources: 15, uploadsPerDay: 50, research: 60 },
+  free: { posts: 20, xApiPosts: 0, videos: 2, sources: 1, uploadsPerDay: 3, research: 3, passions: 1, passionSources: 3 },
+  lite: { posts: 60, xApiPosts: 0, videos: 5, sources: 1, uploadsPerDay: 8, research: 10, passions: 1, passionSources: 5 },
+  starter: { posts: 150, xApiPosts: 15, videos: 15, sources: 2, uploadsPerDay: 15, research: 20, passions: 2, passionSources: 10 },
+  creator: { posts: 400, xApiPosts: 50, videos: 40, sources: 5, uploadsPerDay: 30, research: 40, passions: 3, passionSources: 10 },
+  pro: { posts: 600, xApiPosts: 100, videos: 60, sources: 15, uploadsPerDay: 50, research: 60, passions: 10, passionSources: 10 },
   // Team (shared): Pro's allowance, shared by up to 5 members, at Pro's price.
-  team: { posts: 600, xApiPosts: 100, videos: 60, sources: 15, uploadsPerDay: 50, research: 60 },
+  team: { posts: 600, xApiPosts: 100, videos: 60, sources: 15, uploadsPerDay: 50, research: 60, passions: 10, passionSources: 10 },
   // Team (per member): this allowance for EACH paid member (2-5), pooled for the workspace. See limitsFor.
-  team_seats: { posts: 600, xApiPosts: 50, videos: 60, sources: 3, uploadsPerDay: 50, research: 60 },
+  team_seats: { posts: 600, xApiPosts: 50, videos: 60, sources: 3, uploadsPerDay: 50, research: 60, passions: 10, passionSources: 10 },
   // Full access granted by a platform admin. Still capped: AI and X posts cost real money.
-  staff: { posts: 5000, xApiPosts: 300, videos: 500, sources: 50, uploadsPerDay: 200, research: 300 },
+  staff: { posts: 5000, xApiPosts: 300, videos: 500, sources: 50, uploadsPerDay: 200, research: 300, passions: 10, passionSources: 10 },
 } as const;
 export type Plan = keyof typeof PLAN_LIMITS;
 export const CREDITS_PER_EXTRA_POST = 1;
@@ -93,7 +94,8 @@ export function limitsFor(plan: Plan, seats?: number | null): Limits {
   const base = PLAN_LIMITS[plan];
   if (plan !== "team_seats") return { ...base };
   const n = clampSeats(seats);
-  return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, v * n])) as Limits;
+  // Passions are per workspace, not per member (10 is already the most any plan has).
+  return Object.fromEntries(Object.entries(base).map(([k, v]) => [k, k === "passions" || k === "passionSources" ? v : v * n])) as Limits;
 }
 
 /** How many members a workspace may have. */

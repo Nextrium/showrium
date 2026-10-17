@@ -139,7 +139,7 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
       }
       const job = cronJob(event.scheduledTime);
       const result =
-        job === "sources" ? await runSourcePolling(db, {}, now)
+        job === "sources" ? await runSourcePolling(db, {}, now, 6) // up to ~18 fetches; with Passions there are more sources
         : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now, 3, autoImages(env, db)))
         : job === "engagement" ? await runEngagementSync(db, fetch, now)
         : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now) };

@@ -112,6 +112,23 @@ describe("automation switches", () => {
 });
 
 describe("the automation run", () => {
+  it("skips ideas from a passion that's off, and never approves posts about a passion by itself", async () => {
+    const u = await user("s3-passion@example.com");
+    await connectBluesky(u);
+    await u.call("PUT", "/autopilot", settings({ findIdeas: false, mix: { teach: 3 }, rules: { bluesky: { write: true, schedule: true, approve: true }, linkedin: off } }));
+    const p = (await (await u.call("POST", "/passions", { name: "Cardano", active: false })).json()) as { id: string };
+    await u.call("POST", `/passions/${p.id}/sources`, { kind: "github_repo", repo: "cardano/node" });
+    const src = await env.DB.prepare("SELECT id FROM source WHERE org_id = ? AND passion_id = ?").bind(u.orgId, p.id).first<{ id: string }>();
+    const cid = `ctx_${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO context_item (id, org_id, source_id, kind, title, body) VALUES (?, ?, ?, 'rss_item', 'Node 10 is out', 'Faster sync for everyone.')").bind(cid, u.orgId, src!.id).run();
+    await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: cid, title: "Node 10 is out" }], "Cardano");
+    const monday = new Date("2026-10-19T08:00:00Z");
+    expect(await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, monday)).toEqual({ skipped: "no_ideas" });
+    await u.call("PATCH", `/passions/${p.id}`, { active: true });
+    const out = await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, monday);
+    expect(out).toMatchObject({ drafts: 1, approved: 0 }); // "Approve for me" is on, but this is someone else's work
+  });
+
   it("writes for platforms with writing on, approves only where allowed, and records the style", async () => {
     const u = await user("s3-run@example.com");
     await connectBluesky(u);

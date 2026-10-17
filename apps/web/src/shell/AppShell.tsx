@@ -34,6 +34,7 @@ function useNavSections(me: Me | null): { label: string; items: NavItem[] }[] {
       label: "Setup",
       items: [
         { to: "/app/sources", label: "Sources", icon: "sources" },
+        { to: "/app/passions", label: "Passions", icon: "heart" },
         { to: "/app/accounts", label: "Accounts", icon: "accounts" },
         { to: "/app/voice", label: "Brand voice", icon: "voice" },
         { to: "/app/automation", label: "Automation", icon: "automation" },

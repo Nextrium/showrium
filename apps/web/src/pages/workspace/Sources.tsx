@@ -4,7 +4,7 @@ import { Link } from "../../ui/Link";
 import { Alert, Badge, Button, Empty, Icon, PageHeader, Panel, type IconName } from "../../ui/kit";
 import { UploadForm } from "../../components/UploadForm";
 
-type Source = { id: string; kind: "github_repo" | "rss" | "page"; key: string; lastCheckedAt: string | null; lastError: string | null };
+export type Source = { id: string; kind: "github_repo" | "rss" | "page"; key: string; lastCheckedAt: string | null; lastError: string | null };
 type ContextItem = { id: string; kind: string; title: string; body: string; url: string | null; createdAt: string };
 type Usage = { sources: { limit: number } };
 
@@ -36,7 +36,7 @@ const CATALOG: { group: string; items: CatalogItem[] }[] = [
   },
 ];
 
-function SourceRow({ s, onRemoved }: { s: Source; onRemoved: () => void }) {
+export function SourceRow({ s, onRemoved }: { s: Source; onRemoved: () => void }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const check = async () => {
