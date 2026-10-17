@@ -22,7 +22,7 @@
       "workers_dev": false,
       "preview_urls": false,
       "d1_databases": [{ "binding": "DB", "database_name": "showrium-db", "database_id": "025234bd-f294-41ed-bcbf-af7b2a2aad1a", "migrations_dir": "../../packages/db/migrations" }],
-      // ACCESS_TEAM_DOMAIN and ACCESS_AUD come from the Cloudflare Access application (not secret).
+      // ACCESS_TEAM_DOMAIN and ACCESS_AUD come from the Cloudflare Access application "admin" (not secret).
       "vars": { "ADMIN_URL": "https://admin.showrium.com", "APP_URL": "https://app.showrium.com", "ACCESS_TEAM_DOMAIN": "nextrium.cloudflareaccess.com", "ACCESS_AUD": "4d64371e028eea6629869a58cd0f634e0fc058434f5b6365067a68b317c00877" },
       "observability": { "enabled": true }
     },
@@ -31,7 +31,7 @@
       "workers_dev": false,
       "preview_urls": false,
       "d1_databases": [{ "binding": "DB", "database_name": "showrium-db-preview", "database_id": "35a309bc-a22e-45b7-b660-cc266ba8b720", "migrations_dir": "../../packages/db/migrations" }],
-      "vars": { "ADMIN_URL": "https://admin-preview.showrium.com", "APP_URL": "https://preview.showrium.com", "ACCESS_TEAM_DOMAIN": "nextrium.cloudflareaccess.com", "ACCESS_AUD": "4d64371e028eea6629869a58cd0f634e0fc058434f5b6365067a68b317c00877" },
+      "vars": { "ADMIN_URL": "https://admin-preview.showrium.com", "APP_URL": "https://preview.showrium.com", "ACCESS_TEAM_DOMAIN": "nextrium.cloudflareaccess.com", "ACCESS_AUD": "5d81b1d956fece393140f17a33463fdd5ded994af8138f7fc0cd8d1efcc4e1aa" },
       "observability": { "enabled": true }
     }
   }
