@@ -153,11 +153,8 @@ export type SlotInput = {
  * The next posting time for an account: the first local day with a free window, and on that day the
  * window the learning prefers, at a random minute inside it. Null if nothing fits in two weeks.
  */
-/** A number in [0, 1) from Web Crypto (not for secrets; it keeps code scanners quiet about Math.random). */
-const cryptoRandom = () => crypto.getRandomValues(new Uint32Array(1))[0]! / 2 ** 32;
-
 export function pickSlot(input: SlotInput): Date | null {
-  const rand = input.rand ?? cryptoRandom;
+  const rand = input.rand ?? Math.random; // timing jitter only, never used for anything secret
   const windows = input.windows.length ? input.windows : WINDOW_NAMES;
   const today = localParts(input.now, input.tz);
   for (let d = 0; d < 14; d++) {

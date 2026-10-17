@@ -5,6 +5,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { invite, staffMember, user, STAFF_ROLES, type Db, type StaffRole } from "@nextrium/db";
 import { isPlatformAdmin } from "./access.js";
 import { newId } from "./ids.js";
+import { looksLikeEmail } from "./email.js";
 import { createInvite } from "./invites.js";
 import { adminAudit } from "@nextrium/db";
 
@@ -71,7 +72,7 @@ export async function listStaff(db: Db, ownerList: string | undefined) {
 export async function inviteStaff(db: Db, input: { email: string; role: StaffRole; actor: { email: string; userId?: string | null | undefined; role: StaffRole | null } }) {
   if (input.actor.role !== "owner") throw new StaffError("forbidden", "Only owners can invite staff.");
   const email = norm(input.email);
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new StaffError("invalid", "Enter a valid email address.");
+  if (!looksLikeEmail(email)) throw new StaffError("invalid", "Enter a valid email address.");
   if (!STAFF_ROLES.includes(input.role)) throw new StaffError("invalid", "Choose a role.");
   const [existing] = await db.select().from(staffMember).where(eq(staffMember.email, email));
   if (existing && !existing.revokedAt) throw new StaffError("exists", "That person is already staff.");

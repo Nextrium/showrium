@@ -13,12 +13,31 @@ export function emailConfigured(env: EmailEnv): boolean {
   return Boolean(env.BREVO_API_KEY);
 }
 
+/**
+ * A plain address check without regular expressions (no slow backtracking on odd input):
+ * one "@", something on both sides, a dot in the domain, no spaces or angle brackets.
+ */
+export function looksLikeEmail(value: string): boolean {
+  if (value.length > 254 || /[\s<>]/.test(value)) return false;
+  const at = value.indexOf("@");
+  if (at < 1 || at !== value.lastIndexOf("@")) return false;
+  const domain = value.slice(at + 1);
+  const dot = domain.lastIndexOf(".");
+  return dot > 0 && dot < domain.length - 1;
+}
+
+/** `EMAIL_FROM` is "Name <address>" or just an address; anything else falls back to the default. */
 function sender(env: EmailEnv) {
   const raw = env.EMAIL_FROM?.trim();
-  const m = raw?.match(/^(.{1,80}?)\s*<([^<>\s]+@[^<>\s]+)>$/);
-  if (m) return { name: m[1]!.trim(), email: m[2]! };
-  if (raw && /^[^<>\s]+@[^<>\s]+$/.test(raw)) return { name: DEFAULT_FROM.name, email: raw };
-  return DEFAULT_FROM;
+  if (!raw) return DEFAULT_FROM;
+  const open = raw.lastIndexOf("<");
+  if (open >= 0 && raw.endsWith(">")) {
+    const name = raw.slice(0, open).trim();
+    const email = raw.slice(open + 1, -1);
+    if (name && name.length <= 80 && looksLikeEmail(email)) return { name, email };
+    return DEFAULT_FROM;
+  }
+  return looksLikeEmail(raw) ? { name: DEFAULT_FROM.name, email: raw } : DEFAULT_FROM;
 }
 
 /** Sends one email. Throws on provider errors (the message never includes the API key). */
