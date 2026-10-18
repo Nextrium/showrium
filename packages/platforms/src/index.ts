@@ -66,18 +66,44 @@ export class PlatformError extends Error {
 
 const TIMEOUT = 15_000;
 
-async function request(platform: string, doFetch: FetchLike, url: string, init: RequestInit): Promise<Response> {
+/**
+ * The platform's own explanation of a refused request, from its structured error fields only (X's
+ * problem+json "detail", or "message"/"errors[].message"). Raw text and HTML are never echoed, and
+ * anything that looks like a token or key is masked, so nothing sensitive reaches the person or logs.
+ */
+export async function errorReason(res: Response): Promise<string> {
+  let raw = "";
+  try {
+    const j = JSON.parse((await res.text()).slice(0, 4000)) as Record<string, unknown> & { errors?: { message?: unknown; detail?: unknown }[] };
+    const first = Array.isArray(j?.errors) ? j.errors[0] : undefined;
+    const pick = [j?.detail, first?.detail, first?.message, j?.message, j?.error_description, j?.title].find((v) => typeof v === "string" && v.trim());
+    raw = typeof pick === "string" ? pick : "";
+  } catch {
+    raw = ""; // not JSON: say nothing rather than echo it
+  }
+  return raw
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/[A-Za-z0-9_\-.~+/=]{24,}/g, "…")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+}
+
+async function request(platform: string, doFetch: FetchLike, url: string, init: RequestInit, what = "the post"): Promise<Response> {
   let res: Response;
   try {
     res = await doFetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT) });
   } catch {
     throw new PlatformError(platform, "unavailable", `${platform} didn't respond. Try again shortly.`);
   }
+  if (res.ok) return res;
+  // Sign-in failures never carry the platform's text (it can describe tokens); other refusals do.
+  const reason = res.status === 401 || res.status === 403 || res.status === 429 || res.status >= 500 ? "" : await errorReason(res);
+  const why = reason ? ` ${platform} said: "${reason}"` : "";
   if (res.status === 401 || res.status === 403) throw new PlatformError(platform, "auth", `${platform} refused the request. Reconnect the account and try again.`);
   if (res.status === 429) throw new PlatformError(platform, "rate_limited", `${platform} is rate-limiting requests. Try again later.`);
   if (res.status >= 500) throw new PlatformError(platform, "unavailable", `${platform} is having problems (HTTP ${res.status}). Try again shortly.`);
-  if (!res.ok) throw new PlatformError(platform, "rejected", `${platform} rejected the post (HTTP ${res.status}).`);
-  return res;
+  throw new PlatformError(platform, "rejected", `${platform} rejected ${what} (HTTP ${res.status}).${why}`);
 }
 
 const form = (data: Record<string, string>) => new URLSearchParams(data).toString();
@@ -118,11 +144,17 @@ export const x = {
   },
   /** Uploads an image (needs the media.write scope) and sets its alt text. Returns the media id. */
   async uploadImage(tokens: TokenSet, image: ImageUpload, doFetch: FetchLike = fetch): Promise<string> {
-    const res = await request("X", doFetch, "https://api.x.com/2/media/upload", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${tokens.accessToken}` },
-      body: multipart({ media: { bytes: image.bytes, mime: image.mime, name: "image" }, media_category: "tweet_image" }),
-    });
+    const res = await request(
+      "X",
+      doFetch,
+      "https://api.x.com/2/media/upload",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tokens.accessToken}` },
+        body: multipart({ media: { bytes: image.bytes, mime: image.mime, name: "image" }, media_category: "tweet_image" }),
+      },
+      "the image",
+    );
     const { data } = (await res.json()) as { data: { id: string } };
     if (image.alt) {
       await request("X", doFetch, "https://api.x.com/2/media/metadata", {

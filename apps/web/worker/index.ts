@@ -11,19 +11,26 @@ import { expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, r
 import { aiProviders } from "./ai.js";
 import { publishDeps } from "./connections-api.js";
 import { imageDeps } from "./images-api.js";
-import { autoImagesForBrief, autoScheduledEmails, sendEmail, type AfterCompose, type OnAutoScheduled } from "@nextrium/core";
+import { autoImagesForBrief, autoScheduledEmails, failedPostEmails, sendEmail, type AfterCompose, type Email, type OnAutoScheduled, type OnPublishFailed } from "@nextrium/core";
 import type { Db } from "@nextrium/db";
 import type { Env } from "./env.js";
 
 /** Automation finds an image for the posts it writes, like people's own posts. */
+async function sendAll(env: Env, emails: Email[], what: string) {
+  for (const email of emails) {
+    const out = await sendEmail(env, email).catch((error) => (console.warn(`${what} email failed`, error instanceof Error ? error.message : error), { sent: false }));
+    if (!out.sent) console.log(`${what} not emailed (email isn't set up or failed); it's shown in Posts`);
+  }
+}
+
 /** Emails owners and admins what automation just scheduled, so they can cancel before it goes out. */
 function notifyScheduled(env: Env, db: Db): OnAutoScheduled {
-  return async (orgId, draftIds) => {
-    for (const email of await autoScheduledEmails(db, orgId, draftIds, env.BETTER_AUTH_URL)) {
-      const out = await sendEmail(env, email).catch((error) => (console.warn("schedule notice failed", error instanceof Error ? error.message : error), { sent: false }));
-      if (!out.sent) console.log("schedule notice not emailed (email isn't set up); the posts are listed in Posts > Scheduled");
-    }
-  };
+  return async (orgId, draftIds) => sendAll(env, await autoScheduledEmails(db, orgId, draftIds, env.BETTER_AUTH_URL), "schedule notice");
+}
+
+/** Emails owners and admins when scheduled posts didn't go out, with the platform's reason. */
+function notifyFailed(env: Env, db: Db): OnPublishFailed {
+  return async (orgId, draftIds) => sendAll(env, await failedPostEmails(db, orgId, draftIds, env.BETTER_AUTH_URL), "failure notice");
 }
 
 function autoImages(env: Env, db: Db): AfterCompose | undefined {
@@ -143,7 +150,7 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
       const paused = publishingPaused(env);
       if (event.cron === PUBLISH_CRON) {
         if (!env.TOKEN_ENCRYPTION_KEY || paused) return;
-        const result = await runDuePublishing(await publishDeps(env, db), now, 5);
+        const result = await runDuePublishing(await publishDeps(env, db), now, 5, notifyFailed(env, db));
         if (result.due) console.log("scheduled publishing", result);
         return;
       }

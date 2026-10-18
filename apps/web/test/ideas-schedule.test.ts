@@ -7,7 +7,11 @@ import {
   baseScore,
   createIdeas,
   effectiveScore,
+  failedPostEmails,
   importTokenKey,
+  moveAutoScheduled,
+  parseDate,
+  runDuePublishing,
   isApprovable,
   isStale,
   isWritable,
@@ -22,6 +26,7 @@ import {
   type PublishDeps,
 } from "@nextrium/core";
 import { fakeProvider } from "@nextrium/llm";
+import { errorReason } from "@nextrium/platforms";
 
 // Owner feedback 2026-10-18: fresh, relevant ideas; no clashing schedules; a notice before automated
 // posts go out (they're always scheduled ahead); X and passions may be approved by automation.
@@ -43,7 +48,7 @@ async function user(email: string, plan = "creator", platforms = ["bluesky", "li
 }
 const deps = async (): Promise<PublishDeps> => ({ db: createDb(env.DB), key: await importTokenKey(env.TOKEN_ENCRYPTION_KEY), configs: { mastodonRedirectUri: `${BASE}/cb` } });
 async function connect(u: Awaited<ReturnType<typeof user>>, platform: "bluesky" | "x") {
-  const secret = platform === "bluesky" ? { identifier: "ada", appPassword: "aaaa-bbbb-cccc-dddd" } : { accessToken: "t", refreshToken: "r", expiresAt: Date.now() + DAY };
+  const secret = platform === "bluesky" ? { identifier: "ada", appPassword: "aaaa-bbbb-cccc-dddd" } : { tokens: { accessToken: "t", refreshToken: "r", expiresAt: Date.now() + DAY } };
   await saveConnection(await deps(), { orgId: u.orgId, platform, account: { accountId: `${platform}-ada`, handle: "@ada" }, secret, meta: {}, userId: u.userId });
   return (await env.DB.prepare("SELECT id FROM connection WHERE org_id = ? AND platform = ?").bind(u.orgId, platform).first<{ id: string }>())!.id;
 }
@@ -180,7 +185,84 @@ describe("scheduling clashes", () => {
   });
 });
 
+describe("scheduling clashes: the edges", () => {
+  it("moving an automated post with no free time left puts it back in Approved (never posted unexpectedly)", async () => {
+    const u = await user("is-nofree@example.com");
+    const conn = await connect(u, "bluesky");
+    await u.call("PUT", "/autopilot", settings({ windows: ["morning"], rules: { bluesky: { write: false, schedule: true, approve: false } } }));
+    // Every morning of the next 15 days is already taken by your own posts.
+    for (let d = 0; d < 15; d++) {
+      const at = new Date(Date.now() + d * DAY);
+      at.setUTCHours(8, 30, 0, 0);
+      await env.DB.prepare("INSERT INTO draft (id, org_id, platform, text, status, issues, connection_id, scheduled_at) VALUES (?, ?, 'bluesky', 'Mine', 'scheduled', '[]', ?, ?)").bind(`drf_${crypto.randomUUID()}`, u.orgId, conn, at.getTime()).run();
+    }
+    const auto = await approvedPost(u.orgId, "bluesky");
+    await env.DB.prepare("UPDATE draft SET status = 'scheduled', auto_scheduled = 1, connection_id = ?, scheduled_at = ? WHERE id = ?").bind(conn, Date.now() + 3 * DAY, auto).run();
+    const moved = await moveAutoScheduled(createDb(env.DB), u.orgId, [auto]);
+    expect(moved).toEqual([{ id: auto, at: null }]);
+    expect(await env.DB.prepare("SELECT status, scheduled_at, auto_scheduled FROM draft WHERE id = ?").bind(auto).first()).toEqual({ status: "approved", scheduled_at: null, auto_scheduled: 0 });
+  });
+
+  it("never moves a post you scheduled yourself, and never another workspace's", async () => {
+    const a = await user("is-mine-a@example.com");
+    const b = await user("is-mine-b@example.com");
+    const conn = await connect(a, "bluesky");
+    const mine = await approvedPost(a.orgId, "bluesky");
+    const at = Date.now() + 2 * DAY;
+    await env.DB.prepare("UPDATE draft SET status = 'scheduled', auto_scheduled = 0, connection_id = ?, scheduled_at = ? WHERE id = ?").bind(conn, at, mine).run();
+    expect(await moveAutoScheduled(createDb(env.DB), a.orgId, [mine])).toEqual([]);
+    await env.DB.prepare("UPDATE draft SET auto_scheduled = 1 WHERE id = ?").bind(mine).run();
+    expect(await moveAutoScheduled(createDb(env.DB), b.orgId, [mine])).toEqual([]); // not B's
+    expect((await env.DB.prepare("SELECT scheduled_at FROM draft WHERE id = ?").bind(mine).first<{ scheduled_at: number }>())!.scheduled_at).toBe(at);
+  });
+
+  it("can't schedule on another workspace's account, and doesn't reveal its posts", async () => {
+    const a = await user("is-cross-a@example.com");
+    const b = await user("is-cross-b@example.com");
+    const aConn = await connect(a, "bluesky");
+    const aPost = await approvedPost(a.orgId, "bluesky", "A's secret plans");
+    const at = new Date(Date.now() + 2 * DAY).toISOString();
+    expect((await a.call("POST", `/drafts/${aPost}/schedule`, { connectionId: aConn, at })).status).toBe(200);
+    const bPost = await approvedPost(b.orgId, "bluesky");
+    const res = await b.call("POST", `/drafts/${bPost}/schedule`, { connectionId: aConn, at });
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe("no_connection"); // not a clash with A's post
+    expect(body.error.message).not.toContain("scheduled near");
+    // And B can't schedule A's post.
+    expect((await b.call("POST", `/drafts/${aPost}/schedule`, { connectionId: aConn, at })).status).toBe(404);
+  });
+});
+
 describe("before automated posts go out", () => {
+  it("emails only owners and admins with a confirmed email; a failing email service doesn't stop the run", async () => {
+    const u = await user("is-who@example.com");
+    await env.DB.prepare("UPDATE user SET email_verified = 1 WHERE id = ?").bind(u.userId).run();
+    const member = async (email: string, role: string, verified: number) => {
+      const id = `u_${crypto.randomUUID()}`;
+      await env.DB.prepare("INSERT INTO user (id, name, email, email_verified) VALUES (?, 'M', ?, ?)").bind(id, email, verified).run();
+      await env.DB.prepare("INSERT INTO membership (id, org_id, user_id, role) VALUES (?, ?, ?, ?)").bind(`mem_${crypto.randomUUID()}`, u.orgId, id, role).run();
+    };
+    await member("is-who-admin@example.com", "admin", 1);
+    await member("is-who-unconfirmed@example.com", "admin", 0);
+    await member("is-who-editor@example.com", "editor", 1);
+    await member("is-who-viewer@example.com", "viewer", 1);
+    await connect(u, "bluesky");
+    await u.call("PUT", "/autopilot", settings({ rules: { bluesky: { write: true, schedule: true, approve: true } } }));
+    const id = await approvedPost(u.orgId, "bluesky");
+    await autoScheduleApproved(createDb(env.DB), u.orgId, [id]);
+    const to = (await autoScheduledEmails(createDb(env.DB), u.orgId, [id], BASE)).map((e) => e.to).sort();
+    expect(to).toEqual(["is-who-admin@example.com", "is-who@example.com"]);
+    // The notice hook throwing (e.g. the email service is down) doesn't fail the run.
+    const ctx = `ctx_${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO context_item (id, org_id, kind, title, body, published_at) VALUES (?, ?, 'manual', 'We shipped retries for every job', 'b', ?)").bind(ctx, u.orgId, Date.now()).run();
+    await createIdeas(createDb(env.DB), u.orgId, "manual", [{ id: ctx, title: "We shipped retries for every job" }]);
+    const out = await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, new Date(), undefined, async () => {
+      throw new Error("email service down");
+    });
+    expect(out).toMatchObject({ approved: 1, scheduled: 1 });
+  });
+
   it("emails the owners a list to check, unless switched off; cancelling puts the post back", async () => {
     const u = await user("is-notify@example.com");
     await env.DB.prepare("UPDATE user SET email_verified = 1 WHERE id = ?").bind(u.userId).run();
@@ -203,6 +285,74 @@ describe("before automated posts go out", () => {
     await autoScheduleApproved(createDb(env.DB), u.orgId, [id2]);
     await u.call("PUT", "/autopilot", { ...settings({ timezone: "Africa/Lagos", rules: { bluesky: { write: false, schedule: true, approve: false } } }), notifyEmail: false });
     expect(await autoScheduledEmails(createDb(env.DB), u.orgId, [id2], BASE)).toEqual([]);
+  });
+});
+
+describe("when a scheduled post fails", () => {
+  it("keeps the platform's own reason, and tells the owners", async () => {
+    const u = await user("is-fail@example.com");
+    await env.DB.prepare("UPDATE user SET email_verified = 1 WHERE id = ?").bind(u.userId).run();
+    const conn = await connect(u, "x");
+    const id = await approvedPost(u.orgId, "x", "A short post.");
+    await env.DB.prepare("UPDATE draft SET status = 'scheduled', connection_id = ?, scheduled_at = ? WHERE id = ?").bind(conn, Date.now() - 60_000, id).run();
+    const xSays = async (url: string) =>
+      url.includes("/2/tweets")
+        ? new Response(JSON.stringify({ title: "Invalid Request", detail: "One or more parameters to your request was invalid.", type: "https://api.x.com/2/problems/invalid-request" }), { status: 400, headers: { "Content-Type": "application/problem+json" } })
+        : new Response("{}", { status: 404 });
+    const told: string[][] = [];
+    const out = await runDuePublishing({ ...(await deps()), fetch: xSays as typeof fetch }, new Date(), 25, async (orgId, ids) => {
+      if (orgId === u.orgId) told.push(ids);
+    });
+    expect(out.failed).toBeGreaterThanOrEqual(1);
+    expect(told).toEqual([[id]]);
+    const row = await env.DB.prepare("SELECT status, last_error FROM draft WHERE id = ?").bind(id).first<{ status: string; last_error: string }>();
+    expect(row!.status).toBe("failed");
+    expect(row!.last_error).toBe('X rejected the post (HTTP 400). X said: "One or more parameters to your request was invalid."');
+    const emails = await failedPostEmails(createDb(env.DB), u.orgId, [id], BASE);
+    expect(emails).toHaveLength(1);
+    expect(emails[0]).toMatchObject({ to: "is-fail@example.com", subject: "A scheduled post didn't go out" });
+    expect(emails[0]!.text).toContain("One or more parameters");
+    expect(emails[0]!.text).toContain(`${BASE}/app/posts?status=failed`);
+  });
+
+  it("reads reasons safely from any kind of error response", async () => {
+    const r = (body: string, type = "application/json") => new Response(body, { status: 400, headers: { "Content-Type": type } });
+    expect(await errorReason(r(JSON.stringify({ errors: [{ message: "Status is a duplicate." }] })))).toBe("Status is a duplicate.");
+    expect(await errorReason(r(JSON.stringify({ message: "Unable to create post", status: 422 })))).toBe("Unable to create post");
+    expect(await errorReason(r("<html><body>Bad gateway</body></html>", "text/html"))).toBe(""); // HTML pages say nothing useful
+    expect(await errorReason(r(JSON.stringify({ detail: "line one\n\u0007line two" })))).toBe("line one line two"); // control characters stripped
+    expect((await errorReason(r(JSON.stringify({ detail: "word ".repeat(100) })))).length).toBe(200); // capped
+    expect(await errorReason(r("not json at all"))).toBe(""); // raw text is never echoed
+    expect(await errorReason(r(JSON.stringify({ detail: "Bad token abcdefghijklmnopqrstuvwxyz0123456789 given" })))).toBe("Bad token … given");
+    expect(await errorReason(r(""))).toBe("");
+  });
+
+  it("ignores future or garbage dates in feeds", () => {
+    const now = Date.parse("2026-10-18T12:00:00Z");
+    expect(parseDate("Sun, 18 Oct 2026 08:00:00 GMT", now)?.toISOString()).toBe("2026-10-18T08:00:00.000Z");
+    expect(parseDate("2027-01-01T00:00:00Z", now)).toBeNull(); // the future
+    expect(parseDate("yesterday-ish", now)).toBeNull();
+    expect(parseDate("", now)).toBeNull();
+    expect(parseDate("1970-01-01T00:00:00Z", now)).toBeNull();
+  });
+});
+
+describe("API keys (for developers and agents)", () => {
+  it("can use passions and scheduling, within the same checks", async () => {
+    const u = await user("is-key@example.com");
+    const { key } = (await (await u.call("POST", "/api-keys", { name: "agent" })).json()) as { key: string };
+    const call = (method: string, path: string, body?: unknown) => SELF.fetch(`${BASE}/api/v1${path}`, { method, headers: { Authorization: `Bearer ${key}`, ...(body ? { "Content-Type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const made = await call("POST", "/passions", { name: "Open source" });
+    expect(made.status).toBe(201);
+    expect((await call("POST", "/passions", { name: "x".repeat(61) })).status).toBe(400);
+    const conn = await connect(u, "bluesky");
+    const one = await approvedPost(u.orgId, "bluesky");
+    const two = await approvedPost(u.orgId, "bluesky");
+    const at = new Date(Date.now() + 2 * DAY).toISOString();
+    expect((await call("POST", `/drafts/${one}/schedule`, { connectionId: conn, at })).status).toBe(200);
+    expect((await call("POST", `/drafts/${two}/schedule`, { connectionId: conn, at })).status).toBe(409); // clash rules apply to keys too
+    const audit = await env.DB.prepare("SELECT actor_api_key_id FROM audit_event WHERE org_id = ? AND action = 'passion.created'").bind(u.orgId).first<{ actor_api_key_id: string | null }>();
+    expect(audit?.actor_api_key_id).toBeTruthy();
   });
 });
 

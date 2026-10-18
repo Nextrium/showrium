@@ -287,6 +287,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     const base = error instanceof PlatformError || error instanceof PublishError ? error.message : "Publishing failed unexpectedly.";
     const message = isThread && posted.length > 0 ? `Posted ${posted.length} of ${parts.length} parts. ${base} Try again to post the rest.` : base;
     if (!(error instanceof PlatformError) && !(error instanceof PublishError)) console.error("publish failed", error);
+    else if (error instanceof PlatformError) console.warn("publish refused", { platform: conn.platform, draftId: d.id, kind: error.kind, chars: d.text.length, images: images.length, reason: error.message });
     await db.update(draft).set({ status: "failed", lastError: message, updatedAt: new Date() }).where(eq(draft.id, d.id));
     if (error instanceof PlatformError && error.kind === "auth") {
       await db.update(connection).set({ status: "needs_reconnect", updatedAt: new Date() }).where(eq(connection.id, conn.id));
@@ -341,7 +342,10 @@ export async function setDraftConnection(db: Db, orgId: string, draftId: string,
 }
 
 /** Publishes scheduled drafts that are due. Called by the cron trigger every 5 minutes. */
-export async function runDuePublishing(deps: PublishDeps, now = new Date(), limit = 25) {
+/** Called with the scheduled posts that failed in a run, per workspace (to tell the person). */
+export type OnPublishFailed = (orgId: string, draftIds: string[]) => Promise<unknown>;
+
+export async function runDuePublishing(deps: PublishDeps, now = new Date(), limit = 25, onFailed?: OnPublishFailed) {
   const due = await deps.db
     .select({ id: draft.id, orgId: draft.orgId })
     .from(draft)
@@ -350,12 +354,14 @@ export async function runDuePublishing(deps: PublishDeps, now = new Date(), limi
     .limit(limit);
   let published = 0;
   let failed = 0;
+  const failedIds = new Map<string, string[]>();
   for (const d of due) {
     try {
       await publishDraft(deps, { orgId: d.orgId, draftId: d.id });
       published++;
     } catch (error) {
       failed++;
+      if (!(error instanceof PublishError && error.code === "conflict")) failedIds.set(d.orgId, [...(failedIds.get(d.orgId) ?? []), d.id]);
       if (!(error instanceof PublishError)) console.error("scheduled publish error", error);
       // Checks that fail before the claim (account disconnected, errors, credits) leave the post
       // "scheduled"; it would be retried every run and, at the head of the queue, block others.
@@ -368,6 +374,7 @@ export async function runDuePublishing(deps: PublishDeps, now = new Date(), limi
       }
     }
   }
+  for (const [orgId, ids] of failedIds) await onFailed?.(orgId, ids).catch((error) => console.warn("failure notice failed", error instanceof Error ? error.message : error));
   return { due: due.length, published, failed };
 }
 

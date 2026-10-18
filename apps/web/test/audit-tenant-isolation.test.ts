@@ -91,9 +91,10 @@ describe("release audit: tenant isolation on every route with an id", () => {
     const memberId = (await env.DB.prepare("SELECT id FROM membership WHERE org_id = ?").bind(a.orgId).first<{ id: string }>())?.id ?? "";
     const insightId = `ins_${crypto.randomUUID()}`;
     await env.DB.prepare("INSERT INTO insight (id, org_id, themes, based_on, model) VALUES (?, ?, ?, 3, 'test')").bind(insightId, a.orgId, JSON.stringify([{ label: "L", kind: "question", count: 3, examples: [], suggestion: "S" }])).run();
-    const ids = [draftId, imageId, ctx.id, sourceId, ideaId, connId, videoId, apiKeyId, inviteId, memberId, insightId, a.orgId].filter(Boolean);
+    const passionId = ((await (await a.call("POST", "/passions", { name: "Iso" })).json()) as { id: string }).id;
+    const ids = [draftId, imageId, ctx.id, sourceId, ideaId, connId, videoId, apiKeyId, inviteId, memberId, insightId, passionId, a.orgId].filter(Boolean);
     // Controls: the ids are real (A can use them), so B's refusals below mean something.
-    expect(ids).toHaveLength(12);
+    expect(ids).toHaveLength(13);
     expect((await a.call("GET", `/drafts/${draftId}`)).status).toBe(200);
     expect((await a.call("GET", `/images/${imageId}`)).status).toBe(200);
     expect((await a.call("GET", `/drafts/${draftId}/images`)).status).toBe(200);
@@ -109,6 +110,7 @@ describe("release audit: tenant isolation on every route with an id", () => {
       videos: (await env.DB.prepare("SELECT id, revisions FROM video_project WHERE org_id = ?").bind(a.orgId).all()).results,
       keys: (await env.DB.prepare("SELECT id, revoked_at FROM api_key WHERE org_id = ?").bind(a.orgId).all()).results,
       members: (await env.DB.prepare("SELECT id, role FROM membership WHERE org_id = ?").bind(a.orgId).all()).results,
+      passions: (await env.DB.prepare("SELECT id, name, active, about, disclosure FROM passion WHERE org_id = ?").bind(a.orgId).all()).results,
     });
     const before = await snapshot();
 
@@ -148,5 +150,6 @@ describe("release audit: tenant isolation on every route with an id", () => {
     expect(leaks).toEqual([]);
     expect(calls).toBeGreaterThan(300);
     expect(await snapshot()).toEqual(before);
-  }, 120_000);
+    // Every route x every id, one at a time: about a minute alone, longer when the whole suite runs at once.
+  }, 240_000);
 });
