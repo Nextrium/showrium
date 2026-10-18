@@ -238,6 +238,12 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   if (conn.platform === "x") {
     const xLimit = (await getOrgLimits(db, input.orgId)).limits.xApiPosts;
     const { overage } = await addUsage(db, input.orgId, "xApiPosts", remaining.length, xLimit);
+    // A post automation approved never spends credits: past the plan's X posts it waits for the person.
+    if (overage > 0 && d.autoApproved) {
+      await addUsage(db, input.orgId, "xApiPosts", -remaining.length, xLimit);
+      await db.update(draft).set({ status: "approved", scheduledAt: null, autoScheduled: false, lastError: "This month's X posts in your plan are used up. Approve it yourself to post with credits, or post it yourself (free).", updatedAt: new Date() }).where(eq(draft.id, d.id));
+      throw new PublishError("insufficient_credits", "This month's X posts are used up; automation doesn't spend credits.");
+    }
     for (let i = remaining.length - overage; i < remaining.length; i++) partCharge[i] = /https?:\/\//i.test(remaining[i]!) ? CREDITS_PER_X_API_POST_WITH_LINK : CREDITS_PER_X_API_POST;
     const charged = partCharge.reduce((a, b) => a + b, 0);
     if (charged > 0) {
@@ -309,7 +315,7 @@ export async function markPublishedManually(db: Db, orgId: string, draftId: stri
   return Boolean(row);
 }
 
-export async function scheduleDraft(db: Db, orgId: string, draftId: string, input: { at: Date; connectionId: string }) {
+export async function scheduleDraft(db: Db, orgId: string, draftId: string, input: { at: Date; connectionId: string; auto?: boolean }) {
   if (input.at.getTime() < Date.now() + 60_000) throw new PublishError("not_ready", "Pick a time at least a minute from now.");
   if (input.at.getTime() > Date.now() + 90 * 86_400_000) throw new PublishError("not_ready", "Schedule up to 90 days ahead.");
   const [d] = await db.select().from(draft).where(and(eq(draft.orgId, orgId), eq(draft.id, draftId)));
@@ -319,7 +325,7 @@ export async function scheduleDraft(db: Db, orgId: string, draftId: string, inpu
   if (!conn || conn.platform !== d.platform || !API_PUBLISH_PLATFORMS.includes(conn.platform)) throw new PublishError("no_connection", "Connect an account for this platform first.");
   const [row] = await db
     .update(draft)
-    .set({ status: "scheduled", scheduledAt: input.at, connectionId: conn.id, updatedAt: new Date() })
+    .set({ status: "scheduled", scheduledAt: input.at, connectionId: conn.id, autoScheduled: Boolean(input.auto), updatedAt: new Date() })
     .where(and(eq(draft.orgId, orgId), eq(draft.id, draftId), inArray(draft.status, ["approved", "failed", "scheduled"])))
     .returning({ id: draft.id });
   if (!row) throw new PublishError("not_ready", "Approve the post before scheduling it.");

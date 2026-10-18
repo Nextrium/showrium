@@ -7,15 +7,25 @@ import { publishingPaused } from "./env.js";
 import { apiError, type AppEnv } from "./principal.js";
 import { rateLimit } from "./rate-limit.js";
 import { createDb } from "@nextrium/db";
-import { expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, runAutopilot, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
+import { expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, rescoreOldIdeas, runAutopilot, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
 import { aiProviders } from "./ai.js";
 import { publishDeps } from "./connections-api.js";
 import { imageDeps } from "./images-api.js";
-import { autoImagesForBrief, type AfterCompose } from "@nextrium/core";
+import { autoImagesForBrief, autoScheduledEmails, sendEmail, type AfterCompose, type OnAutoScheduled } from "@nextrium/core";
 import type { Db } from "@nextrium/db";
 import type { Env } from "./env.js";
 
 /** Automation finds an image for the posts it writes, like people's own posts. */
+/** Emails owners and admins what automation just scheduled, so they can cancel before it goes out. */
+function notifyScheduled(env: Env, db: Db): OnAutoScheduled {
+  return async (orgId, draftIds) => {
+    for (const email of await autoScheduledEmails(db, orgId, draftIds, env.BETTER_AUTH_URL)) {
+      const out = await sendEmail(env, email).catch((error) => (console.warn("schedule notice failed", error instanceof Error ? error.message : error), { sent: false }));
+      if (!out.sent) console.log("schedule notice not emailed (email isn't set up); the posts are listed in Posts > Scheduled");
+    }
+  };
+}
+
 function autoImages(env: Env, db: Db): AfterCompose | undefined {
   const deps = imageDeps(env, db);
   return deps ? (orgId, briefId) => autoImagesForBrief(deps, orgId, briefId) : undefined;
@@ -140,9 +150,9 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
       const job = cronJob(event.scheduledTime);
       const result =
         job === "sources" ? await runSourcePolling(db, {}, now, 6) // up to ~18 fetches; with Passions there are more sources
-        : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now, 3, autoImages(env, db)))
+        : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now, 3, autoImages(env, db), notifyScheduled(env, db)))
         : job === "engagement" ? await runEngagementSync(db, fetch, now)
-        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now) };
+        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now), rescored: await rescoreOldIdeas(db) };
       console.log("cron", job, result);
     })(),
   );

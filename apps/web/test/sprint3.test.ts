@@ -112,7 +112,7 @@ describe("automation switches", () => {
 });
 
 describe("the automation run", () => {
-  it("skips ideas from a passion that's off, and never approves posts about a passion by itself", async () => {
+  it("skips ideas from a passion that's off; a strong, fresh passion idea is approved and scheduled (never sent at once)", async () => {
     const u = await user("s3-passion@example.com");
     await connectBluesky(u);
     await u.call("PUT", "/autopilot", settings({ findIdeas: false, mix: { teach: 3 }, rules: { bluesky: { write: true, schedule: true, approve: true }, linkedin: off } }));
@@ -120,13 +120,16 @@ describe("the automation run", () => {
     await u.call("POST", `/passions/${p.id}/sources`, { kind: "github_repo", repo: "cardano/node" });
     const src = await env.DB.prepare("SELECT id FROM source WHERE org_id = ? AND passion_id = ?").bind(u.orgId, p.id).first<{ id: string }>();
     const cid = `ctx_${crypto.randomUUID()}`;
-    await env.DB.prepare("INSERT INTO context_item (id, org_id, source_id, kind, title, body) VALUES (?, ?, ?, 'rss_item', 'Node 10 is out', 'Faster sync for everyone.')").bind(cid, u.orgId, src!.id).run();
-    await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: cid, title: "Node 10 is out" }], "Cardano");
+    await env.DB.prepare("INSERT INTO context_item (id, org_id, source_id, kind, title, body) VALUES (?, ?, ?, 'rss_item', 'Cardano node 1.0 released', 'Faster sync for everyone.')").bind(cid, u.orgId, src!.id).run();
+    await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: cid, title: "Cardano node 1.0 released" }], "Cardano", { passionName: "Cardano" });
     const monday = new Date("2026-10-19T08:00:00Z");
     expect(await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, monday)).toEqual({ skipped: "no_ideas" });
     await u.call("PATCH", `/passions/${p.id}`, { active: true });
     const out = await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, monday);
-    expect(out).toMatchObject({ drafts: 1, approved: 0 }); // "Approve for me" is on, but this is someone else's work
+    expect(out).toMatchObject({ drafts: 1, approved: 1, scheduled: 1 }); // owner decision 2026-10-18: passions too
+    const row = await env.DB.prepare("SELECT status, auto_approved, auto_scheduled, scheduled_at FROM draft WHERE org_id = ?").bind(u.orgId).first<{ status: string; auto_approved: number; auto_scheduled: number; scheduled_at: number }>();
+    expect(row).toMatchObject({ status: "scheduled", auto_approved: 1, auto_scheduled: 1 });
+    expect(row!.scheduled_at).toBeGreaterThanOrEqual(monday.getTime() + 2 * 3600_000); // always ahead, so there's time to cancel
   });
 
   it("writes for platforms with writing on, approves only where allowed, and records the style", async () => {
@@ -134,8 +137,8 @@ describe("the automation run", () => {
     await connectBluesky(u);
     await u.call("PUT", "/autopilot", settings({ mix: { teach: 3 }, rules: { bluesky: { write: true, schedule: true, approve: true }, linkedin: { ...off, write: true } } }));
     const cid = `ctx_${crypto.randomUUID()}`;
-    await env.DB.prepare("INSERT INTO context_item (id, org_id, kind, title, body) VALUES (?, ?, 'rss_item', 'How we test queues', 'A long article.')").bind(cid, u.orgId).run();
-    await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: cid, title: "How we test queues" }]);
+    await env.DB.prepare("INSERT INTO context_item (id, org_id, kind, title, body) VALUES (?, ?, 'rss_item', 'We released queue retries v2.0', 'A long article.')").bind(cid, u.orgId).run();
+    await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: cid, title: "We released queue retries v2.0" }]);
     const monday = new Date("2026-10-19T08:00:00Z");
     const out = await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, monday);
     expect(out).toMatchObject({ mode: "teach", drafts: 2, approved: 1, scheduled: 1 });

@@ -18,7 +18,8 @@ import {
 } from "@nextrium/db";
 import { generateStructured, insightSystemPrompt, insightUserPrompt, InsightSchema, type Provider } from "@nextrium/llm";
 import { blueskyEngagement, mastodonEngagement, type FetchLike, type PostEngagement } from "@nextrium/platforms";
-import { addContextItems, compose, getOrgPlan, markSourceChecked } from "./content.js";
+import { addContextItems, backfillPublishedAt, compose, getOrgPlan, getPersona, markSourceChecked } from "./content.js";
+import { ageOf, baseScore, effectiveScore, IDEA_SHOW_MIN, isStale, sameStory, type IdeaOrigin } from "./idea-score.js";
 import { PLAN_FEATURES } from "./plans.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
@@ -30,27 +31,89 @@ const DAY = 24 * HOUR;
 
 // --- Sources -> ideas ------------------------------------------------------------------
 
-/** Cheap, deterministic scoring (no AI): releases and launches rank above ordinary articles. */
-export function scoreIdea(kind: string, title: string, label?: string): { score: number; reason: string } {
-  let score = kind === "github_release" ? 70 : kind === "github_activity" ? 60 : kind === "rss_item" ? 50 : 40;
-  if (/\bv?\d+\.\d+(\.\d+)?\b/.test(title)) score += 10;
-  if (/\b(launch|launched|release|released|ship|shipped|announce|introducing|new)\b/i.test(title)) score += 10;
+/** The base score (no AI; see idea-score.ts) and the idea's reason line. Freshness is added when it's read. */
+export function scoreIdea(kind: string, title: string, label?: string, ctx: { body?: string; keywords?: string[]; passionName?: string | null } = {}): { score: number; reason: string } {
   const what = label ?? (kind === "github_release" ? "New release" : kind === "github_activity" ? "Your work" : kind === "rss_item" ? "New post" : "New material");
-  return { score: Math.min(100, score), reason: `${what}: ${title || "untitled"}`.slice(0, 200) };
+  return { score: baseScore({ kind, title, ...ctx }), reason: `${what}: ${title || "untitled"}`.slice(0, 200) };
 }
 
-export async function createIdeas(db: Db, orgId: string, kind: string, items: { id: string; title: string }[], label?: string) {
+/**
+ * Turns new material into ideas. The same story from several sources (or twice from one) becomes one
+ * idea: the existing one gets +10 instead, since more sources covering it means it matters more.
+ */
+export async function createIdeas(
+  db: Db,
+  orgId: string,
+  kind: string,
+  items: { id: string; title: string; body?: string }[],
+  label?: string,
+  ctx: { keywords?: string[]; passionName?: string | null } = {},
+) {
   if (!items.length) return 0;
-  // Sources list newest first; a small step down per position keeps that order among equal scores.
-  const rows = items.map((i, n) => {
-    const { score, reason } = scoreIdea(kind, i.title, label);
-    return { id: newId("idea"), orgId, contextItemId: i.id, reason, score: Math.max(0, score - Math.min(n, 9)) };
-  });
+  const recent = await db
+    .select({ id: idea.id, score: idea.score, title: contextItem.title })
+    .from(idea)
+    .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
+    .where(and(eq(idea.orgId, orgId), gte(idea.createdAt, new Date(Date.now() - 7 * DAY))))
+    .orderBy(desc(idea.createdAt))
+    .limit(200);
+  const rows: { id: string; orgId: string; contextItemId: string; reason: string; score: number; scoreVersion: number }[] = [];
+  const bumped = new Set<string>();
+  for (const i of items) {
+    const { score, reason } = scoreIdea(kind, i.title, label, { ...(i.body !== undefined ? { body: i.body } : {}), ...ctx });
+    const same = recent.find((r) => sameStory(r.title, i.title));
+    if (same) {
+      if (!bumped.has(same.id)) {
+        bumped.add(same.id);
+        await db.update(idea).set({ score: Math.min(100, same.score + 10) }).where(and(eq(idea.orgId, orgId), eq(idea.id, same.id)));
+      }
+      continue;
+    }
+    if (rows.some((r) => sameStory(r.reason, i.title))) continue;
+    rows.push({ id: newId("idea"), orgId, contextItemId: i.id, reason, score, scoreVersion: 2 });
+  }
   let added = 0;
-  for (const part of chunkRows(rows, 6)) {
+  for (const part of chunkRows(rows, 7)) {
     added += (await db.insert(idea).values(part).onConflictDoNothing({ target: [idea.orgId, idea.contextItemId] }).returning({ id: idea.id })).length;
   }
   return added;
+}
+
+/**
+ * Cron: re-scores ideas made under the first rules (a few hundred per run), so old ones fade and
+ * noise drops out too. A day of GitHub work gets its date back from its id ("gh-day:repo:YYYY-MM-DD").
+ */
+export async function rescoreOldIdeas(db: Db, limit = 200) {
+  const rows = await db
+    .select({ id: idea.id, orgId: idea.orgId, ctxId: contextItem.id, kind: contextItem.kind, title: contextItem.title, body: sql<string>`substr(${contextItem.body}, 1, 1000)`, externalId: contextItem.externalId, publishedAt: contextItem.publishedAt, passionName: passion.name })
+    .from(idea)
+    .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
+    .leftJoin(source, eq(source.id, contextItem.sourceId))
+    .leftJoin(passion, eq(passion.id, source.passionId))
+    .where(eq(idea.scoreVersion, 1))
+    .limit(limit);
+  const keywords = new Map<string, string[]>();
+  for (const r of rows) {
+    if (!keywords.has(r.orgId)) {
+      const who = await getPersona(db, r.orgId);
+      keywords.set(r.orgId, [...(who?.interests ?? []), ...(who?.expertise ?? [])]);
+    }
+    const day = !r.publishedAt ? r.externalId?.match(/^gh-day:.+:(\d{4}-\d{2}-\d{2})$/)?.[1] : undefined;
+    if (day) await db.update(contextItem).set({ publishedAt: new Date(`${day}T23:59:59Z`) }).where(eq(contextItem.id, r.ctxId));
+    const score = baseScore({ kind: r.kind, title: r.title, body: r.body, keywords: keywords.get(r.orgId) ?? [], passionName: r.passionName });
+    await db.update(idea).set({ score, scoreVersion: 2 }).where(eq(idea.id, r.id));
+  }
+  return rows.length;
+}
+
+/** Items older than this aren't brought in at all, and a source's first check brings at most 3 per kind. */
+const MAX_ITEM_AGE = 14 * DAY;
+const FIRST_CHECK_ITEMS = 3;
+function freshOnly<T extends { publishedAt?: Date | null }>(items: T[], firstCheck: boolean, now: Date): T[] {
+  const recent = items
+    .filter((i) => !i.publishedAt || now.getTime() - i.publishedAt.getTime() <= MAX_ITEM_AGE)
+    .sort((a, b) => (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0));
+  return firstCheck ? recent.slice(0, FIRST_CHECK_ITEMS) : recent;
 }
 
 /** What an item from this source is, for the idea's reason line. */
@@ -97,10 +160,14 @@ export async function syncSource(
     let ideas = 0;
     // A passion's ideas carry its name ("Cardano: <title>"), so they're easy to tell apart in Ideas.
     const [pas] = src.passionId ? await db.select({ name: passion.name }).from(passion).where(and(eq(passion.orgId, src.orgId), eq(passion.id, src.passionId))) : [];
+    const who = await getPersona(db, src.orgId);
+    const keywords = [...(who?.interests ?? []), ...(who?.expertise ?? [])];
+    const now = opts.now ?? new Date();
     for (const b of batches) {
-      const rows = await addContextItems(db, src.orgId, b.kind, b.items, src.id);
+      if (src.lastCheckedAt) await backfillPublishedAt(db, src.orgId, b.items);
+      const rows = await addContextItems(db, src.orgId, b.kind, freshOnly(b.items, !src.lastCheckedAt, now), src.id);
       added += rows.length;
-      ideas += await createIdeas(db, src.orgId, b.kind, rows, pas?.name ?? sourceLabel(src.key, b.kind));
+      ideas += await createIdeas(db, src.orgId, b.kind, rows, pas?.name ?? sourceLabel(src.key, b.kind), { keywords, passionName: pas?.name ?? null });
     }
     await markSourceChecked(db, src.orgId, src.id, null);
     return { added, ideas, error: null };
@@ -132,12 +199,13 @@ export async function runSourcePolling(db: Db, opts: { fetch?: FetchLike | undef
   return { checked: due.length, ideas };
 }
 
-export async function listIdeas(db: Db, orgId: string, status: "new" | "drafted" | "dismissed" = "new") {
-  return db
+/** Ideas with their score as of now (base + freshness), whether they're stale, and where they came from. */
+async function scoredIdeas(db: Db, orgId: string, status: "new" | "drafted" | "dismissed", now: Date) {
+  const rows = await db
     .select({
       id: idea.id,
       reason: idea.reason,
-      score: idea.score,
+      base: idea.score,
       status: idea.status,
       createdAt: idea.createdAt,
       contextItemId: idea.contextItemId,
@@ -145,18 +213,42 @@ export async function listIdeas(db: Db, orgId: string, status: "new" | "drafted"
       kind: contextItem.kind,
       body: sql<string>`substr(${contextItem.body}, 1, 400)`,
       url: contextItem.url,
+      publishedAt: contextItem.publishedAt,
+      passionId: source.passionId,
     })
     .from(idea)
     .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
+    .leftJoin(source, eq(source.id, contextItem.sourceId))
     .where(and(eq(idea.orgId, orgId), eq(idea.status, status)))
     .orderBy(desc(idea.score), desc(idea.createdAt))
-    .limit(50);
+    .limit(200);
+  return rows
+    .map(({ base, passionId, ...r }) => {
+      const origin: IdeaOrigin = passionId ? "outside" : "own";
+      const age = ageOf(r.publishedAt, r.createdAt, now);
+      return { ...r, score: effectiveScore(base, age), stale: isStale(age, origin), origin };
+    })
+    .sort((a, b) => b.score - a.score || b.createdAt.getTime() - a.createdAt.getTime());
 }
 
-export async function ideaCounts(db: Db, orgId: string) {
+/** New ideas worth looking at (score 40+ and not stale), best first; `all` includes the rest. */
+export async function listIdeas(db: Db, orgId: string, status: "new" | "drafted" | "dismissed" = "new", opts: { all?: boolean; now?: Date } = {}) {
+  const rows = await scoredIdeas(db, orgId, status, opts.now ?? new Date());
+  const shown = status !== "new" || opts.all ? rows : rows.filter((r) => r.score >= IDEA_SHOW_MIN && !r.stale);
+  return shown.slice(0, 50).map(({ stale: _stale, origin: _origin, ...r }) => r);
+}
+
+/** Counts per status; "new" counts only the ideas worth looking at, and `hidden` the rest. */
+export async function ideaCounts(db: Db, orgId: string, now = new Date()) {
   const rows = await db.select({ status: idea.status, n: sql<number>`count(*)` }).from(idea).where(eq(idea.orgId, orgId)).groupBy(idea.status);
-  const out = { new: 0, drafted: 0, dismissed: 0 };
+  const out = { new: 0, drafted: 0, dismissed: 0, hidden: 0 };
   for (const r of rows) out[r.status] = Number(r.n);
+  if (out.new) {
+    const scored = await scoredIdeas(db, orgId, "new", now);
+    const worth = scored.filter((r) => r.score >= IDEA_SHOW_MIN && !r.stale).length;
+    out.hidden = out.new - worth;
+    out.new = worth;
+  }
   return out;
 }
 
@@ -174,13 +266,14 @@ export async function getIdea(db: Db, orgId: string, id: string) {
       kind: contextItem.kind,
       body: sql<string>`substr(${contextItem.body}, 1, 6000)`,
       url: contextItem.url,
+      publishedAt: contextItem.publishedAt,
     })
     .from(idea)
     .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
     .where(and(eq(idea.orgId, orgId), eq(idea.id, id)));
   if (!row) return null;
   const [b] = await db.select({ id: brief.id }).from(brief).where(and(eq(brief.orgId, orgId), eq(brief.contextItemId, row.contextItemId))).orderBy(desc(brief.createdAt)).limit(1);
-  return { ...row, briefId: b?.id ?? null };
+  return { ...row, score: effectiveScore(row.score, ageOf(row.publishedAt, row.createdAt)), briefId: b?.id ?? null };
 }
 
 /** Brings a dismissed idea back. */
@@ -463,6 +556,6 @@ export async function getAnalytics(db: Db, orgId: string, now = new Date()) {
 /** Counts for navigation badges: drafts waiting and new ideas. Cheap (two counts). */
 export async function getSummary(db: Db, orgId: string) {
   const [drafts] = await db.select({ n: sql<number>`count(*)` }).from(draft).where(and(eq(draft.orgId, orgId), eq(draft.status, "draft")));
-  const [ideas] = await db.select({ n: sql<number>`count(*)` }).from(idea).where(and(eq(idea.orgId, orgId), eq(idea.status, "new")));
-  return { drafts: Number(drafts?.n ?? 0), ideas: Number(ideas?.n ?? 0) };
+  // Only the ideas worth looking at (the same ones Ideas shows by default).
+  return { drafts: Number(drafts?.n ?? 0), ideas: (await ideaCounts(db, orgId)).new };
 }

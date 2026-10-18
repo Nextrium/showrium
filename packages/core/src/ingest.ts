@@ -9,6 +9,14 @@ export interface IngestedItem {
   title: string;
   body: string;
   url: string | null;
+  /** When the source published it, if it says (feeds, GitHub). */
+  publishedAt?: Date | null;
+}
+
+/** A feed or Atom date, if it's a real one and not in the future (a day of clock skew allowed). */
+export function parseDate(raw: string, now = Date.now()): Date | null {
+  const t = Date.parse(raw.trim());
+  return Number.isFinite(t) && t > 0 && t < now + 86_400_000 ? new Date(Math.min(t, now)) : null;
 }
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
@@ -111,7 +119,8 @@ export function parseFeed(xml: string): IngestedItem[] {
     );
     const guid = pick(block, "guid") || pick(block, "id") || link || title;
     if (!title && !body) continue;
-    items.push({ externalId: guid ? `rss:${guid.slice(0, 300)}` : null, title: title.slice(0, 300), body: clip(body || title), url: link || null });
+    const publishedAt = parseDate(pick(block, "pubDate") || pick(block, "published") || pick(block, "dc:date") || pick(block, "updated"));
+    items.push({ externalId: guid ? `rss:${guid.slice(0, 300)}` : null, title: title.slice(0, 300), body: clip(body || title), url: link || null, publishedAt });
   }
   return items;
 }
@@ -270,7 +279,7 @@ export async function ingestGithubActivity(repo: string, opts: { fetch?: FetchLi
   const [releases, commits] = await Promise.all([githubFeed(`${repo}/releases.atom`, opts.fetch), githubFeed(`${repo}/commits.atom`, opts.fetch)]);
   const releaseItems: IngestedItem[] = releases.slice(0, 5).map((r) => {
     const tagName = r.link?.split("/").pop() ?? r.title;
-    return { externalId: `gh-release:${repo}:${tagName}`.slice(0, 300), title: `${repo} ${r.title}`.slice(0, 300), body: clip(`Release ${r.title} of ${repo}.\n\n${r.content}`.trim()), url: r.link };
+    return { externalId: `gh-release:${repo}:${tagName}`.slice(0, 300), title: `${repo} ${r.title}`.slice(0, 300), body: clip(`Release ${r.title} of ${repo}.\n\n${r.content}`.trim()), url: r.link, publishedAt: parseDate(r.updated) };
   });
 
   const today = (opts.now ?? new Date()).toISOString().slice(0, 10);
@@ -296,6 +305,7 @@ export async function ingestGithubActivity(repo: string, opts: { fetch?: FetchLi
           .join("\n")}`,
       ),
       url: `https://github.com/${repo}/commits`,
+      publishedAt: new Date(`${day}T23:59:59Z`),
     };
   });
   return { releases: releaseItems, activity: activityItems };

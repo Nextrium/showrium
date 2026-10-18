@@ -218,6 +218,15 @@ function PostEditor({ draft, onChange }: { draft: Draft; onChange?: (d: Draft) =
         </div>
       )}
       <IssueList issues={draft.issues} />
+      {draft.status === "scheduled" && draft.scheduledAt && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-sunken p-3">
+          <span className="min-w-0 flex-1 text-[13.5px] text-ink-2">
+            Goes out {new Date(draft.scheduledAt).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+            {draft.autoApproved ? " · approved by automation" : draft.autoScheduled ? " · time picked by automation" : ""}
+          </span>
+          <Button size="sm" variant="secondary" disabled={busy} onClick={() => patch({ status: "approved" })}>Cancel schedule</Button>
+        </div>
+      )}
       {error && <Alert>{error}</Alert>}
       {!locked && (
         <div className="flex flex-wrap gap-2">
@@ -430,6 +439,7 @@ export function DraftsPage() {
                     <span className="font-semibold text-ink">{PLATFORM_LABELS[d.platform] ?? d.platform}</span>
                     <span className="flex flex-wrap justify-end gap-1.5">
                       {d.issues.length > 0 && <Tag tone={d.issues.some((i) => i.severity === "error") ? "danger" : "warn"}>{d.issues.length} to check</Tag>}
+                      {d.status === "scheduled" && (d.autoApproved || d.autoScheduled) && <Tag tone="info">Auto</Tag>}
                       <Tag tone={statusTone(d.status)}>{d.status}</Tag>
                     </span>
                   </span>

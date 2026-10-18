@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { copyImage, saveFile, useImageFiles, type ImageSize } from "../../components/PostImage";
-import { api, useApi } from "../../lib";
+import { api, ApiError, useApi } from "../../lib";
 import type { Draft } from "./shared";
 
 type Connection = { id: string; platform: string; handle: string; status: string };
@@ -48,11 +48,23 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
       const out = await api<{ url: string | null }>(`/drafts/${draft.id}/publish`, { method: "POST", body: JSON.stringify({ connectionId: chosen }) });
       onChange({ ...draft, status: "published", externalUrl: out.url });
     });
-  const schedule = () =>
+  // Another post on the account near this time: the person chooses (move the automated one, or keep both).
+  const [clash, setClash] = useState<{ message: string; auto: boolean } | null>(null);
+  const schedule = (onClash?: "move" | "keep") =>
     act(async () => {
-      await api(`/drafts/${draft.id}/schedule`, { method: "POST", body: JSON.stringify({ connectionId: chosen, at: new Date(when).toISOString() }) });
-      setMessage(`Scheduled for ${new Date(when).toLocaleString()}.`);
-      onChange({ ...draft, status: "scheduled", scheduledAt: new Date(when).toISOString() });
+      try {
+        const out = await api<{ moved: { id: string; at: string | null }[] }>(`/drafts/${draft.id}/schedule`, { method: "POST", body: JSON.stringify({ connectionId: chosen, at: new Date(when).toISOString(), ...(onClash ? { onClash } : {}) }) });
+        setClash(null);
+        const moved = out.moved.map((m) => (m.at ? `moved the automated post to ${new Date(m.at).toLocaleString()}` : "the automated post had no free time left, so it's back in Approved")).join("; ");
+        setMessage(`Scheduled for ${new Date(when).toLocaleString()}.${moved ? ` Also ${moved}.` : ""}`);
+        onChange({ ...draft, status: "scheduled", scheduledAt: new Date(when).toISOString(), autoScheduled: false });
+      } catch (err) {
+        if (err instanceof ApiError && (err.code === "schedule_clash" || err.code === "schedule_clash_auto")) {
+          setClash({ message: err.message, auto: err.code === "schedule_clash_auto" });
+          return;
+        }
+        throw err;
+      }
     });
   const parts = draft.parts && draft.parts.length > 1 ? draft.parts : null;
   const [copiedPart, setCopiedPart] = useState<number | null>(null);
@@ -160,7 +172,17 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
             Or schedule
             <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
           </label>
-          <button className="button secondary" disabled={busy || !when} onClick={schedule}>Schedule</button>
+          <button className="button secondary" disabled={busy || !when} onClick={() => schedule()}>Schedule</button>
+        </div>
+      )}
+      {clash && (
+        <div className="flex flex-col gap-2 rounded-xl border border-warn bg-warn-soft p-3" role="alert">
+          <span className="text-[13.5px] text-ink">{clash.message}</span>
+          <div className="flex flex-wrap gap-2">
+            {clash.auto && <button className="button" disabled={busy} onClick={() => schedule("move")}>Move the automated post</button>}
+            <button className="button secondary" disabled={busy} onClick={() => schedule("keep")}>Keep both</button>
+            <button className="button secondary" disabled={busy} onClick={() => setClash(null)}>Pick another time</button>
+          </div>
         </div>
       )}
       {message && <p className="note" role="status">{message}</p>}

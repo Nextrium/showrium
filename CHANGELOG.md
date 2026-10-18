@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### For people
+- **Fresher, cleaner ideas:** ideas are scored for how fresh and relevant they are. Old news, pre-releases, digests and days of only tidying are tucked away ("Show more" brings them back), and the same story from several sources becomes one idea. A new source brings in only its latest few items.
+- **Automation picks well:** it writes only from good, fresh ideas, and "Approve for me" only approves strong ones from the last 48 hours. Approved posts are always scheduled ahead, never sent at once.
+- **Check before it goes out:** you get an email listing what automation scheduled, and those posts are marked "Auto" in Posts with a **Cancel schedule** button.
+- **No clashing posts:** schedule a post near another one on the same account and you're asked first: move the automated one, keep both, or pick another time. Your post always keeps its time.
+- **X:** "Approve for me" now works on X too, after a one-time agreement (as X's rules ask). It only uses your plan's X posts, never credits.
+- **Passions** can be approved by automation as well, with the same scheduling and email.
 - **Passions:** add the subjects you care about (a project, an ecosystem, a cause) and give each one its own sources: news sites, blogs, YouTube channels, podcasts or GitHub repositories. New items become ideas labelled with the passion, and posts are written as your view, never as its official voice. Switch a passion on or off, or give it dates. An optional disclosure (for example "I'm a Cardano ambassador") is added word for word to every post about it. Free: 1 passion with 3 sources; Lite 1 with 5; Starter 2; Creator 3; Pro and Team 10, with up to 10 sources each. Posts about a passion are never approved automatically.
 - **Posts stay in your language:** the writer no longer switches language on its own.
 - **Automation that posts at good times, not like clockwork:** choose your timezone, days and times of day (morning, midday, afternoon, evening). Each post goes out at a different minute, at most one per time of day and at least 4 hours apart, and Showrium learns which time works best for you.

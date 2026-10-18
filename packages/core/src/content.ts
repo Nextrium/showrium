@@ -66,13 +66,20 @@ export async function addContextItems(
   sourceId: string | null = null,
 ) {
   if (!items.length) return [];
-  const rows = items.map((i) => ({ id: newId("ctx"), orgId, sourceId, kind, title: i.title, body: i.body, url: i.url, externalId: i.externalId }));
+  const rows = items.map((i) => ({ id: newId("ctx"), orgId, sourceId, kind, title: i.title, body: i.body, url: i.url, externalId: i.externalId, publishedAt: i.publishedAt ?? null }));
   // Items already seen from a source (same externalId) are skipped, not duplicated.
-  const added: { id: string; title: string }[] = [];
-  for (const part of chunkRows(rows, 8)) {
-    added.push(...(await db.insert(contextItem).values(part).onConflictDoNothing({ target: [contextItem.orgId, contextItem.externalId] }).returning({ id: contextItem.id, title: contextItem.title })));
+  const added: { id: string; title: string; body: string; publishedAt: Date | null }[] = [];
+  for (const part of chunkRows(rows, 9)) {
+    added.push(...(await db.insert(contextItem).values(part).onConflictDoNothing({ target: [contextItem.orgId, contextItem.externalId] }).returning({ id: contextItem.id, title: contextItem.title, body: contextItem.body, publishedAt: contextItem.publishedAt })));
   }
   return added;
+}
+
+/** Items stored before publish dates were kept get theirs from the next check, so their ideas can fade with age. */
+export async function backfillPublishedAt(db: Db, orgId: string, items: IngestedItem[]) {
+  for (const i of items.filter((x) => x.publishedAt && x.externalId).slice(0, 25)) {
+    await db.update(contextItem).set({ publishedAt: i.publishedAt! }).where(and(eq(contextItem.orgId, orgId), eq(contextItem.externalId, i.externalId!), isNull(contextItem.publishedAt)));
+  }
 }
 
 export async function listContextItems(db: Db, orgId: string, limit = 50) {
@@ -484,7 +491,10 @@ export async function updateDraft(db: Db, orgId: string, id: string, patch: { te
       throw new DraftStateError("Fix the errors on this post before approving it.");
     }
     set.status = patch.status;
-    if (patch.status !== "scheduled") set.scheduledAt = null;
+    if (patch.status !== "scheduled") {
+      set.scheduledAt = null;
+      set.autoScheduled = false;
+    }
   }
   // Guard against concurrent edits changing a post that just started publishing.
   await db

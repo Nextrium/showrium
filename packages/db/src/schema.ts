@@ -379,6 +379,8 @@ export const contextItem = sqliteTable(
     externalId: text("external_id"),
     /** Uploaded photo or document in the private R2 bucket (orgs/<org>/uploads/<id>), if any. */
     mediaKey: text("media_key"),
+    /** When the source published it (feeds and GitHub give a date); null if unknown. Drives idea freshness. */
+    publishedAt: integer("published_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
   },
   (t) => [index("context_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("context_org_external_uq").on(t.orgId, t.externalId)],
@@ -437,6 +439,10 @@ export const draft = sqliteTable(
     aiGenerated: integer("ai_generated", { mode: "boolean" }).notNull().default(true),
     scheduledAt: integer("scheduled_at", { mode: "timestamp_ms" }),
     publishedAt: integer("published_at", { mode: "timestamp_ms" }),
+    /** Approved by automation ("Approve for me"), not by a person. */
+    autoApproved: integer("auto_approved", { mode: "boolean" }).notNull().default(false),
+    /** Its time was picked by automation (a person may have approved it). */
+    autoScheduled: integer("auto_scheduled", { mode: "boolean" }).notNull().default(false),
     /** Account to publish to (API path) and how it was published. */
     connectionId: text("connection_id"),
     publishMethod: text("publish_method", { enum: ["api", "tap_to_post", "manual"] }),
@@ -597,6 +603,8 @@ export const idea = sqliteTable(
     score: integer("score").notNull().default(0),
     status: text("status", { enum: IDEA_STATUSES }).notNull().default("new"),
     draftedAt: integer("drafted_at", { mode: "timestamp_ms" }),
+    /** How the score was worked out: 1 the first rules, 2 freshness and relevance (2026-10-18). Old ones are re-scored. */
+    scoreVersion: integer("score_version").notNull().default(1),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("idea_org_context_uq").on(t.orgId, t.contextItemId), index("idea_org_status_idx").on(t.orgId, t.status, t.score)],
@@ -636,6 +644,10 @@ export const autopilot = sqliteTable(
     windows: text("windows", { mode: "json" }).$type<("morning" | "midday" | "afternoon" | "evening")[]>().notNull().default(sql`'["morning","midday","afternoon","evening"]'`),
     /** Posts per day per platform (within each platform's limit). */
     perDay: text("per_day", { mode: "json" }).$type<Partial<Record<Platform, number>>>().notNull().default(sql`'{}'`),
+    /** Email the owners when automation approves and schedules posts (their chance to cancel). */
+    notifyEmail: integer("notify_email", { mode: "boolean" }).notNull().default(true),
+    /** When the person agreed that automation may approve X posts (X's automation rules ask for express consent). */
+    xConsentAt: integer("x_consent_at", { mode: "timestamp_ms" }),
     lastRunAt: integer("last_run_at", { mode: "timestamp_ms" }),
     updatedAt: updatedAt(),
   },

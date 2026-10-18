@@ -14,6 +14,9 @@ export type Draft = {
   publishedAt: string | null;
   externalUrl: string | null;
   lastError: string | null;
+  /** Approved by automation; its time picked by automation. */
+  autoApproved?: boolean;
+  autoScheduled?: boolean;
   createdAt: string;
   parts?: string[] | null;
   partsPosted?: number;

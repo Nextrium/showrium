@@ -471,6 +471,9 @@ const DraftSchema = z
     publishedAt: z.string().nullable(),
     externalUrl: z.string().nullable(),
     lastError: z.string().nullable(),
+    /** Approved by automation ("Approve for me"); its time picked by automation. */
+    autoApproved: z.boolean(),
+    autoScheduled: z.boolean(),
     createdAt: z.string(),
     /** A thread's parts in order (null for a single post), and how many have been posted. */
     parts: z.array(z.string()).nullable(),
@@ -513,6 +516,8 @@ export const toDraft = (d: DraftRow, images: ImageRow[] = []) => ({
   publishedAt: d.publishedAt?.toISOString() ?? null,
   externalUrl: d.externalUrl,
   lastError: d.lastError,
+  autoApproved: d.autoApproved,
+  autoScheduled: d.autoScheduled,
   createdAt: d.createdAt.toISOString(),
   parts: d.parts ?? null,
   partsPosted: d.postedParts?.length ?? 0,
@@ -630,13 +635,17 @@ contentApi.openapi(
     if (patch.status && patch.status !== "approved" && denied(c, "content.write")) return c.json(forbidden("change posts"), 403);
     const principal = c.get("principal");
     try {
+      // Approving a scheduled post means "cancel the schedule": it stays approved, never rescheduled on its own.
+      const wasScheduled = patch.status === "approved" && (await getDraft(c.get("db"), principal.orgId, c.req.valid("param").id))?.status === "scheduled";
       const updated = await updateDraft(c.get("db"), principal.orgId, c.req.valid("param").id, {
         ...(patch.text !== undefined ? { text: patch.text } : {}),
         ...(patch.parts !== undefined ? { parts: patch.parts } : {}),
         ...(patch.status ? { status: patch.status } : {}),
       });
       if (!updated) return c.json(apiError("not_found", "No such post in this workspace."), 404);
-      if (patch.status === "approved") {
+      if (patch.status === "approved" && wasScheduled) {
+        await recordAudit(c.get("db"), { orgId: principal.orgId, actorUserId: principal.kind === "user" ? principal.userId : null, actorApiKeyId: principal.kind === "api_key" ? principal.apiKeyId : null, action: "draft.unscheduled", target: updated.id });
+      } else if (patch.status === "approved") {
         // "Schedule when approved": the post goes to the next free slot, if switched on for its platform.
         if (can(principal.role, "publish") && (await autoScheduleApproved(c.get("db"), principal.orgId, [updated.id]))) {
           const now = await getDraft(c.get("db"), principal.orgId, updated.id);

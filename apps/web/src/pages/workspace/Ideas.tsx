@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { api, formatDate, navigate, timeAgo, useApi } from "../../lib";
 import { MODES, usePlatforms, type Draft, type Persona, type Platform } from "./shared";
 import { PLATFORM_LABELS, SOURCE_KINDS, THREAD_PLATFORMS } from "./Drafts";
-import { Alert, Button, Chip, Empty, Icon, LinkButton, Loading, PageHeader, Switch } from "../../ui/kit";
+import { Alert, Button, Chip, Empty, Icon, Info, LinkButton, Loading, PageHeader, Switch } from "../../ui/kit";
 import { DetailPanel, ListItem, SectionLabel, Split, StatStrip, Tag, useQueryParams } from "../../ui/split";
 
 type IdeaStatus = "new" | "drafted" | "dismissed";
-type Idea = { id: string; reason: string; score: number; status: IdeaStatus; title: string; kind: string; body: string; url: string | null; createdAt: string };
-type Counts = Record<IdeaStatus, number>;
+type Idea = { id: string; reason: string; score: number; status: IdeaStatus; title: string; kind: string; body: string; url: string | null; publishedAt: string | null; createdAt: string };
+type Counts = Record<IdeaStatus, number> & { hidden?: number };
 
 const TABS = [
   { id: "new", label: "New", tone: "accent" },
@@ -76,7 +76,7 @@ function IdeaDetail({ id, persona }: { id: string; persona: Persona | null }) {
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <h2 className="font-display text-[22px] font-semibold leading-tight [overflow-wrap:anywhere]">{idea.title || idea.reason}</h2>
-          <span className="font-mono text-[12.5px] text-muted">{kind.label} · found {formatDate(idea.createdAt)}</span>
+          <span className="font-mono text-[12.5px] text-muted">{kind.label} · {idea.publishedAt ? `published ${formatDate(idea.publishedAt)}` : `found ${formatDate(idea.createdAt)}`}</span>
         </div>
         <Tag tone={fitTone(idea.score)}>Fit {idea.score}%</Tag>
       </div>
@@ -181,7 +181,9 @@ export function IdeasPage() {
   const selected = params.get("id");
   const wide = useWide();
   const { data: personaData } = useApi<{ persona: Persona | null }>("/persona");
-  const { data, error } = useApi<{ data: Idea[]; counts: Counts }>(`/ideas?status=${status}`);
+  const [showAll, setShowAll] = useState(false);
+  const { data, error } = useApi<{ data: Idea[]; counts: Counts }>(`/ideas?status=${status}${showAll && status === "new" ? "&all=true" : ""}`);
+  const hidden = status === "new" && !showAll ? (data?.counts.hidden ?? 0) : 0;
   const [query, setQuery] = useState("");
 
   const all = data?.data ?? [];
@@ -223,12 +225,20 @@ export function IdeasPage() {
               <span className="flex items-center gap-1.5 text-[12.5px] text-muted">
                 <Icon name={kind.icon} size={13} className="shrink-0" />
                 <span>{kind.label}</span>
-                <span className="ml-auto font-mono">{timeAgo(i.createdAt)}</span>
+                <span className="ml-auto font-mono">{timeAgo(i.publishedAt ?? i.createdAt)}</span>
               </span>
             </ListItem>
           );
         })}
       </ul>
+      {hidden > 0 && (
+        <div className="flex items-center gap-1.5 border-t border-line p-3 text-[13px] text-muted">
+          <button type="button" className="cursor-pointer bg-transparent p-0 text-[13px] font-medium text-accent-ink underline-offset-2 hover:underline" onClick={() => setShowAll(true)}>
+            Show {hidden} more
+          </button>
+          <Info label="About hidden ideas">Weak or old ideas are tucked away: under 40% fit, or older than 14 days for news (30 for your own work). Automation only writes from fresh ideas with 60% fit or more.</Info>
+        </div>
+      )}
     </div>
   );
 
