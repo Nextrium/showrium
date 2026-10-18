@@ -28,7 +28,7 @@ import { recordAudit } from "./orgs.js";
 import { sourceIsLive, utcDay } from "./passions.js";
 import { ageOf, effectiveScore, isApprovable, isWritable } from "./idea-score.js";
 import { getUsage, PLAN_FEATURES, type Plan } from "./plans.js";
-import { API_PUBLISH_PLATFORMS, scheduleDraft } from "./publishing.js";
+import { API_PUBLISH_PLATFORMS, scheduleDraft, xNeedsTapToPost } from "./publishing.js";
 import { isTimezone, learnWindows, localDay, localParts, pickSlot, PLATFORM_DAILY_MAX, takenTimes, windowOf, WINDOW_NAMES, type PostingWindow } from "./timing.js";
 
 const HOUR = 3_600_000;
@@ -452,6 +452,8 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
       if (!s.rules[d.platform]?.approve || d.issues.length || AUTOPILOT_EXCLUDED.includes(d.platform)) continue;
       // X: only with consent, and only within the plan's monthly X posts (automation never spends credits).
       if (d.platform === "x" && (!s.xConsentAt || !(await xAllowanceLeft(db, orgId)))) continue;
+      // An X post with a link is always posted by the person (it never goes through the API).
+      if (xNeedsTapToPost(d.platform, d.text)) continue;
       await db.update(draft).set({ status: "approved", autoApproved: true, updatedAt: new Date() }).where(and(eq(draft.orgId, orgId), eq(draft.id, d.id), eq(draft.status, "draft")));
       approved.push(d.id);
     }

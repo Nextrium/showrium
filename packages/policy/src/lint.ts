@@ -64,7 +64,7 @@ export function lintPost(platform: Platform, text: string, opts: { hasMedia?: bo
     issues.push({
       code: "has_link",
       severity: "warn",
-      message: platform === "x" ? "Links on X cost 25 credits when auto-posted. Tap-to-post is free." : `Links aren't clickable in ${rule.label} captions.`,
+      message: platform === "x" ? "Posts with a link go to X through \"Post it myself\" (free); X charges a lot more for links sent through the app." : `Links aren't clickable in ${rule.label} captions.`,
     });
   }
   URL_RE.lastIndex = 0;

@@ -24,7 +24,36 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [opened, setOpened] = useState(false);
+  // Where you are in "Post it myself", kept for this tab: on phones, coming back from the X app can reload the page.
+  const stepKey = `showrium:tap:${draft.id}`;
+  const saved = (() => {
+    try {
+      return JSON.parse(sessionStorage.getItem(stepKey) ?? "null") as { opened?: boolean; rootUrl?: string } | null;
+    } catch {
+      return null;
+    }
+  })();
+  const [opened, setOpenedState] = useState(Boolean(saved?.opened));
+  const [rootUrl, setRootUrlState] = useState(saved?.rootUrl ?? "");
+  const remember = (next: { opened: boolean; rootUrl: string }) => {
+    try {
+      sessionStorage.setItem(stepKey, JSON.stringify(next));
+    } catch {
+      // Private mode: the step simply isn't remembered.
+    }
+  };
+  const setOpened = (v: boolean) => {
+    setOpenedState(v);
+    remember({ opened: v, rootUrl });
+  };
+  const setRootUrl = (v: string) => {
+    setRootUrlState(v);
+    remember({ opened, rootUrl: v });
+  };
+  // The id of your post on X, from its link (x.com/<you>/status/<id>), so replies open already replying to it.
+  const rootId = rootUrl.match(/^https:\/\/(?:x|twitter)\.com\/[^/]+\/status\/(\d{5,25})/i)?.[1] ?? null;
+  const replyUrl = (text: string) => `https://x.com/intent/post?text=${encodeURIComponent(text)}&in_reply_to=${rootId}`;
+  const xLink = draft.platform === "x" && /https?:\/\//i.test(draft.text);
   const chosen = connectionId || accounts[0]?.id || "";
   // The post's images, loaded now: the share sheet only opens straight from a click.
   const { data: imageSettings } = useApi<{ sizes: Partial<Record<string, ImageSize>> }>("/image-settings", { live: false });
@@ -108,11 +137,18 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
   };
   const markPosted = () =>
     act(async () => {
-      await api(`/drafts/${draft.id}/mark-published`, { method: "POST", body: JSON.stringify({ url: null }) });
-      onChange({ ...draft, status: "published" });
+      const url = rootId ? rootUrl.split("?")[0]! : null;
+      await api(`/drafts/${draft.id}/mark-published`, { method: "POST", body: JSON.stringify({ url }) });
+      try {
+        sessionStorage.removeItem(stepKey);
+      } catch {
+        // Nothing to clear.
+      }
+      onChange({ ...draft, status: "published", externalUrl: url });
     });
 
-  const canApi = API_PLATFORMS.includes(draft.platform) && accounts.length > 0;
+  // X posts with a link never go through the app (X charges much more for links): "Post it myself" only.
+  const canApi = API_PLATFORMS.includes(draft.platform) && accounts.length > 0 && !xLink;
   return (
     <div className="form">
       <div className="row">
@@ -145,11 +181,24 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
           {files.length > 1 && <button type="button" className="button secondary self-start" onClick={saveAll}>Save all {files.length}</button>}
         </div>
       )}
+      {xLink && API_PLATFORMS.includes(draft.platform) && accounts.length > 0 && (
+        <p className="note">This post has a link, so it goes to X with "Post it myself" (free). X charges a lot more for links sent through the app.</p>
+      )}
+      {opened && parts && draft.platform === "x" && (
+        <label className="flex flex-col gap-1">
+          Link to your post on X
+          <input type="url" inputMode="url" value={rootUrl} onChange={(e) => setRootUrl(e.target.value.trim())} placeholder="https://x.com/you/status/…" />
+          <span className="text-[12.5px] text-muted">{rootId ? "Each reply below now opens X already replying to your post." : "Paste it (Share › Copy link on X) and each reply becomes one click."}</span>
+        </label>
+      )}
       {opened && parts && (
         <ol className="m-0 flex list-none flex-col gap-2 p-0" aria-label="Thread parts to post as replies">
           {parts.slice(1).map((part, n) => (
             <li key={n} className="flex items-center justify-between gap-3 rounded-xl border border-line px-3 py-2">
               <span className="min-w-0 flex-1 truncate text-[13.5px]"><strong className="font-semibold">Reply {n + 1}:</strong> {part}</span>
+              {draft.platform === "x" && rootId ? (
+                <a className="button" href={replyUrl(part)} target="_blank" rel="noopener noreferrer">Post reply</a>
+              ) : null}
               <button type="button" className="button secondary" onClick={() => copyPart(n + 1)}>{copiedPart === n + 1 ? "Copied" : "Copy"}</button>
             </li>
           ))}

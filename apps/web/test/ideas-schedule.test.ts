@@ -476,6 +476,42 @@ describe("X: automation may approve, with consent and within the plan's X posts"
     expect(second).toMatchObject({ approved: 0 }); // 50 allowed: 49 used + 1 scheduled
   });
 
+  it("an X post with a link never goes through the API: not published, not scheduled, not auto-approved (owner decision 2026-10-19)", async () => {
+    const u = await user("is-xlink@example.com");
+    const conn = await connect(u, "x");
+    const id = await approvedPost(u.orgId, "x", "GovTool makes governance usable. Link in the reply 👇\n\nhttps://github.com/intersectmbo/govtool");
+    await env.DB.prepare("UPDATE draft SET connection_id = ?, parts = ? WHERE id = ?").bind(conn, JSON.stringify(["GovTool makes governance usable. Link in the reply 👇", "https://github.com/intersectmbo/govtool"]), id).run();
+    let calledX = false;
+    const spy = async () => ((calledX = true), new Response("{}"));
+    await expect(publishDraft({ ...(await deps()), fetch: spy as typeof fetch }, { orgId: u.orgId, draftId: id })).rejects.toThrow(/Post it myself/);
+    expect(calledX).toBe(false); // X was never contacted
+    expect((await env.DB.prepare("SELECT status FROM draft WHERE id = ?").bind(id).first<{ status: string }>())!.status).toBe("approved"); // untouched, ready to post yourself
+    const sched = await u.call("POST", `/drafts/${id}/schedule`, { connectionId: conn, at: new Date(Date.now() + 2 * DAY).toISOString() });
+    expect(sched.status).toBe(409);
+    expect(((await sched.json()) as { error: { code: string } }).error.code).toBe("needs_tap_to_post");
+    const now = await u.call("POST", `/drafts/${id}/publish`, { connectionId: conn });
+    expect(((await now.json()) as { error: { code: string } }).error.code).toBe("needs_tap_to_post");
+    // Without a link, the same account still posts through the app.
+    const plain = await approvedPost(u.orgId, "x", "No link here.");
+    await env.DB.prepare("UPDATE draft SET connection_id = ? WHERE id = ?").bind(conn, plain).run();
+    const ok = async (url: string) => (url.endsWith("/2/tweets") ? Response.json({ data: { id: "t9" } }) : new Response("{}", { status: 404 }));
+    expect(await publishDraft({ ...(await deps()), fetch: ok as typeof fetch }, { orgId: u.orgId, draftId: plain })).toMatchObject({ status: "published" });
+  });
+
+  it("automation doesn't approve an X post that carries a link (it's left for you to post yourself)", async () => {
+    const u = await user("is-xlinkauto@example.com");
+    await connect(u, "x");
+    expect((await u.call("PUT", "/autopilot", { ...settings({ rules: { x: { write: true, schedule: true, approve: true } } }), xConsent: true })).status).toBe(200);
+    const ctx = `ctx_${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO context_item (id, org_id, kind, title, body, url, published_at) VALUES (?, ?, 'rss_item', 'We released queue retries v2.0', 'b', 'https://blog.example/retries', ?)").bind(ctx, u.orgId, Date.now()).run();
+    await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: ctx, title: "We released queue retries v2.0" }]);
+    const out = await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId);
+    expect(out).toMatchObject({ drafts: 1, approved: 0, scheduled: 0 });
+    const row = await env.DB.prepare("SELECT status, parts FROM draft WHERE org_id = ? AND platform = 'x'").bind(u.orgId).first<{ status: string; parts: string }>();
+    expect(row!.status).toBe("draft");
+    expect(JSON.parse(row!.parts)[1]).toBe("https://blog.example/retries"); // the link waits in the reply, for "Post it myself"
+  });
+
   it("a post automation approved never spends credits on X", async () => {
     const u = await user("is-xcredits@example.com", "starter");
     const conn = await connect(u, "x");

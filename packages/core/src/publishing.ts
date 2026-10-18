@@ -98,9 +98,16 @@ export async function mastodonClient(deps: PublishDeps, instance: string): Promi
 
 // --- Publishing ---------------------------------------------------------------------------
 
+/**
+ * X posts with a link (in the post or its reply) never go through the API: X charges about 13 times
+ * more for them, so they're always posted with "Post it myself" (owner decision 2026-10-19).
+ */
+export const xNeedsTapToPost = (platform: string, text: string) => platform === "x" && /https?:\/\//i.test(text);
+const TAP_TO_POST_MESSAGE = "Posts with a link go to X through \"Post it myself\" (free). X charges a lot more for links sent through the app.";
+
 export class PublishError extends Error {
   constructor(
-    readonly code: "not_found" | "not_ready" | "has_errors" | "no_connection" | "not_supported" | "monetization_safe" | "insufficient_credits" | "platform_error" | "conflict",
+    readonly code: "not_found" | "not_ready" | "has_errors" | "no_connection" | "not_supported" | "monetization_safe" | "insufficient_credits" | "platform_error" | "conflict" | "needs_tap_to_post",
     message: string,
   ) {
     super(message);
@@ -241,6 +248,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
 
   const [p] = await db.select({ safe: persona.monetizationSafe }).from(persona).where(eq(persona.orgId, input.orgId));
   if (p?.safe && conn.platform === "x") throw new PublishError("monetization_safe", "Monetization-safe mode posts to X through your own X app (tap-to-post).");
+  if (xNeedsTapToPost(conn.platform, d.text)) throw new PublishError("needs_tap_to_post", TAP_TO_POST_MESSAGE);
 
   const [claimed] = await db
     .update(draft)
@@ -347,6 +355,7 @@ export async function scheduleDraft(db: Db, orgId: string, draftId: string, inpu
   if (hasErrors(d.issues)) throw new PublishError("has_errors", "Fix the errors on this post first.");
   const [conn] = await db.select().from(connection).where(and(eq(connection.orgId, orgId), eq(connection.id, input.connectionId)));
   if (!conn || conn.platform !== d.platform || !API_PUBLISH_PLATFORMS.includes(conn.platform)) throw new PublishError("no_connection", "Connect an account for this platform first.");
+  if (xNeedsTapToPost(conn.platform, d.text)) throw new PublishError("needs_tap_to_post", TAP_TO_POST_MESSAGE);
   const [row] = await db
     .update(draft)
     .set({ status: "scheduled", scheduledAt: input.at, connectionId: conn.id, autoScheduled: Boolean(input.auto), updatedAt: new Date() })
