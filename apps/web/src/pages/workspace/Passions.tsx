@@ -2,10 +2,16 @@
 // sources. New items become ideas; posts are the person's view of it, with an optional disclosure.
 import { useState, type FormEvent } from "react";
 import { api, useApi } from "../../lib";
-import { Alert, Badge, Button, Empty, Icon, Info, PageHeader, Panel, Switch } from "../../ui/kit";
+import { Alert, Badge, Button, Chip, Empty, Icon, Info, PageHeader, Panel, Switch } from "../../ui/kit";
 import { SourceRow, type Source } from "./Sources";
 
-type Passion = { id: string; name: string; about: string; disclosure: string; active: boolean; live: boolean; startsOn: string | null; endsOn: string | null; sources: Source[] };
+type Relation = "follow" | "involved" | "ours";
+type Passion = { id: string; name: string; about: string; disclosure: string; active: boolean; live: boolean; startsOn: string | null; endsOn: string | null; relation: Relation; linkSource: boolean; sources: Source[] };
+const RELATIONS: { id: Relation; label: string }[] = [
+  { id: "follow", label: "I follow it" },
+  { id: "involved", label: "I'm involved" },
+  { id: "ours", label: "It's ours" },
+];
 type List = { data: Passion[]; limits: { passions: number; sourcesEach: number } };
 
 /** "owner/repo" or a github.com address is a repository; anything else is a website, feed, channel or podcast. */
@@ -56,6 +62,8 @@ function AddSource({ passion, full, onAdded }: { passion: Passion; full: boolean
 
 function Details({ passion, onSaved }: { passion: Passion; onSaved: () => void }) {
   const [busy, setBusy] = useState(false);
+  const [relation, setRelation] = useState<Relation>(passion.relation);
+  const [linkSource, setLinkSource] = useState(passion.linkSource);
   const [error, setError] = useState<string | null>(null);
   const save = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -71,6 +79,8 @@ function Details({ passion, onSaved }: { passion: Passion; onSaved: () => void }
           disclosure: String(f.get("disclosure") ?? ""),
           startsOn: String(f.get("startsOn") ?? "") || null,
           endsOn: String(f.get("endsOn") ?? "") || null,
+          relation,
+          linkSource,
         }),
       });
       onSaved();
@@ -86,6 +96,30 @@ function Details({ passion, onSaved }: { passion: Passion; onSaved: () => void }
         Name
         <input name="name" required maxLength={60} defaultValue={passion.name} />
       </label>
+      <div className="flex flex-col gap-1.5">
+        <span className="flex items-center gap-1.5 text-[13.5px] font-medium">
+          Your connection{" "}
+          <Info label="About your connection">
+            I follow it: posts are your view, and the project is named, never "we". I'm involved (contributor, ambassador, partner): "I" for what you did, and the team gets credit. It's ours (your own team): posts say "we" and "our".
+          </Info>
+        </span>
+        <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Your connection">
+          {RELATIONS.map((r) => (
+            <Chip key={r.id} on={relation === r.id} onClick={() => setRelation(r.id)}>
+              {r.label}
+            </Chip>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5 text-[13.5px] font-medium">
+          Link to the source{" "}
+          <Info label="About the source link">
+            Each post ends with the link to what it's about. On X it goes in the first reply, and the post says so. Through the app, X charges more for a post with a link (25 credits beyond your plan); posting it yourself is free.
+          </Info>
+        </span>
+        <Switch label="Link to the source" on={linkSource} onChange={setLinkSource} />
+      </div>
       <label>
         <span className="flex items-center gap-1.5">
           Your angle <Info label="About your angle">Why you care, or your connection to it. The writer uses it to sound like you.</Info>
@@ -149,6 +183,7 @@ function PassionCard({ passion, sourcesEach, onChange }: { passion: Passion; sou
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate">{passion.name}</span>
           <Badge tone={passion.live ? "ok" : "neutral"}>{status}</Badge>
+          <span className="text-[12.5px] font-normal text-muted">{RELATIONS.find((r) => r.id === passion.relation)?.label}</span>
         </span>
       }
       action={<Switch label={`${passion.name} on`} on={passion.active} onChange={(v) => void toggle(v)} />}

@@ -342,6 +342,10 @@ const PassionFields = z.object({
   active: z.boolean().optional(),
   startsOn: Day.nullable().optional(),
   endsOn: Day.nullable().optional(),
+  /** follow: you follow it; involved: contributor, ambassador or partner; ours: your own team (posts say "we"). */
+  relation: z.enum(["follow", "involved", "ours"]).optional(),
+  /** Add the source's link to posts (on X, as the first reply). */
+  linkSource: z.boolean().optional(),
 });
 const PassionSchema = z
   .object({
@@ -353,10 +357,12 @@ const PassionSchema = z
     live: z.boolean(),
     startsOn: z.string().nullable(),
     endsOn: z.string().nullable(),
+    relation: z.enum(["follow", "involved", "ours"]),
+    linkSource: z.boolean(),
     sources: z.array(SourceSchema),
   })
   .openapi("Passion");
-type PassionRow = { id: string; name: string; about: string; disclosure: string; active: boolean; startsOn: string | null; endsOn: string | null; sources?: { id: string; kind: string; key: string; lastCheckedAt: Date | null; lastError: string | null }[] };
+type PassionRow = { id: string; name: string; about: string; disclosure: string; active: boolean; startsOn: string | null; endsOn: string | null; relation: "follow" | "involved" | "ours"; linkSource: boolean; sources?: { id: string; kind: string; key: string; lastCheckedAt: Date | null; lastError: string | null }[] };
 const toPassion = (p: PassionRow) => ({
   id: p.id,
   name: p.name,
@@ -366,6 +372,8 @@ const toPassion = (p: PassionRow) => ({
   live: passionIsLive(p, utcDay()),
   startsOn: p.startsOn,
   endsOn: p.endsOn,
+  relation: p.relation,
+  linkSource: p.linkSource,
   sources: (p.sources ?? []).map((r) => ({ id: r.id, kind: r.kind, key: r.key, lastCheckedAt: r.lastCheckedAt?.toISOString() ?? null, lastError: r.lastError })),
 });
 const actorOf = (p: { kind: "user"; userId: string } | { kind: "api_key"; apiKeyId: string }) => ({ actorUserId: p.kind === "user" ? p.userId : null, actorApiKeyId: p.kind === "api_key" ? p.apiKeyId : null });
@@ -410,7 +418,7 @@ contentApi.openapi(
     const { orgId } = principal;
     try {
       const row = await updatePassion(c.get("db"), orgId, c.req.valid("param").id, c.req.valid("json"));
-      await recordAudit(c.get("db"), { orgId, ...actorOf(principal), action: "passion.updated", target: row.id, meta: { active: row.active, startsOn: row.startsOn, endsOn: row.endsOn, disclosure: Boolean(row.disclosure) } });
+      await recordAudit(c.get("db"), { orgId, ...actorOf(principal), action: "passion.updated", target: row.id, meta: { active: row.active, startsOn: row.startsOn, endsOn: row.endsOn, disclosure: Boolean(row.disclosure), relation: row.relation, linkSource: row.linkSource } });
       const full = (await listPassions(c.get("db"), orgId)).find((p) => p.id === row.id) ?? row;
       return c.json(toPassion(full), 200);
     } catch (error) {

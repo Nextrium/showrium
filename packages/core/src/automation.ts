@@ -11,6 +11,7 @@ import {
   contextItem,
   draft,
   idea,
+  passion,
   source,
   persona,
   type AutomationRule,
@@ -416,10 +417,11 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   if (!mode) return { skipped: "no_styles" as const };
 
   const rows = await db
-    .select({ id: idea.id, kind: contextItem.kind, base: idea.score, createdAt: idea.createdAt, publishedAt: contextItem.publishedAt, externalId: contextItem.externalId, passionId: source.passionId })
+    .select({ id: idea.id, kind: contextItem.kind, base: idea.score, createdAt: idea.createdAt, publishedAt: contextItem.publishedAt, externalId: contextItem.externalId, passionId: source.passionId, relation: passion.relation })
     .from(idea)
     .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
     .leftJoin(source, eq(source.id, contextItem.sourceId))
+    .leftJoin(passion, eq(passion.id, source.passionId))
     // Ideas from a passion that's off or outside its dates wait until it's live again.
     .where(and(eq(idea.orgId, orgId), eq(idea.status, "new"), gte(idea.createdAt, new Date(now.getTime() - 30 * DAY)), sourceIsLive(source.passionId, utcDay(now))))
     .orderBy(desc(idea.score), desc(idea.createdAt))
@@ -430,7 +432,7 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
       const age = ageOf(c.publishedAt, c.createdAt, now);
       return { ...c, age, score: effectiveScore(c.base, age) };
     })
-    .filter((c) => isWritable(c.score, c.age, c.passionId ? "outside" : "own"));
+    .filter((c) => isWritable(c.score, c.age, c.passionId && c.relation !== "ours" ? "outside" : "own"));
   if (!candidates.length) return { skipped: "no_ideas" as const };
   // Best score, with a nudge towards material that suits this week's style.
   const best = candidates.map((c) => ({ ...c, rank: c.score + (SUITS[mode].includes(c.kind) ? 15 : 0) })).sort((a, b) => b.rank - a.rank)[0]!;

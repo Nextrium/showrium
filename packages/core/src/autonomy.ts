@@ -215,16 +215,19 @@ async function scoredIdeas(db: Db, orgId: string, status: "new" | "drafted" | "d
       url: contextItem.url,
       publishedAt: contextItem.publishedAt,
       passionId: source.passionId,
+      relation: passion.relation,
     })
     .from(idea)
     .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
     .leftJoin(source, eq(source.id, contextItem.sourceId))
+    .leftJoin(passion, eq(passion.id, source.passionId))
     .where(and(eq(idea.orgId, orgId), eq(idea.status, status)))
     .orderBy(desc(idea.score), desc(idea.createdAt))
     .limit(200);
   return rows
-    .map(({ base, passionId, ...r }) => {
-      const origin: IdeaOrigin = passionId ? "outside" : "own";
+    .map(({ base, passionId, relation, ...r }) => {
+      // A passion that's "ours" is the person's own team: their own material, not outside news.
+      const origin: IdeaOrigin = passionId && relation !== "ours" ? "outside" : "own";
       const age = ageOf(r.publishedAt, r.createdAt, now);
       return { ...r, score: effectiveScore(base, age), stale: isStale(age, origin), origin };
     })

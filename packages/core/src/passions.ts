@@ -2,7 +2,7 @@
 // up to 10 sources of its own. Posts about a passion are the person's view of someone else's work,
 // with an optional disclosure. Every function filters by orgId (tenant isolation lives here).
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
-import { contextItem, passion, source, type Db } from "@nextrium/db";
+import { contextItem, passion, PASSION_RELATIONS, source, type Db, type PassionRelation } from "@nextrium/db";
 import { getOrgLimits } from "./content.js";
 import { newId } from "./ids.js";
 
@@ -11,7 +11,16 @@ export const PASSION_ABOUT_MAX = 300;
 export const PASSION_DISCLOSURE_MAX = 120;
 
 export type Passion = typeof passion.$inferSelect;
-export type PassionInput = { name: string; about?: string | undefined; disclosure?: string | undefined; active?: boolean | undefined; startsOn?: string | null | undefined; endsOn?: string | null | undefined };
+export type PassionInput = {
+  name: string;
+  about?: string | undefined;
+  disclosure?: string | undefined;
+  active?: boolean | undefined;
+  startsOn?: string | null | undefined;
+  endsOn?: string | null | undefined;
+  relation?: PassionRelation | undefined;
+  linkSource?: boolean | undefined;
+};
 
 export class PassionError extends Error {
   constructor(
@@ -54,6 +63,11 @@ function clean(input: { [K in keyof PassionInput]?: PassionInput[K] | undefined 
     out.disclosure = input.disclosure.trim();
   }
   if (input.active !== undefined) out.active = input.active;
+  if (input.relation !== undefined) {
+    if (!PASSION_RELATIONS.includes(input.relation)) throw new PassionError("invalid", "Choose how you're connected to it.");
+    out.relation = input.relation;
+  }
+  if (input.linkSource !== undefined) out.linkSource = input.linkSource;
   for (const key of ["startsOn", "endsOn"] as const) {
     const v = input[key];
     if (v === undefined) continue;
@@ -87,7 +101,7 @@ export async function createPassion(db: Db, orgId: string, input: PassionInput) 
   if (existing.some((e) => e.name.toLowerCase() === values.name!.toLowerCase())) throw new PassionError("exists", "You already have a passion with that name.");
   const [row] = await db
     .insert(passion)
-    .values({ id: newId("pas"), orgId, name: values.name!, about: values.about ?? "", disclosure: values.disclosure ?? "", active: values.active ?? true, startsOn: values.startsOn ?? null, endsOn: values.endsOn ?? null })
+    .values({ id: newId("pas"), orgId, name: values.name!, about: values.about ?? "", disclosure: values.disclosure ?? "", active: values.active ?? true, startsOn: values.startsOn ?? null, endsOn: values.endsOn ?? null, relation: values.relation ?? "follow", linkSource: values.linkSource ?? true })
     .returning();
   return row!;
 }
@@ -130,7 +144,7 @@ export async function addPassionSource(db: Db, orgId: string, passionId: string,
 /** The passion a piece of material came from, if any (for writing posts about it). */
 export async function passionForContext(db: Db, orgId: string, contextItemId: string) {
   const [row] = await db
-    .select({ id: passion.id, name: passion.name, about: passion.about, disclosure: passion.disclosure })
+    .select({ id: passion.id, name: passion.name, about: passion.about, disclosure: passion.disclosure, relation: passion.relation, linkSource: passion.linkSource })
     .from(contextItem)
     .innerJoin(source, eq(source.id, contextItem.sourceId))
     .innerJoin(passion, eq(passion.id, source.passionId))

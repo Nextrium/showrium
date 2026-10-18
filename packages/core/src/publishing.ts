@@ -284,7 +284,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   const cache: SendCache = {};
   const images = deps.media ? await imagesForPublishing(db, deps.media, input.orgId, d).catch(() => []) : [];
   try {
-    if (conn.platform === "x" && !isThread && xWeightedLength(d.text) > 280) await confirmXLong(deps, conn);
+    if (conn.platform === "x" && parts.some((p) => xWeightedLength(p) > 280)) await confirmXLong(deps, conn);
     let result: { externalId: string; url: string | null };
     if (!isThread) {
       result = await sendToPlatform(deps, conn, d.text, d.id, undefined, cache, images);

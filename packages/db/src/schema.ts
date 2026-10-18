@@ -318,6 +318,9 @@ export const persona = sqliteTable("persona", {
   updatedAt: updatedAt(),
 });
 
+export const PASSION_RELATIONS = ["follow", "involved", "ours"] as const;
+export type PassionRelation = (typeof PASSION_RELATIONS)[number];
+
 /**
  * Passions: subjects the person cares about and posts on (a project, an ecosystem, a cause), each
  * with its own sources. Posts about a passion are the person's view of someone else's work.
@@ -333,6 +336,10 @@ export const passion = sqliteTable(
     about: text("about").notNull().default(""),
     /** Optional disclosure added to posts, e.g. "I'm a Cardano ambassador". */
     disclosure: text("disclosure").notNull().default(""),
+    /** The person's connection: follows it (outsider), involved (contributor, ambassador, partner), or ours (their own team). */
+    relation: text("relation", { enum: PASSION_RELATIONS }).notNull().default("follow"),
+    /** Add the source's link to posts (X: in the first reply). */
+    linkSource: integer("link_source", { mode: "boolean" }).notNull().default(true),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     startsOn: text("starts_on"),
     endsOn: text("ends_on"),

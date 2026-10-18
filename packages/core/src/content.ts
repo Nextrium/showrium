@@ -181,7 +181,8 @@ export async function xLongAllowed(db: Db, orgId: string): Promise<boolean> {
 
 /** Lint a post or a thread with the workspace's limits (X Premium raises the X limit). */
 export function lintDraft(platform: Platform, text: string, parts: string[] | null | undefined, xLong: boolean): LintIssue[] {
-  const opts = platform === "x" && xLong && !parts ? { maxLength: X_LONG_MAX } : {};
+  // X Premium: long posts, also as the first post of a thread (e.g. a post with its link as the reply).
+  const opts = platform === "x" && xLong ? { maxLength: X_LONG_MAX } : {};
   return parts ? lintThread(platform, parts, opts) : lintPost(platform, text, opts);
 }
 
@@ -201,10 +202,52 @@ export type ComposeInput = {
   research?: boolean | undefined;
 };
 
+// --- The source link -------------------------------------------------------------------------
+
+/** Where the source link goes: at the end of the post here; on X, as the first reply; nowhere else (Instagram captions don't link, video scripts are spoken). */
+export const LINK_AT_END: Platform[] = ["linkedin", "facebook", "threads", "bluesky", "mastodon"];
+const POINTER_RE = /\b(reply|replies|below|thread)\b|👇|⬇/i;
+const POINTERS = ["Link in the reply 👇", "The link is in the reply.", "More in the reply below 👇"];
+
+/** The link a post should carry: the item's own page; for a day of GitHub work, the repository's main page. */
+export function sourceLink(ctx: { kind: string; url: string | null }): string | null {
+  if (!ctx.url || !/^https:\/\/[^\s]+$/i.test(ctx.url) || ctx.kind === "request") return null;
+  if (ctx.kind === "github_activity") return ctx.url.replace(/\/commits\/?$/, "");
+  return ctx.url;
+}
+
+/** The post with its link placed: at the end where links work; on X, without the link but with a line pointing to the reply. */
+export function placeLink(platform: Platform, text: string, link: string | null): string {
+  if (!link) return text;
+  if (platform === "x") {
+    const without = text.split(link).join("").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    return POINTER_RE.test(without) ? without : `${without}\n\n${POINTERS[without.length % POINTERS.length]}`;
+  }
+  if (!LINK_AT_END.includes(platform) || text.includes(link)) return text;
+  return `${text.trimEnd()}\n\n${link}`;
+}
+
+/**
+ * Words that sound as if the author is part of a team they've said they only follow ("we built",
+ * "the tools we build", "our team"). Flagged for the person to check; automation won't approve it.
+ */
+const TEAM_CLAIM_RE = /\bwe(?:'ve|'re|'ll)?\s+(?:(?:can|could|will|just|also|now|have|are|recently|finally)\s+)?(?:built|build|building|created|create|launched|launch|shipped|ship|designed|developed|develop|made|released|release|maintain|wrote)\b|\bour\s+(?:team|repo|repository|codebase|product|tool|tools|project|release|roadmap)\b/i;
+export function soundsLikeTeam(text: string): boolean {
+  return TEAM_CLAIM_RE.test(text);
+}
+
 /**
  * A passion's disclosure, exactly as the person wrote it (house-style cleanup never touches it, so "#ad"
  * survives). Added at the end unless the post already contains it.
  */
+/** The text without the disclosure the writer may have added itself (so the code can put it last, after the link). */
+export function withoutDisclosure(text: string, disclosure: string): string {
+  const d = disclosure.trim();
+  if (!d) return text;
+  const at = text.toLowerCase().lastIndexOf(d.toLowerCase());
+  return at < 0 ? text : `${text.slice(0, at)}${text.slice(at + d.length)}`.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function withDisclosure(text: string, disclosure: string): string {
   const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " ").trim();
   return norm(text).includes(norm(disclosure)) ? text : `${text.trimEnd()}\n\n${disclosure.trim()}`;
@@ -227,7 +270,10 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   const material = isRequest ? { title: "", body: "" } : { title: ctx.title, body: ctx.body };
   // Material from a passion's sources is someone else's work: written as the person's view of it.
   const passion = isRequest ? null : await passionForContext(db, input.orgId, ctx.id);
-  const stance: Stance = input.stance ?? (passion ? "other" : "own");
+  // "It's ours": the person's own team, written as their own work. Otherwise their view of someone else's.
+  const stance: Stance = input.stance ?? (passion && passion.relation !== "ours" ? "other" : "own");
+  // The source's link (the person can switch it off per passion). Added by the code, never by the writer.
+  const link = (passion ? passion.linkSource : true) ? sourceLink(ctx) : null;
 
   // Quota pre-check: posts left this month plus credits must cover the request.
   const { limits } = await getOrgLimits(db, input.orgId);
@@ -272,7 +318,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   try {
     result = await generateStructured(
       providers,
-      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research, recentOpenings, passion }), maxTokens: 8000 },
+      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research, recentOpenings, passion, link: link ? { length: link.length, atEnd: LINK_AT_END, xReply: true } : null }), maxTokens: 8000 },
       ComposeSchema,
       (out) => checkVariants(out, platforms),
     );
@@ -291,8 +337,14 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
     ctx.body,
     instructions ?? "",
     ...(passion ? [passion.name, passion.about, passion.disclosure] : []),
+    ...(link ? [link, ctx.url ?? ""] : []),
     ...(research ? [research.summary, ...research.facts.map((f) => `${f.claim} ${f.source}`), ...research.criticism.map((f) => `${f.point} ${f.source}`), ...research.support.map((f) => `${f.point} ${f.source}`)] : []),
   ].join("\n");
+  // "I follow it": words that claim the team's work are flagged (the writer is told not to, but check).
+  const teamIssue = (text: string): LintIssue[] =>
+    passion?.relation === "follow" && soundsLikeTeam(text)
+      ? [{ code: "sounds_like_team", severity: "warn", message: `This sounds as if you're part of ${passion.name}'s team. Reword it as your view, or change how you're connected to it in Passions.` }]
+      : [];
   for (const v of result.data.variants.filter((x) => platforms.includes(x.platform))) {
     // Threads: each part cleaned and checked; one repair attempt for up to 3 parts that are too long.
     const wanted = threadFor.includes(v.platform) ? (v.parts ?? []).map(cleanPost).filter(Boolean) : [];
@@ -313,11 +365,18 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
           // The issue stays visible on that part.
         }
       }
+      if (link && (v.platform === "x" || LINK_AT_END.includes(v.platform))) parts.push(link);
       const text = joinParts(parts);
-      variants.push({ platform: v.platform, text, parts, issues: [...lintThread(v.platform, parts), ...checkFacts(text, source)] });
+      variants.push({ platform: v.platform, text, parts, issues: [...lintDraft(v.platform, text, parts, xLong), ...checkFacts(text, source), ...teamIssue(text)] });
       continue;
     }
-    let text = passion?.disclosure ? withDisclosure(cleanPost(v.text), passion.disclosure) : cleanPost(v.text);
+    // Link placed first (X: a line pointing to the reply), then the disclosure at the very end.
+    const finish = (raw: string) => {
+      const cleaned = cleanPost(raw);
+      const placed = placeLink(v.platform, link && passion?.disclosure ? withoutDisclosure(cleaned, passion.disclosure) : cleaned, link);
+      return passion?.disclosure ? withDisclosure(placed, passion.disclosure) : placed;
+    };
+    let text = finish(v.text);
     let issues = lintDraft(v.platform, text, null, xLong);
     // One repair attempt for hard errors (too long, placeholders); otherwise keep and show the issue.
     if (hasErrors(issues)) {
@@ -328,7 +387,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
           RepairSchema,
         );
         cost += fixed.costMicroUsd;
-        const fixedText = passion?.disclosure ? withDisclosure(cleanPost(fixed.data.text), passion.disclosure) : cleanPost(fixed.data.text);
+        const fixedText = finish(fixed.data.text);
         const fixedIssues = lintDraft(v.platform, fixedText, null, xLong);
         if (!hasErrors(fixedIssues)) {
           text = fixedText;
@@ -338,7 +397,13 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
         // Keep the original; the error stays visible to the user.
       }
     }
-    variants.push({ platform: v.platform, text, parts: null, issues: [...issues, ...checkFacts(text, source)] });
+    // X: the link goes out as the first reply, so the post becomes a two-part thread.
+    if (link && v.platform === "x") {
+      const parts = [text, link];
+      variants.push({ platform: v.platform, text: joinParts(parts), parts, issues: [...lintDraft(v.platform, joinParts(parts), parts, xLong), ...checkFacts(text, source), ...teamIssue(text)] });
+      continue;
+    }
+    variants.push({ platform: v.platform, text, parts: null, issues: [...issues, ...checkFacts(text, source), ...teamIssue(text)] });
   }
 
   // Hints research couldn't confirm: the person checks they're written as their own knowledge.

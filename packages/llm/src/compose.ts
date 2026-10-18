@@ -106,13 +106,38 @@ export function researchBlock(r: Pick<BriefResearch, "subject" | "summary" | "fa
     .join("\n");
 }
 
-/** A passion: the person follows this subject and cares about it, but doesn't speak for it. */
-function passionLines(p: { name: string; about: string; disclosure: string }): string[] {
+/**
+ * A passion, and how the author is connected to it. This is guidance for the writer, who words it
+ * to fit each post; the code only checks the outcome (see the "sounds like the team" check).
+ */
+const RELATION_GUIDE: Record<"follow" | "involved" | "ours", (name: string) => string> = {
+  follow: (n) =>
+    `The author follows and cares about ${n} but is NOT part of its team. Write as an informed, honest observer sharing why it matters. Refer to ${n} or the people behind it in the third person, naming them as the material does and varying how from post to post. Use "I" for the author's own view or experience. Use "we" or "our" only for the author's own community or audience, never for ${n}'s team or work: never write as if the author built, maintains, ships or speaks for it.`,
+  involved: (n) =>
+    `The author is involved with ${n} (for example as a contributor, ambassador or partner) but doesn't speak for the whole project. Use "I" for what the author did or thinks, credit the team by name for their work, and use "we" only for the community the author is part of. Don't present the whole project's work as the author's own.`,
+  ours: (n) =>
+    `${n} is the author's own organisation or project: they are part of the team. Write as an insider sharing their team's work. "We" and "our" are right for the team's work. Stay factual about what the material shows.`,
+};
+
+function passionLines(p: { name: string; about: string; disclosure: string; relation?: "follow" | "involved" | "ours" | undefined }): string[] {
+  const name = p.name.slice(0, 60);
   return [
-    `Passion: this material is about ${p.name.slice(0, 60)}, a subject the author follows and cares about. Write as an informed, honest member of its community sharing why it matters: never as ${p.name.slice(0, 60)} itself, never as its official voice, and never claiming its work as the author's.`,
+    `Passion: this material is about ${name}. ${RELATION_GUIDE[p.relation ?? "follow"](name)}`,
     ...(p.about ? [`The author's angle on it, in their words: ${p.about.slice(0, 300)}`] : []),
     ...(p.disclosure
       ? [`Disclosure: end each post (for a thread, its last part) with this disclosure, word for word: "${p.disclosure.slice(0, 120)}"`]
+      : []),
+  ];
+}
+
+/** The source link is added by the code; the writer leaves room for it and, on X, points to the reply. */
+function linkLines(link: { length: number; atEnd: Platform[]; xReply: boolean }, platforms: Platform[]): string[] {
+  const end = link.atEnd.filter((p) => platforms.includes(p));
+  return [
+    "Link: a link to the source is added automatically after you write. Never write the URL or a placeholder for it yourself.",
+    ...(end.length ? [`On ${end.join(", ")} it goes at the end of the post: leave about ${link.length + 2} characters for it within the length limit.`] : []),
+    ...(link.xReply && platforms.includes("x")
+      ? ["On X it is posted as the first reply. End the X post with a short, natural line in the author's voice telling readers the link is in the reply (for example pointing to it below). Vary the wording."]
       : []),
   ];
 }
@@ -130,7 +155,9 @@ export function composeUserPrompt(input: {
   /** How recent posts opened: the writer must not reuse these openings or their structure. */
   recentOpenings?: string[] | undefined;
   /** The material comes from one of the person's passions (a subject they follow and care about). */
-  passion?: { name: string; about: string; disclosure: string } | null | undefined;
+  passion?: { name: string; about: string; disclosure: string; relation?: "follow" | "involved" | "ours" | undefined } | null | undefined;
+  /** The source's link, added by the code after writing: where it goes, and how long it is. */
+  link?: { length: number; atEnd: Platform[]; xReply: boolean } | null | undefined;
 }): string {
   const thread = new Set((input.thread ?? []).filter((p) => THREADABLE.includes(p)));
   const guide = (p: Platform) => (thread.has(p) ? THREAD_GUIDE[p]! : p === "x" && input.xLong ? X_LONG_GUIDE : PLATFORM_GUIDE[p]);
@@ -141,6 +168,7 @@ export function composeUserPrompt(input: {
       : `Mode: ${input.mode}. ${MODE_GUIDE[input.mode]}`,
     ...(stance ? [stance] : []),
     ...(input.passion ? passionLines(input.passion) : []),
+    ...(input.link ? linkLines(input.link, input.platforms) : []),
     ...(input.recentOpenings?.length
       ? [
           "",
