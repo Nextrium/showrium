@@ -127,11 +127,17 @@ export const x = {
     return { accessToken: t.access_token, refreshToken: t.refresh_token, expiresAt: expiry(t.expires_in) };
   },
   async refresh(cfg: OAuthConfig, refreshToken: string, doFetch: FetchLike = fetch): Promise<TokenSet> {
-    const res = await request("X", doFetch, "https://api.x.com/2/oauth2/token", {
-      method: "POST",
-      headers: { ...FORM, Authorization: `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}` },
-      body: form({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: cfg.clientId }),
-    });
+    const res = await request(
+      "X",
+      doFetch,
+      "https://api.x.com/2/oauth2/token",
+      {
+        method: "POST",
+        headers: { ...FORM, Authorization: `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}` },
+        body: form({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: cfg.clientId }),
+      },
+      "the sign-in renewal",
+    );
     const t = (await res.json()) as { access_token: string; refresh_token?: string; expires_in?: number };
     return { accessToken: t.access_token, refreshToken: t.refresh_token ?? refreshToken, expiresAt: expiry(t.expires_in) };
   },

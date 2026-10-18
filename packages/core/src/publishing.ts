@@ -116,17 +116,40 @@ async function loadConnection(deps: PublishDeps, orgId: string, id: string) {
   return row ?? null;
 }
 
+/**
+ * A usable access token, renewed when it's about to expire. X (and TikTok) replace the refresh token
+ * on every renewal and refuse the old one, so:
+ * - the renewed secret is written back to `conn` too, so later steps of the same publish (checking
+ *   Premium, then posting; each part of a thread) use it instead of renewing again with a used token;
+ * - if a renewal is refused because another request renewed first (the scheduler and a click at the
+ *   same moment), the stored tokens are reloaded and used.
+ */
 async function freshTokens(deps: PublishDeps, conn: typeof connection.$inferSelect, secret: OAuthSecret): Promise<TokenSet> {
   const soon = Date.now() + 60_000;
-  if (!secret.tokens.expiresAt || secret.tokens.expiresAt > soon || !secret.tokens.refreshToken) return secret.tokens;
+  const usable = (t: TokenSet) => !t.expiresAt || t.expiresAt > soon || !t.refreshToken;
+  if (usable(secret.tokens)) return secret.tokens;
   const cfg = conn.platform === "x" ? deps.configs.x : conn.platform === "tiktok" ? deps.configs.tiktok : undefined;
   const refresher = conn.platform === "x" ? x.refresh : conn.platform === "tiktok" ? tiktok.refresh : undefined;
   if (!cfg || !refresher) return secret.tokens;
-  const tokens = await refresher(cfg, secret.tokens.refreshToken, deps.fetch);
-  await deps.db
-    .update(connection)
-    .set({ secret: await encryptJson(deps.key, { tokens }, aad(conn.orgId, conn.platform, conn.accountId)), expiresAt: tokens.expiresAt ? new Date(tokens.expiresAt) : null, updatedAt: new Date() })
-    .where(eq(connection.id, conn.id));
+  const key = aad(conn.orgId, conn.platform, conn.accountId);
+  let tokens: TokenSet;
+  try {
+    tokens = await refresher(cfg, secret.tokens.refreshToken!, deps.fetch);
+  } catch (error) {
+    if (!(error instanceof PlatformError) || error.kind === "unavailable" || error.kind === "rate_limited") throw error;
+    const [latest] = await deps.db.select().from(connection).where(eq(connection.id, conn.id));
+    const stored = latest && latest.secret !== conn.secret ? (await decryptJson<OAuthSecret>(deps.key, latest.secret, key)).tokens : null;
+    if (stored && usable(stored)) {
+      Object.assign(conn, { secret: latest!.secret, expiresAt: latest!.expiresAt });
+      return stored;
+    }
+    // The renewal itself was refused: the account's sign-in is no longer valid.
+    throw new PlatformError(error.platform, "auth", `${error.platform} needs you to sign in again. Reconnect the account in Accounts, then try again.`);
+  }
+  const encrypted = await encryptJson(deps.key, { tokens }, key);
+  const expiresAt = tokens.expiresAt ? new Date(tokens.expiresAt) : null;
+  await deps.db.update(connection).set({ secret: encrypted, expiresAt, updatedAt: new Date() }).where(eq(connection.id, conn.id));
+  Object.assign(conn, { secret: encrypted, expiresAt });
   return tokens;
 }
 

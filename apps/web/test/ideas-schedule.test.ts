@@ -315,6 +315,86 @@ describe("when a scheduled post fails", () => {
     expect(emails[0]!.text).toContain(`${BASE}/app/posts?status=failed`);
   });
 
+  it("a long X post after the sign-in expired: renews once, uploads the image and posts (X rotates renewal tokens)", async () => {
+    // The incident of 2026-10-18: checking Premium renewed the sign-in, then posting tried to renew
+    // again with the used token and X said "Value passed for the token was invalid."
+    const u = await user("is-xlong@example.com");
+    const d = await deps();
+    const secret = { tokens: { accessToken: "a1", refreshToken: "r1", expiresAt: Date.now() - 60_000 } };
+    await saveConnection(d, { orgId: u.orgId, platform: "x", account: { accountId: "x-long", handle: "@long" }, secret, meta: { subscription: "Premium" }, userId: u.userId });
+    const conn = (await env.DB.prepare("SELECT id FROM connection WHERE org_id = ? AND platform = 'x'").bind(u.orgId).first<{ id: string }>())!.id;
+    const text = `${"Trust that already exists should count. ".repeat(40)}`.trim(); // ~1,600 characters
+    const id = await approvedPost(u.orgId, "x", text);
+    await env.DB.prepare("UPDATE draft SET connection_id = ?, own_images = 1 WHERE id = ?").bind(conn, id).run();
+    const original = JSON.stringify({ key: `orgs/${u.orgId}/images/${id}.png`, mime: "image/png", bytes: 10243, width: 512, height: 512 });
+    await env.DB.prepare("INSERT INTO post_image (id, org_id, draft_id, position, source, alt, original, variants) VALUES (?, ?, ?, 0, 'link', 'Logo', ?, '{}')").bind(`img_${crypto.randomUUID()}`, u.orgId, id, original).run();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 2, 0, 0, 0, 2, 0]);
+    const media = { put: async () => undefined, delete: async () => undefined, get: async () => ({ arrayBuffer: async () => png.buffer.slice(0) }) };
+    // A fake X that enforces rotation: each renewal token works once.
+    const used = new Set<string>();
+    let renewals = 0;
+    let posted: { text: string; media?: { media_ids: string[] } } | null = null;
+    const fakeX = async (url: string, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("Authorization") ?? "";
+      if (url.endsWith("/2/oauth2/token")) {
+        const token = new URLSearchParams(String(init?.body)).get("refresh_token")!;
+        if (used.has(token)) return Response.json({ error: "invalid_request", error_description: "Value passed for the token was invalid." }, { status: 400 });
+        used.add(token);
+        renewals++;
+        return Response.json({ access_token: `a${renewals + 1}`, refresh_token: `r${renewals + 1}`, expires_in: 7200 });
+      }
+      if (auth === "Bearer a1") return Response.json({ title: "Unauthorized" }, { status: 401 }); // the expired one
+      if (url.includes("/2/users/me")) return Response.json({ data: { id: "x-long", username: "long", subscription_type: "Premium" } });
+      if (url.endsWith("/2/media/upload")) return Response.json({ data: { id: "m1" } });
+      if (url.endsWith("/2/media/metadata")) return Response.json({});
+      if (url.endsWith("/2/tweets")) {
+        posted = JSON.parse(String(init?.body));
+        return Response.json({ data: { id: "t1" } });
+      }
+      return new Response("{}", { status: 404 });
+    };
+    const out = await publishDraft({ ...d, fetch: fakeX as typeof fetch, media, configs: { ...d.configs, x: { clientId: "c", clientSecret: "s", redirectUri: `${BASE}/cb` } } }, { orgId: u.orgId, draftId: id });
+    expect(out).toMatchObject({ status: "published", url: "https://x.com/long/status/t1" });
+    expect(renewals).toBe(1);
+    expect(posted!.media).toEqual({ media_ids: ["m1"] }); // the image went with it
+    expect(posted!.text.length).toBeGreaterThan(280);
+    const row = await env.DB.prepare("SELECT status, last_error FROM draft WHERE id = ?").bind(id).first();
+    expect(row).toEqual({ status: "published", last_error: null });
+  });
+
+  it("a renewal refused because another request renewed first uses the stored tokens; a dead sign-in asks to reconnect", async () => {
+    const u = await user("is-xrace@example.com");
+    const d = await deps();
+    const cfg = { ...d.configs, x: { clientId: "c", clientSecret: "s", redirectUri: `${BASE}/cb` } };
+    await saveConnection(d, { orgId: u.orgId, platform: "x", account: { accountId: "x-race", handle: "@race" }, secret: { tokens: { accessToken: "old", refreshToken: "r-old", expiresAt: Date.now() - 60_000 } }, meta: { subscription: "None" }, userId: u.userId });
+    const conn = (await env.DB.prepare("SELECT id FROM connection WHERE org_id = ? AND platform = 'x'").bind(u.orgId).first<{ id: string }>())!.id;
+    const id = await approvedPost(u.orgId, "x", "Short post.");
+    await env.DB.prepare("UPDATE draft SET connection_id = ? WHERE id = ?").bind(conn, id).run();
+    let tweetedWith = "";
+    const refused = async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/2/oauth2/token")) {
+        // Meanwhile another request renewed and stored fresh tokens.
+        await saveConnection(d, { orgId: u.orgId, platform: "x", account: { accountId: "x-race", handle: "@race" }, secret: { tokens: { accessToken: "fresh", refreshToken: "r-new", expiresAt: Date.now() + 7_000_000 } }, meta: { subscription: "None" }, userId: u.userId });
+        return Response.json({ error_description: "Value passed for the token was invalid." }, { status: 400 });
+      }
+      if (url.endsWith("/2/tweets")) {
+        tweetedWith = new Headers(init?.headers).get("Authorization") ?? "";
+        return Response.json({ data: { id: "t2" } });
+      }
+      return new Response("{}", { status: 404 });
+    };
+    expect(await publishDraft({ ...d, fetch: refused as typeof fetch, configs: cfg }, { orgId: u.orgId, draftId: id })).toMatchObject({ status: "published" });
+    expect(tweetedWith).toBe("Bearer fresh");
+
+    // No fresher tokens anywhere: the sign-in is dead. Say so, and mark the account to reconnect.
+    const id2 = await approvedPost(u.orgId, "x", "Another short post.");
+    await env.DB.prepare("UPDATE draft SET connection_id = ? WHERE id = ?").bind(conn, id2).run();
+    await saveConnection(d, { orgId: u.orgId, platform: "x", account: { accountId: "x-race", handle: "@race" }, secret: { tokens: { accessToken: "x", refreshToken: "r-dead", expiresAt: Date.now() - 60_000 } }, meta: { subscription: "None" }, userId: u.userId });
+    const dead = async (url: string) => (url.endsWith("/2/oauth2/token") ? Response.json({ error_description: "Value passed for the token was invalid." }, { status: 400 }) : new Response("{}", { status: 404 }));
+    await expect(publishDraft({ ...d, fetch: dead as typeof fetch, configs: cfg }, { orgId: u.orgId, draftId: id2 })).rejects.toThrow(/sign in again/);
+    expect(await env.DB.prepare("SELECT status FROM connection WHERE id = ?").bind(conn).first()).toEqual({ status: "needs_reconnect" });
+  });
+
   it("reads reasons safely from any kind of error response", async () => {
     const r = (body: string, type = "application/json") => new Response(body, { status: 400, headers: { "Content-Type": type } });
     expect(await errorReason(r(JSON.stringify({ errors: [{ message: "Status is a duplicate." }] })))).toBe("Status is a duplicate.");
