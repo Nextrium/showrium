@@ -11,6 +11,8 @@
 - **Passions** can be approved by automation as well, with the same scheduling and email.
 - **Your connection to a passion:** "I follow it", "I'm involved" or "It's ours". Posts are written to match: your view of someone else's work, your part in a project, or your own team ("we"). If a post about something you only follow sounds as if you're on its team, it's flagged for you to check.
 - **The source link goes with the post:** at the end on LinkedIn, Facebook, Threads, Bluesky and Mastodon, and on X in the first reply (the post says so). It can be switched off per passion.
+- **No more old news on a schedule:** news from your passions is never scheduled more than 48 hours after it came out (your own releases and posts: a week). If there's no free slot in time, the post is handed to you instead.
+- **"Needs you" for time-sensitive posts:** when fresh news is worth posting but today's automated posts are used, it's written for you and flagged on Home and in Posts, with one email (at most 3 posts a day, never at night). Post it now, post it yourself, pick a time today, or skip it.
 - **X posts with a link are always "Post it myself"** (free): they're never sent, scheduled or approved by the app, because X charges much more for links. X posts without a link can still be automated.
 - **Easier X threads with "Post it myself":** paste the link to your first post and each reply opens X already replying to it, one click each. Your place is kept if you switch to the X app and back.
 - **When a scheduled post fails,** you get an email with the platform's own reason (for example what X said), and the post shows it too, so you know what to fix.

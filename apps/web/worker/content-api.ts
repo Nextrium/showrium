@@ -482,6 +482,8 @@ const DraftSchema = z
     /** Approved by automation ("Approve for me"); its time picked by automation. */
     autoApproved: z.boolean(),
     autoScheduled: z.boolean(),
+    /** Time-sensitive: best posted before this (automation couldn't fit it in time). */
+    urgentUntil: z.string().nullable(),
     createdAt: z.string(),
     /** A thread's parts in order (null for a single post), and how many have been posted. */
     parts: z.array(z.string()).nullable(),
@@ -526,6 +528,7 @@ export const toDraft = (d: DraftRow, images: ImageRow[] = []) => ({
   lastError: d.lastError,
   autoApproved: d.autoApproved,
   autoScheduled: d.autoScheduled,
+  urgentUntil: d.urgentUntil && d.urgentUntil.getTime() > Date.now() && (d.status === "draft" || d.status === "approved") ? d.urgentUntil.toISOString() : null,
   createdAt: d.createdAt.toISOString(),
   parts: d.parts ?? null,
   partsPosted: d.postedParts?.length ?? 0,
@@ -597,13 +600,13 @@ contentApi.openapi(
     method: "get",
     path: "/drafts",
     tags: ["Content"],
-    request: { query: z.object({ status: z.enum(DRAFT_STATUSES).optional(), briefId: z.string().max(64).optional() }) },
+    request: { query: z.object({ status: z.enum(DRAFT_STATUSES).optional(), briefId: z.string().max(64).optional(), needsYou: z.enum(["true"]).optional() }) },
     responses: { 200: json(z.object({ data: z.array(DraftSchema) })), ...errs },
   }),
   async (c) => {
-    const { status, briefId } = c.req.valid("query");
+    const { status, briefId, needsYou } = c.req.valid("query");
     const { orgId } = c.get("principal");
-    const rows = await listDrafts(c.get("db"), orgId, { ...(status ? { status } : {}), ...(briefId ? { briefId } : {}) });
+    const rows = await listDrafts(c.get("db"), orgId, { ...(status ? { status } : {}), ...(briefId ? { briefId } : {}), ...(needsYou ? { needsYou: true } : {}) });
     const sources = await draftSources(c.get("db"), orgId, rows.map((d) => d.briefId));
     const out = await draftsWithImages(c.get("db"), orgId, rows);
     return c.json({ data: out.map((d) => ({ ...d, source: d.briefId ? sources.get(d.briefId) ?? null : null })) }, 200);
@@ -633,7 +636,7 @@ contentApi.openapi(
     method: "patch",
     path: "/drafts/{id}",
     tags: ["Content"],
-    request: { params: z.object({ id: z.string() }), ...body(z.object({ text: z.string().trim().min(1).max(30000).optional(), parts: z.array(z.string().max(30000)).min(1).max(20).optional(), status: z.enum(["draft", "approved", "discarded"]).optional() })) },
+    request: { params: z.object({ id: z.string() }), ...body(z.object({ text: z.string().trim().min(1).max(30000).optional(), parts: z.array(z.string().max(30000)).min(1).max(20).optional(), status: z.enum(["draft", "approved", "discarded"]).optional(), needsYou: z.literal(false).optional() })) },
     responses: { 200: json(z.object({ draft: DraftSchema })), 409: json(Err, "Invalid state change"), ...errs },
   }),
   async (c) => {
@@ -649,6 +652,7 @@ contentApi.openapi(
         ...(patch.text !== undefined ? { text: patch.text } : {}),
         ...(patch.parts !== undefined ? { parts: patch.parts } : {}),
         ...(patch.status ? { status: patch.status } : {}),
+        ...(patch.needsYou === false ? { needsYou: false as const } : {}),
       });
       if (!updated) return c.json(apiError("not_found", "No such post in this workspace."), 404);
       if (patch.status === "approved" && wasScheduled) {

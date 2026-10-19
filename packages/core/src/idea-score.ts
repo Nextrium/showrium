@@ -77,6 +77,43 @@ export function isApprovable(score: number, age: number): boolean {
   return score >= IDEA_APPROVE_MIN && age <= 2 * DAY;
 }
 
+// --- Time-sensitive posts (owner decision 2026-10-19) ---------------------------------------------
+
+const HOUR = 3_600_000;
+/** How long a post stays worth posting, from when its material was published. */
+export const GOOD_FOR = { outsideNews: 48 * HOUR, ownRelease: 7 * DAY, evergreen: 30 * DAY };
+/** Extra posts automation may write per day for urgent news, beyond its daily number (they wait for the person). */
+export const URGENT_EXTRA_PER_DAY = 2;
+/** "Needs you" emails per workspace per day, and the quiet hours (local time) when none are sent. */
+export const NEEDS_YOU_ALERTS_PER_DAY = 3;
+export const QUIET_HOURS = { from: 22, to: 7 };
+
+/**
+ * When a post stops being worth posting: news from outside 48 hours after it was published; the
+ * person's own releases and blog posts after 7 days; notes, photos and evergreen material after 30.
+ */
+export function goodUntil(kind: string, origin: IdeaOrigin, publishedAt: Date | null | undefined, foundAt: Date): Date {
+  const from = (publishedAt ?? foundAt).getTime();
+  const span = origin === "outside" ? GOOD_FOR.outsideNews : kind === "github_release" || kind === "rss_item" ? GOOD_FOR.ownRelease : GOOD_FOR.evergreen;
+  return new Date(from + span);
+}
+
+const URGENT_WORDS = /\b(launch(?:ed|es)?|announc(?:e|ed|es|ement)|live now|now live|today|tonight|this week|vote|voting|deadline|ends?|ending|last chance|breaking|just (?:released|shipped|dropped)|out now)\b/i;
+
+/**
+ * Time-sensitive: strong (75+), published in the last 24 hours, and either news from outside (a
+ * passion) or worded as happening now. The person's own releases keep for a week, so they can wait.
+ */
+export function isUrgent(input: { score: number; age: number; origin: IdeaOrigin; kind: string; title: string }): boolean {
+  if (input.score < IDEA_APPROVE_MIN || input.age > DAY) return false;
+  return input.origin === "outside" || URGENT_WORDS.test(input.title);
+}
+
+/** Within the quiet hours in this timezone (no "needs you" emails then; they wait for the morning). */
+export function inQuietHours(hour: number): boolean {
+  return hour >= QUIET_HOURS.from || hour < QUIET_HOURS.to;
+}
+
 /** Two titles about the same story (word overlap), so the same news from several sources is one idea. */
 export function sameStory(a: string, b: string): boolean {
   const x = new Set(words(a));

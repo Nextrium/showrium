@@ -10,6 +10,7 @@ import {
   connection,
   contextItem,
   draft,
+  brief,
   idea,
   passion,
   source,
@@ -26,7 +27,7 @@ import { composeIdea } from "./autonomy.js";
 import { getOrgLimits, getOrgPlan } from "./content.js";
 import { recordAudit } from "./orgs.js";
 import { sourceIsLive, utcDay } from "./passions.js";
-import { ageOf, effectiveScore, isApprovable, isWritable } from "./idea-score.js";
+import { ageOf, effectiveScore, goodUntil, isApprovable, isUrgent, isWritable, URGENT_EXTRA_PER_DAY, type IdeaOrigin } from "./idea-score.js";
 import { getUsage, PLAN_FEATURES, type Plan } from "./plans.js";
 import { API_PUBLISH_PLATFORMS, scheduleDraft, xNeedsTapToPost } from "./publishing.js";
 import { isTimezone, learnWindows, localDay, localParts, pickSlot, PLATFORM_DAILY_MAX, takenTimes, windowOf, WINDOW_NAMES, type PostingWindow } from "./timing.js";
@@ -253,9 +254,31 @@ export function nextSlot(now: Date, hourUtc: number, days: number[] = ALL_DAYS):
 }
 
 /** The next posting time on an account: in a free window, learned from engagement (see timing.ts). */
-async function nextWindowSlot(db: Db, orgId: string, conn: { id: string; platform: Platform }, now: Date, s: Awaited<ReturnType<typeof getAutopilot>>, rand?: () => number) {
+async function nextWindowSlot(db: Db, orgId: string, conn: { id: string; platform: Platform }, now: Date, s: Awaited<ReturnType<typeof getAutopilot>>, notAfter?: Date | null) {
   const [taken, stats] = await Promise.all([takenTimes(db, orgId, conn.id, now), learnWindows(db, orgId, conn.platform, s.timezone, now)]);
-  return pickSlot({ now, tz: s.timezone, days: s.days, windows: s.windows, perDay: s.perDay[conn.platform] ?? 1, taken, stats, ...(rand ? { rand } : {}) });
+  return pickSlot({ now, tz: s.timezone, days: s.days, windows: s.windows, perDay: s.perDay[conn.platform] ?? 1, taken, stats, notAfter: notAfter ?? null });
+}
+
+/** Each post's "good until" (from the material it was written from), or none for posts without material. */
+async function deadlinesFor(db: Db, orgId: string, draftIds: string[]): Promise<Map<string, Date>> {
+  if (!draftIds.length) return new Map();
+  const rows = await db
+    .select({ id: draft.id, kind: contextItem.kind, publishedAt: contextItem.publishedAt, foundAt: contextItem.createdAt, passionId: source.passionId, relation: passion.relation })
+    .from(draft)
+    .innerJoin(brief, eq(brief.id, draft.briefId))
+    .innerJoin(contextItem, eq(contextItem.id, brief.contextItemId))
+    .leftJoin(source, eq(source.id, contextItem.sourceId))
+    .leftJoin(passion, eq(passion.id, source.passionId))
+    .where(and(eq(draft.orgId, orgId), inArray(draft.id, draftIds.slice(0, 50))));
+  return new Map(rows.map((r) => [r.id, goodUntil(r.kind, r.passionId && r.relation !== "ours" ? "outside" : "own", r.publishedAt, r.foundAt)]));
+}
+
+/** "Needs you": a post worth posting soon that automation couldn't fit in time. Only for deadlines within a week. */
+const NEEDS_YOU_HORIZON = 7 * DAY;
+async function markNeedsYou(db: Db, orgId: string, draftId: string, until: Date | undefined, now: Date) {
+  if (!until || until.getTime() <= now.getTime() || until.getTime() > now.getTime() + NEEDS_YOU_HORIZON) return false;
+  await db.update(draft).set({ urgentUntil: until, updatedAt: new Date() }).where(and(eq(draft.orgId, orgId), eq(draft.id, draftId)));
+  return true;
 }
 
 /**
@@ -278,14 +301,20 @@ export async function autoScheduleApprovedIds(db: Db, orgId: string, draftIds: s
     .from(draft)
     .where(and(eq(draft.orgId, orgId), inArray(draft.id, draftIds.slice(0, 50)), eq(draft.status, "approved")));
   const conns = await db.select({ id: connection.id, platform: connection.platform }).from(connection).where(and(eq(connection.orgId, orgId), eq(connection.status, "active")));
+  const deadlines = await deadlinesFor(db, orgId, rows.map((r) => r.id));
   const scheduled: string[] = [];
   for (const d of rows) {
     if (!s.rules[d.platform]?.schedule || hasErrors(d.issues)) continue;
     const conn = conns.find((c) => c.id === d.connectionId) ?? conns.find((c) => c.platform === d.platform && API_PUBLISH_PLATFORMS.includes(c.platform));
     if (!conn || !API_PUBLISH_PLATFORMS.includes(conn.platform)) continue;
     try {
-      const at = await nextWindowSlot(db, orgId, conn, now, s);
-      if (!at) continue; // nothing free in the next two weeks: stays approved
+      // Never later than the post's "good until": news isn't posted three days late.
+      const at = await nextWindowSlot(db, orgId, conn, now, s, deadlines.get(d.id));
+      if (!at) {
+        // No time before it goes stale: stays approved, and the person is told it needs them.
+        await markNeedsYou(db, orgId, d.id, deadlines.get(d.id), now);
+        continue;
+      }
       await scheduleDraft(db, orgId, d.id, { at, connectionId: conn.id, auto: true });
       scheduled.push(d.id);
     } catch {
@@ -335,7 +364,9 @@ export async function moveAutoScheduled(db: Db, orgId: string, draftIds: string[
       .where(and(eq(draft.orgId, orgId), eq(draft.id, id), eq(draft.status, "scheduled"), eq(draft.autoScheduled, true)))
       .returning({ id: draft.id, platform: draft.platform, connectionId: draft.connectionId });
     if (!d?.connectionId) continue;
-    const at = await nextWindowSlot(db, orgId, { id: d.connectionId, platform: d.platform }, now, s);
+    const until = (await deadlinesFor(db, orgId, [d.id])).get(d.id);
+    const at = await nextWindowSlot(db, orgId, { id: d.connectionId, platform: d.platform }, now, s, until);
+    if (!at) await markNeedsYou(db, orgId, d.id, until, now);
     if (at) await scheduleDraft(db, orgId, d.id, { at, connectionId: d.connectionId, auto: true });
     else await db.update(draft).set({ autoScheduled: false }).where(eq(draft.id, d.id));
     moved.push({ id: d.id, at });
@@ -386,6 +417,58 @@ async function xAllowanceLeft(db: Db, orgId: string) {
   return Math.max(0, limits.xApiPosts - usage.xApiPosts - Number(pending?.n ?? 0));
 }
 
+/** Good, fresh ideas automation may write from (score 60+; outside news at most 3 days old, own material 14), best first. */
+async function candidateIdeas(db: Db, orgId: string, now: Date) {
+  const rows = await db
+    .select({ id: idea.id, kind: contextItem.kind, title: contextItem.title, base: idea.score, createdAt: idea.createdAt, publishedAt: contextItem.publishedAt, externalId: contextItem.externalId, passionId: source.passionId, relation: passion.relation })
+    .from(idea)
+    .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
+    .leftJoin(source, eq(source.id, contextItem.sourceId))
+    .leftJoin(passion, eq(passion.id, source.passionId))
+    // Ideas from a passion that's off or outside its dates wait until it's live again.
+    .where(and(eq(idea.orgId, orgId), eq(idea.status, "new"), gte(idea.createdAt, new Date(now.getTime() - 30 * DAY)), sourceIsLive(source.passionId, utcDay(now))))
+    .orderBy(desc(idea.score), desc(idea.createdAt))
+    .limit(100);
+  return rows
+    .map((c) => {
+      const age = ageOf(c.publishedAt, c.createdAt, now);
+      const origin: IdeaOrigin = c.passionId && c.relation !== "ours" ? "outside" : "own";
+      return { ...c, age, origin, score: effectiveScore(c.base, age) };
+    })
+    .filter((c) => isWritable(c.score, c.age, c.origin))
+    .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Urgent news when the day's automated posts are already used: writes it (at most 2 a day, within
+ * the plan's allowance) and marks it "needs you" so the person posts it now or picks a time today.
+ * Never approved or scheduled by automation, and never beyond the daily numbers on the accounts.
+ */
+async function urgentExtra(
+  db: Db,
+  providers: Provider[],
+  orgId: string,
+  now: Date,
+  s: Awaited<ReturnType<typeof getAutopilot>>,
+  writing: Platform[],
+  log: { at: number; mode: ContentMode; platforms?: Platform[]; briefId?: string; urgent?: boolean }[],
+  afterCompose?: AfterCompose,
+) {
+  const today = localDay(now, s.timezone);
+  if (log.filter((l) => l.urgent && localDay(new Date(l.at), s.timezone) === today).length >= URGENT_EXTRA_PER_DAY) return null;
+  if ((await getUsage(db, orgId)).postsGenerated + writing.length > (await getOrgLimits(db, orgId)).limits.posts) return null;
+  const best = (await candidateIdeas(db, orgId, now)).find((c) => isUrgent({ score: c.score, age: c.age, origin: c.origin, kind: c.kind, title: c.title }));
+  if (!best) return null;
+  const mode = pickMode(s.mix, log, now) ?? "teach";
+  const out = await composeIdea(db, providers, { orgId, ideaId: best.id, mode, platforms: writing });
+  await afterCompose?.(orgId, out.briefId).catch(() => undefined);
+  const until = goodUntil(best.kind, best.origin, best.publishedAt, best.createdAt);
+  for (const d of out.drafts) await markNeedsYou(db, orgId, d.id, until, now);
+  await db.update(autopilot).set({ weekLog: [...log, { at: now.getTime(), mode, platforms: writing, briefId: out.briefId, urgent: true }] }).where(eq(autopilot.orgId, orgId));
+  await recordAudit(db, { orgId, actorUserId: null, action: "autopilot.urgent", target: best.id, meta: { mode, drafts: out.drafts.length, until: until.toISOString() } });
+  return { ideaId: best.id, mode, drafts: out.drafts.length, approved: 0, scheduled: 0, urgent: true as const };
+}
+
 export async function runAutopilotFor(db: Db, providers: Provider[], orgId: string, now = new Date(), afterCompose?: AfterCompose, onScheduled?: OnAutoScheduled) {
   const s = await getAutopilot(db, orgId);
   const plan = await getOrgPlan(db, orgId);
@@ -410,29 +493,18 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   const platforms = dayOff
     ? []
     : writing.filter((x) => writtenToday(x) < (s.perDay[x] ?? 1) && waiting.filter((w) => w.platform === x).length < 2 * (s.perDay[x] ?? 1));
-  if (!platforms.length) return { skipped: dayOff ? ("day_off" as const) : ("daily_limit" as const) };
+  if (!platforms.length) {
+    if (dayOff) return { skipped: "day_off" as const };
+    // The day's automated posts are used, but urgent news shouldn't wait days: write it for the person.
+    const urgent = await urgentExtra(db, providers, orgId, now, s, writing, log, afterCompose);
+    return urgent ?? { skipped: "daily_limit" as const };
+  }
   // Automation spends only the plan's monthly allowance, never credits.
   if ((await getUsage(db, orgId)).postsGenerated + platforms.length > (await getOrgLimits(db, orgId)).limits.posts) return { skipped: "plan_allowance" as const };
   const mode = pickMode(s.mix, log, now);
   if (!mode) return { skipped: "no_styles" as const };
 
-  const rows = await db
-    .select({ id: idea.id, kind: contextItem.kind, base: idea.score, createdAt: idea.createdAt, publishedAt: contextItem.publishedAt, externalId: contextItem.externalId, passionId: source.passionId, relation: passion.relation })
-    .from(idea)
-    .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
-    .leftJoin(source, eq(source.id, contextItem.sourceId))
-    .leftJoin(passion, eq(passion.id, source.passionId))
-    // Ideas from a passion that's off or outside its dates wait until it's live again.
-    .where(and(eq(idea.orgId, orgId), eq(idea.status, "new"), gte(idea.createdAt, new Date(now.getTime() - 30 * DAY)), sourceIsLive(source.passionId, utcDay(now))))
-    .orderBy(desc(idea.score), desc(idea.createdAt))
-    .limit(100);
-  // Only good, fresh ideas (score 60+; outside news at most 3 days old, the person's own material 14).
-  const candidates = rows
-    .map((c) => {
-      const age = ageOf(c.publishedAt, c.createdAt, now);
-      return { ...c, age, score: effectiveScore(c.base, age) };
-    })
-    .filter((c) => isWritable(c.score, c.age, c.passionId && c.relation !== "ours" ? "outside" : "own"));
+  const candidates = await candidateIdeas(db, orgId, now);
   if (!candidates.length) return { skipped: "no_ideas" as const };
   // Best score, with a nudge towards material that suits this week's style.
   const best = candidates.map((c) => ({ ...c, rank: c.score + (SUITS[mode].includes(c.kind) ? 15 : 0) })).sort((a, b) => b.rank - a.rank)[0]!;
@@ -460,6 +532,11 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   }
   const scheduledIds = await autoScheduleApprovedIds(db, orgId, approved, now);
   if (scheduledIds.length) await onScheduled?.(orgId, scheduledIds).catch((error) => console.warn("autopilot notification failed", error instanceof Error ? error.message : error));
+  // Written from urgent news but not on its way out (waiting for review, or no time left): it needs the person.
+  if (isUrgent({ score: best.score, age: best.age, origin: best.origin, kind: best.kind, title: best.title })) {
+    const until = goodUntil(best.kind, best.origin, best.publishedAt, best.createdAt);
+    for (const d of out.drafts) if (!scheduledIds.includes(d.id)) await markNeedsYou(db, orgId, d.id, until, now);
+  }
   const scheduled = scheduledIds.length;
   await recordAudit(db, { orgId, actorUserId: null, action: "autopilot.run", target: best.id, meta: { mode, drafts: out.drafts.length, approved: approved.length, scheduled } });
   return { ideaId: best.id, mode, drafts: out.drafts.length, approved: approved.length, scheduled };

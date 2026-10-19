@@ -17,6 +17,8 @@ export type Draft = {
   /** Approved by automation; its time picked by automation. */
   autoApproved?: boolean;
   autoScheduled?: boolean;
+  /** Time-sensitive: best posted before this (automation couldn't fit it in time). */
+  urgentUntil?: string | null;
   createdAt: string;
   parts?: string[] | null;
   partsPosted?: number;

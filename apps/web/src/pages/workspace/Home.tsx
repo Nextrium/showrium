@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { DailyPrompt } from "../../components/DailyPrompt";
+import { NeedsYouBanner } from "../../components/NeedsYou";
 import { authClient, navigate, useApi, useRedirect } from "../../lib";
 import { planLabel } from "../../shell/AppShell";
 import { Link } from "../../ui/Link";
@@ -82,6 +83,7 @@ export function AppHome() {
             : " "
         }
       />
+      <NeedsYouBanner />
 
       {persona && !persona.persona && (
         <Panel className="border-accent/40 bg-accent-soft">

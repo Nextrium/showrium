@@ -19,6 +19,11 @@ import {
   parseFeed,
   publishDraft,
   rescoreOldIdeas,
+  goodUntil,
+  inQuietHours,
+  isUrgent,
+  pickSlot,
+  sendNeedsYouNotices,
   runAutopilotFor,
   sameStory,
   saveConnection,
@@ -414,6 +419,126 @@ describe("when a scheduled post fails", () => {
     expect(parseDate("yesterday-ish", now)).toBeNull();
     expect(parseDate("", now)).toBeNull();
     expect(parseDate("1970-01-01T00:00:00Z", now)).toBeNull();
+  });
+});
+
+describe("time-sensitive posts and 'needs you' (owner decision 2026-10-19)", () => {
+  const H = 3_600_000;
+  /** An approved post written from material published `hoursAgo` (from a passion the person follows, unless `own`). */
+  async function postFrom(u: Awaited<ReturnType<typeof user>>, platform: string, hoursAgo: number, own = false) {
+    let sourceId: string | null = null;
+    if (!own) {
+      const p = (await (await u.call("POST", "/passions", { name: `News ${crypto.randomUUID().slice(0, 6)}` })).json()) as { id: string };
+      sourceId = `src_${crypto.randomUUID()}`;
+      await env.DB.prepare("INSERT INTO source (id, org_id, kind, key, passion_id) VALUES (?, ?, 'rss', ?, ?)").bind(sourceId, u.orgId, `https://news.example/${sourceId}`, p.id).run();
+    }
+    const ctx = `ctx_${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO context_item (id, org_id, source_id, kind, title, body, published_at) VALUES (?, ?, ?, 'rss_item', 'News', 'b', ?)").bind(ctx, u.orgId, sourceId, Date.now() - hoursAgo * H).run();
+    const brief = `brf_${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO brief (id, org_id, context_item_id, mode, angle, key_points, model) VALUES (?, ?, ?, 'teach', 'a', '[]', 'test')").bind(brief, u.orgId, ctx).run();
+    const id = await approvedPost(u.orgId, platform);
+    await env.DB.prepare("UPDATE draft SET brief_id = ? WHERE id = ?").bind(brief, id).run();
+    return id;
+  }
+
+  it("knows how long a post stays worth posting, what's urgent, and the quiet hours", () => {
+    const at = new Date("2026-10-19T08:00:00Z");
+    expect(goodUntil("rss_item", "outside", at, at).toISOString()).toBe("2026-10-21T08:00:00.000Z"); // news: 48 hours
+    expect(goodUntil("github_release", "own", at, at).toISOString()).toBe("2026-10-26T08:00:00.000Z"); // your release: 7 days
+    expect(goodUntil("manual", "own", at, at).toISOString()).toBe("2026-11-18T08:00:00.000Z"); // a note: 30 days
+    expect(isUrgent({ score: 80, age: 2 * H, origin: "outside", kind: "rss_item", title: "Anything" })).toBe(true);
+    expect(isUrgent({ score: 80, age: 2 * H, origin: "own", kind: "manual", title: "Voting closes today" })).toBe(true);
+    expect(isUrgent({ score: 80, age: 2 * H, origin: "own", kind: "manual", title: "Thoughts on naming" })).toBe(false);
+    expect(isUrgent({ score: 90, age: 2 * H, origin: "own", kind: "github_release", title: "acme/app v2.0.0" })).toBe(false); // your own release keeps for a week
+    expect(isUrgent({ score: 70, age: 2 * H, origin: "outside", kind: "rss_item", title: "Launched" })).toBe(false); // not strong enough
+    expect(isUrgent({ score: 90, age: 30 * H, origin: "outside", kind: "rss_item", title: "Launched" })).toBe(false); // not fresh
+    expect([22, 23, 0, 6].every(inQuietHours)).toBe(true);
+    expect([7, 12, 21].some(inQuietHours)).toBe(false);
+    // The slot picker never goes past a post's deadline.
+    const now = new Date("2026-10-19T20:30:00Z");
+    const base = { now, tz: "UTC", days: [0, 1, 2, 3, 4, 5, 6], windows: ["morning" as const], perDay: 1, taken: [], stats: {} };
+    expect(pickSlot({ ...base, notAfter: new Date("2026-10-20T06:00:00Z") })).toBeNull(); // the next morning slot is after it
+    expect(pickSlot({ ...base, notAfter: new Date("2026-10-20T12:00:00Z") })!.getTime()).toBeLessThanOrEqual(Date.parse("2026-10-20T12:00:00Z"));
+  });
+
+  it("never schedules news after it goes stale: it's handed to you instead", async () => {
+    const u = await user("is-stale@example.com");
+    await connect(u, "bluesky");
+    // Only evening slots, one a day; this evening is already taken by your own post.
+    await u.call("PUT", "/autopilot", settings({ windows: ["evening"], rules: { bluesky: { write: false, schedule: true, approve: false } } }));
+    const conn = (await env.DB.prepare("SELECT id FROM connection WHERE org_id = ?").bind(u.orgId).first<{ id: string }>())!.id;
+    const evening = new Date();
+    evening.setUTCHours(20, 30, 0, 0);
+    if (evening.getTime() < Date.now() + 3 * H) evening.setUTCDate(evening.getUTCDate() + 1);
+    await env.DB.prepare("INSERT INTO draft (id, org_id, platform, text, status, issues, connection_id, scheduled_at) VALUES (?, ?, 'bluesky', 'Mine', 'scheduled', '[]', ?, ?)").bind(`drf_${crypto.randomUUID()}`, u.orgId, conn, evening.getTime()).run();
+    // News published 46 hours ago: good for 2 more hours, and there's no free slot before then.
+    const id = await postFrom(u, "bluesky", 46);
+    expect(await autoScheduleApproved(createDb(env.DB), u.orgId, [id])).toBe(0);
+    const row = (await env.DB.prepare("SELECT status, urgent_until FROM draft WHERE id = ?").bind(id).first<{ status: string; urgent_until: number }>())!;
+    expect(row.status).toBe("approved");
+    expect(Math.abs(row.urgent_until - (Date.now() + 2 * H))).toBeLessThan(5 * 60_000);
+    // It shows as "needs you", and Skip clears it (the post stays).
+    expect(((await (await u.call("GET", "/summary")).json()) as { needsYou: number }).needsYou).toBe(1);
+    const list = (await (await u.call("GET", "/drafts?needsYou=true")).json()) as { data: { id: string; urgentUntil: string | null }[] };
+    expect(list.data.map((d) => d.id)).toEqual([id]);
+    expect(list.data[0]!.urgentUntil).not.toBeNull();
+    const skipped = (await (await u.call("PATCH", `/drafts/${id}`, { needsYou: false })).json()) as { draft: { status: string; urgentUntil: string | null } };
+    expect(skipped.draft).toMatchObject({ status: "approved", urgentUntil: null });
+    // Your own old note isn't urgent: no deadline within the week, it simply stays approved.
+    const note = await postFrom(u, "bluesky", 46, true);
+    await autoScheduleApproved(createDb(env.DB), u.orgId, [note]);
+    expect((await env.DB.prepare("SELECT urgent_until FROM draft WHERE id = ?").bind(note).first<{ urgent_until: number | null }>())!.urgent_until).toBeNull();
+  });
+
+  it("when the day's automated posts are used, urgent news is still written (2 a day at most) and marked 'needs you'", async () => {
+    const u = await user("is-urgentrun@example.com");
+    await u.call("PUT", "/autopilot", settings({ rules: { linkedin: { write: true, schedule: false, approve: false } }, perDay: { linkedin: 1 } }));
+    // Today's automated LinkedIn post is already written.
+    await env.DB.prepare("UPDATE autopilot SET week_log = ? WHERE org_id = ?").bind(JSON.stringify([{ at: Date.now() - 60_000, mode: "teach", platforms: ["linkedin"] }]), u.orgId).run();
+    const p = (await (await u.call("POST", "/passions", { name: "Cardano" })).json()) as { id: string };
+    const fresh = async (title: string) => {
+      const src = `src_${crypto.randomUUID()}`;
+      await env.DB.prepare("INSERT INTO source (id, org_id, kind, key, passion_id) VALUES (?, ?, 'rss', ?, ?)").bind(src, u.orgId, `https://n.example/${src}`, p.id).run();
+      const ctx = `ctx_${crypto.randomUUID()}`;
+      await env.DB.prepare("INSERT INTO context_item (id, org_id, source_id, kind, title, body, published_at) VALUES (?, ?, ?, 'rss_item', ?, 'b', ?)").bind(ctx, u.orgId, src, title, Date.now() - H).run();
+      await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: ctx, title }], "Cardano", { passionName: "Cardano" });
+    };
+    await fresh("Cardano node 10.5 released with faster sync");
+    await fresh("Cardano governance vote opens for treasury withdrawals");
+    await fresh("Cardano wallet 3.1 released with hardware support");
+    const run = () => runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId);
+    expect(await run()).toMatchObject({ urgent: true, drafts: 1, approved: 0 });
+    const marked = await env.DB.prepare("SELECT urgent_until FROM draft WHERE org_id = ? AND status = 'draft'").bind(u.orgId).all<{ urgent_until: number | null }>();
+    expect(marked.results.every((r) => r.urgent_until && r.urgent_until > Date.now())).toBe(true);
+    expect(await run()).toMatchObject({ urgent: true });
+    expect(await run()).toEqual({ skipped: "daily_limit" }); // at most 2 extra a day
+  });
+
+  it("emails at most 3 a day, never in the quiet hours, each post once", async () => {
+    const u = await user("is-alerts@example.com");
+    await env.DB.prepare("UPDATE user SET email_verified = 1 WHERE id = ?").bind(u.userId).run();
+    await u.call("PUT", "/autopilot", settings({ timezone: "UTC" }));
+    // Fixed times (UTC workspace): a night check, then the next day's.
+    const night = new Date("2030-03-04T23:30:00Z");
+    const morning = new Date("2030-03-05T08:00:00Z");
+    for (let i = 0; i < 5; i++) {
+      const id = await approvedPost(u.orgId, "linkedin", `Urgent ${i}`);
+      await env.DB.prepare("UPDATE draft SET urgent_until = ? WHERE id = ?").bind(Date.parse("2030-03-05T18:00:00Z") + i * H, id).run();
+    }
+    const sent: string[] = [];
+    const send = async (emails: { to: string; text: string }[]) => sent.push(...emails.filter((e) => e.to === "is-alerts@example.com").map((e) => e.text));
+    await sendNeedsYouNotices(createDb(env.DB), BASE, send, night);
+    expect(sent).toEqual([]); // quiet hours: nothing
+    await sendNeedsYouNotices(createDb(env.DB), BASE, send, morning);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.match(/• LinkedIn/g)).toHaveLength(3); // the 3 most pressing, in one email
+    expect(sent[0]).toContain("Urgent 0");
+    expect(sent[0]).not.toContain("Urgent 4");
+    expect(sent[0]).toContain(`${BASE}/app/posts?needs=1`);
+    await sendNeedsYouNotices(createDb(env.DB), BASE, send, new Date("2030-03-05T10:00:00Z"));
+    expect(sent).toHaveLength(1); // the day's 3 are used; the same posts are never emailed twice
+    const notified = await env.DB.prepare("SELECT count(*) AS n FROM draft WHERE org_id = ? AND urgent_notified_at IS NOT NULL").bind(u.orgId).first<{ n: number }>();
+    expect(notified!.n).toBe(3);
   });
 });
 

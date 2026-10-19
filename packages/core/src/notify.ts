@@ -1,9 +1,11 @@
 // Telling people what automation scheduled, before it goes out (owner decision 2026-10-18): approved
 // posts are always scheduled ahead, and this email is the chance to check, cancel or let them be.
-import { and, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNull } from "drizzle-orm";
 import { draft, membership, user, type Db, type Platform } from "@nextrium/db";
 import { getAutopilot } from "./automation.js";
 import { actionEmail, type Email } from "./email.js";
+import { inQuietHours, NEEDS_YOU_ALERTS_PER_DAY } from "./idea-score.js";
+import { localDay, localParts } from "./timing.js";
 
 const NAMES: Record<Platform, string> = { x: "X", linkedin: "LinkedIn", bluesky: "Bluesky", mastodon: "Mastodon", threads: "Threads", facebook: "Facebook", instagram: "Instagram", tiktok: "TikTok", youtube_shorts: "YouTube Shorts" };
 
@@ -47,6 +49,53 @@ export async function failedPostEmails(db: Db, orgId: string, draftIds: string[]
       outro: "Fix what's needed, then post it now or schedule it again. Nothing else is affected.",
     }),
   );
+}
+
+/**
+ * Cron: "needs you" emails for time-sensitive posts automation couldn't fit in time. Grouped per
+ * workspace, at most 3 posts a day, never in the quiet hours (22:00 to 07:00 local; they wait for the
+ * morning), and each post at most once. Posts beyond the day's 3 are still shown in the app.
+ */
+export async function sendNeedsYouNotices(db: Db, appUrl: string, send: (emails: Email[]) => Promise<unknown>, now = new Date()) {
+  const due = await db
+    .select({ id: draft.id, orgId: draft.orgId, platform: draft.platform, text: draft.text, until: draft.urgentUntil })
+    .from(draft)
+    .where(and(gt(draft.urgentUntil, now), isNull(draft.urgentNotifiedAt), inArray(draft.status, ["draft", "approved"])))
+    .orderBy(asc(draft.urgentUntil))
+    .limit(200);
+  const byOrg = new Map<string, typeof due>();
+  for (const d of due) byOrg.set(d.orgId, [...(byOrg.get(d.orgId) ?? []), d]);
+  let sent = 0;
+  for (const [orgId, posts] of byOrg) {
+    const s = await getAutopilot(db, orgId);
+    if (inQuietHours(localParts(now, s.timezone).hour)) continue;
+    const today = localDay(now, s.timezone);
+    const recent = await db.select({ at: draft.urgentNotifiedAt }).from(draft).where(and(eq(draft.orgId, orgId), gte(draft.urgentNotifiedAt, new Date(now.getTime() - 86_400_000))));
+    const left = NEEDS_YOU_ALERTS_PER_DAY - recent.filter((r) => r.at && localDay(r.at, s.timezone) === today).length;
+    if (left <= 0) continue;
+    const pick = posts.slice(0, left);
+    const when = new Intl.DateTimeFormat("en-GB", { timeZone: s.timezone, weekday: "short", hour: "2-digit", minute: "2-digit" });
+    const lines = pick.map((p) => {
+      const text = p.text.replace(/\s+/g, " ").trim();
+      return `• ${NAMES[p.platform]}, best posted before ${when.format(p.until!)}: "${text.length > 90 ? `${text.slice(0, 90)}…` : text}"`;
+    });
+    const n = pick.length;
+    const emails = (await notifyWho(db, orgId)).map((who) =>
+      actionEmail({
+        to: who.email,
+        name: who.name,
+        subject: n === 1 ? "A time-sensitive post needs you" : `${n} time-sensitive posts need you`,
+        intro: `${n === 1 ? "This is fresh news" : "These are fresh news"}, and today's automated posts are already used, so ${n === 1 ? "it waits" : "they wait"} for you (${s.timezone}):\n\n${lines.join("\n")}`,
+        button: n === 1 ? "See it" : "See them",
+        url: `${new URL(appUrl).origin}/app/posts?needs=1`,
+        outro: "Post now, post it yourself, pick a time today, or skip it. After the time shown it's no longer news.",
+      }),
+    );
+    await send(emails);
+    await db.update(draft).set({ urgentNotifiedAt: now }).where(and(eq(draft.orgId, orgId), inArray(draft.id, pick.map((p) => p.id))));
+    sent += n;
+  }
+  return sent;
 }
 
 /** The emails to send for posts automation just scheduled: one per owner or admin with a confirmed email. */

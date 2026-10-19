@@ -1,6 +1,6 @@
 // Persona, context items, drafts and the compose pipeline. Every function takes orgId and
 // filters by it: tenant isolation lives here, never in the caller.
-import { and, desc, eq, gte, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNull } from "drizzle-orm";
 import {
   brief,
   connection,
@@ -465,10 +465,12 @@ async function chargeResearch(db: Db, orgId: string, limits: Limits, idempotency
 
 // --- Drafts -----------------------------------------------------------------
 
-export async function listDrafts(db: Db, orgId: string, filter: { status?: DraftStatus; briefId?: string } = {}) {
+export async function listDrafts(db: Db, orgId: string, filter: { status?: DraftStatus; briefId?: string; needsYou?: boolean } = {}) {
   const conditions = [eq(draft.orgId, orgId)];
   if (filter.status) conditions.push(eq(draft.status, filter.status));
   if (filter.briefId) conditions.push(eq(draft.briefId, filter.briefId));
+  // Time-sensitive posts automation couldn't fit in time, still worth posting.
+  if (filter.needsYou) conditions.push(gt(draft.urgentUntil, new Date()), inArray(draft.status, ["draft", "approved"]));
   return db.select().from(draft).where(and(...conditions)).orderBy(desc(draft.createdAt)).limit(200);
 }
 
@@ -531,7 +533,7 @@ export class DraftStateError extends Error {
   }
 }
 
-export async function updateDraft(db: Db, orgId: string, id: string, patch: { text?: string; parts?: string[] | null; status?: DraftStatus }) {
+export async function updateDraft(db: Db, orgId: string, id: string, patch: { text?: string; parts?: string[] | null; status?: DraftStatus; needsYou?: false }) {
   const current = await getDraft(db, orgId, id);
   if (!current) return null;
   if (current.status === "published" || current.status === "publishing") throw new DraftStateError("Published posts can't be edited here.");
@@ -560,7 +562,10 @@ export async function updateDraft(db: Db, orgId: string, id: string, patch: { te
       set.scheduledAt = null;
       set.autoScheduled = false;
     }
+    if (patch.status === "discarded" || patch.status === "published") set.urgentUntil = null;
   }
+  // "Skip": the person saw it and doesn't want to post it urgently (the post itself stays).
+  if (patch.needsYou === false) set.urgentUntil = null;
   // Guard against concurrent edits changing a post that just started publishing.
   await db
     .update(draft)

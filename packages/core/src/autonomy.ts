@@ -1,6 +1,6 @@
 // Phase 5: autonomy and learning. Ideas from sources, autopilot, the engagement listener,
 // audience insights and analytics. Every function filters by orgId (tenant isolation lives here).
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import {
   brief,
   connection,
@@ -559,6 +559,10 @@ export async function getAnalytics(db: Db, orgId: string, now = new Date()) {
 /** Counts for navigation badges: drafts waiting and new ideas. Cheap (two counts). */
 export async function getSummary(db: Db, orgId: string) {
   const [drafts] = await db.select({ n: sql<number>`count(*)` }).from(draft).where(and(eq(draft.orgId, orgId), eq(draft.status, "draft")));
+  const [needs] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(draft)
+    .where(and(eq(draft.orgId, orgId), gt(draft.urgentUntil, new Date()), inArray(draft.status, ["draft", "approved"])));
   // Only the ideas worth looking at (the same ones Ideas shows by default).
-  return { drafts: Number(drafts?.n ?? 0), ideas: (await ideaCounts(db, orgId)).new };
+  return { drafts: Number(drafts?.n ?? 0), ideas: (await ideaCounts(db, orgId)).new, needsYou: Number(needs?.n ?? 0) };
 }

@@ -450,6 +450,10 @@ export const draft = sqliteTable(
     autoApproved: integer("auto_approved", { mode: "boolean" }).notNull().default(false),
     /** Its time was picked by automation (a person may have approved it). */
     autoScheduled: integer("auto_scheduled", { mode: "boolean" }).notNull().default(false),
+    /** Time-sensitive and automation couldn't fit it in time: the person should act before this. */
+    urgentUntil: integer("urgent_until", { mode: "timestamp_ms" }),
+    /** When the person was emailed about it (each post at most once). */
+    urgentNotifiedAt: integer("urgent_notified_at", { mode: "timestamp_ms" }),
     /** Account to publish to (API path) and how it was published. */
     connectionId: text("connection_id"),
     publishMethod: text("publish_method", { enum: ["api", "tap_to_post", "manual"] }),
@@ -643,7 +647,7 @@ export const autopilot = sqliteTable(
     /** Days of the week to post on (0 = Sunday, UTC). */
     days: text("days", { mode: "json" }).$type<number[]>().notNull().default(sql`'[0,1,2,3,4,5,6]'`),
     /** What automation wrote in the last 7 days (style, platforms, brief), to follow the mix and daily limits. */
-    weekLog: text("week_log", { mode: "json" }).$type<{ at: number; mode: ContentMode; platforms?: Platform[]; briefId?: string }[]>().notNull().default(sql`'[]'`),
+    weekLog: text("week_log", { mode: "json" }).$type<{ at: number; mode: ContentMode; platforms?: Platform[]; briefId?: string; urgent?: boolean }[]>().notNull().default(sql`'[]'`),
     // Automation v2 (2026-10-17): posting windows in the person's timezone, and posts per day per platform.
     /** IANA timezone, e.g. "Africa/Lagos". */
     timezone: text("timezone").notNull().default("UTC"),

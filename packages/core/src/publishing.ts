@@ -310,7 +310,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     }
     await db
       .update(draft)
-      .set({ status: "published", publishedAt: new Date(), externalPostId: result.externalId, externalUrl: result.url, publishMethod: "api", lastError: cache.imageNotes?.length ? `Posted, but not every image went with it. ${cache.imageNotes.join(" ")}` : null, updatedAt: new Date() })
+      .set({ status: "published", publishedAt: new Date(), externalPostId: result.externalId, externalUrl: result.url, publishMethod: "api", urgentUntil: null, lastError: cache.imageNotes?.length ? `Posted, but not every image went with it. ${cache.imageNotes.join(" ")}` : null, updatedAt: new Date() })
       .where(eq(draft.id, d.id));
     await recordAudit(db, { orgId: input.orgId, actorUserId: input.actorUserId ?? null, action: "draft.published", target: d.id, meta: { platform: conn.platform, parts: parts.length, images: images.length, imagesLeftOut: cache.imageNotes?.length ?? 0 } });
     return { status: "published" as const, url: result.url };
@@ -341,7 +341,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
 export async function markPublishedManually(db: Db, orgId: string, draftId: string, url: string | null) {
   const [row] = await db
     .update(draft)
-    .set({ status: "published", publishedAt: new Date(), publishMethod: "tap_to_post", externalUrl: url, updatedAt: new Date() })
+    .set({ status: "published", publishedAt: new Date(), publishMethod: "tap_to_post", externalUrl: url, urgentUntil: null, updatedAt: new Date() })
     .where(and(eq(draft.orgId, orgId), eq(draft.id, draftId), inArray(draft.status, ["approved", "failed", "scheduled"])))
     .returning({ id: draft.id });
   return Boolean(row);
@@ -358,7 +358,7 @@ export async function scheduleDraft(db: Db, orgId: string, draftId: string, inpu
   if (xNeedsTapToPost(conn.platform, d.text)) throw new PublishError("needs_tap_to_post", TAP_TO_POST_MESSAGE);
   const [row] = await db
     .update(draft)
-    .set({ status: "scheduled", scheduledAt: input.at, connectionId: conn.id, autoScheduled: Boolean(input.auto), updatedAt: new Date() })
+    .set({ status: "scheduled", scheduledAt: input.at, connectionId: conn.id, autoScheduled: Boolean(input.auto), urgentUntil: null, updatedAt: new Date() })
     .where(and(eq(draft.orgId, orgId), eq(draft.id, draftId), inArray(draft.status, ["approved", "failed", "scheduled"])))
     .returning({ id: draft.id });
   if (!row) throw new PublishError("not_ready", "Approve the post before scheduling it.");

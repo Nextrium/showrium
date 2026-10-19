@@ -439,6 +439,6 @@ autonomyApi.openapi(
 
 autonomyApi.use("/summary", requirePrincipal);
 autonomyApi.openapi(
-  createRoute({ method: "get", path: "/summary", tags: ["Autonomy"], responses: { 200: json(z.object({ drafts: z.number(), ideas: z.number() })), ...errs } }),
+  createRoute({ method: "get", path: "/summary", tags: ["Autonomy"], responses: { 200: json(z.object({ drafts: z.number(), ideas: z.number(), needsYou: z.number() })), ...errs } }),
   async (c) => c.json(await getSummary(c.get("db"), c.get("principal").orgId), 200),
 );
