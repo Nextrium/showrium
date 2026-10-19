@@ -104,6 +104,10 @@ export const org = sqliteTable("org", {
   fullAccessNote: text("full_access_note"),
   fullAccessBy: text("full_access_by"),
   fullAccessAt: integer("full_access_at", { mode: "timestamp_ms" }),
+  /** Paused by Showrium staff (abuse): automation and publishing stop until resumed. Nothing is deleted. */
+  pausedAt: integer("paused_at", { mode: "timestamp_ms" }),
+  pausedReason: text("paused_reason"),
+  pausedBy: text("paused_by"),
   createdAt: createdAt(),
 });
 
@@ -317,6 +321,29 @@ export const persona = sqliteTable("persona", {
   monetizationSafe: integer("monetization_safe", { mode: "boolean" }).notNull().default(false),
   updatedAt: updatedAt(),
 });
+
+/**
+ * Every AI call's cost, for the admin app (cost per feature, model and workspace). Workers AI calls
+ * (images, transcription, photo reading, narration) don't return a price: those are estimates from
+ * Cloudflare's published rates, marked `estimated`.
+ */
+export const AI_FEATURES = ["write", "research", "insights", "video_plan", "narration", "image", "transcription", "photo"] as const;
+export type AiFeature = (typeof AI_FEATURES)[number];
+export const aiUsage = sqliteTable(
+  "ai_usage",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    feature: text("feature", { enum: AI_FEATURES }).notNull(),
+    model: text("model").notNull(),
+    costMicroUsd: integer("cost_micro_usd").notNull().default(0),
+    estimated: integer("estimated", { mode: "boolean" }).notNull().default(false),
+    /** What it was for (a brief, insight or video id), so older costs are copied in once. */
+    refId: text("ref_id"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("ai_usage_created_idx").on(t.createdAt), index("ai_usage_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("ai_usage_feature_ref_uq").on(t.feature, t.refId)],
+);
 
 export const PASSION_RELATIONS = ["follow", "involved", "ours"] as const;
 export type PassionRelation = (typeof PASSION_RELATIONS)[number];

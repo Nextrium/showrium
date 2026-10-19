@@ -1,6 +1,6 @@
 // Connected accounts and publishing. Tokens are decrypted only here, just before use.
-import { and, asc, eq, gt, inArray, lte } from "drizzle-orm";
-import { connection, draft, mastodonApp, oauthState, persona, type ConnectionPlatform, type Db } from "@nextrium/db";
+import { and, asc, eq, gt, inArray, lte, sql } from "drizzle-orm";
+import { connection, draft, mastodonApp, oauthState, org, persona, type ConnectionPlatform, type Db } from "@nextrium/db";
 import { bluesky, linkedin, mastodon, PlatformError, tiktok, x, type Account, type FetchLike, type OAuthConfig, type ImageUpload, type ReplyTo, type TokenSet } from "@nextrium/platforms";
 import { hasErrors, X_LONG_SUBSCRIPTIONS, xWeightedLength } from "@nextrium/policy";
 import { postCreditTxn, InsufficientCreditsError } from "./credits.js";
@@ -103,11 +103,16 @@ export async function mastodonClient(deps: PublishDeps, instance: string): Promi
  * more for them, so they're always posted with "Post it myself" (owner decision 2026-10-19).
  */
 export const xNeedsTapToPost = (platform: string, text: string) => platform === "x" && /https?:\/\//i.test(text);
+const PAUSED_MESSAGE = "Posting from this workspace is paused by Showrium. Contact support@showrium.com.";
+async function assertNotPaused(db: Db, orgId: string) {
+  const [row] = await db.select({ at: org.pausedAt }).from(org).where(eq(org.id, orgId));
+  if (row?.at) throw new PublishError("paused", PAUSED_MESSAGE);
+}
 const TAP_TO_POST_MESSAGE = "Posts with a link go to X through \"Post it myself\" (free). X charges a lot more for links sent through the app.";
 
 export class PublishError extends Error {
   constructor(
-    readonly code: "not_found" | "not_ready" | "has_errors" | "no_connection" | "not_supported" | "monetization_safe" | "insufficient_credits" | "platform_error" | "conflict" | "needs_tap_to_post",
+    readonly code: "not_found" | "not_ready" | "has_errors" | "no_connection" | "not_supported" | "monetization_safe" | "insufficient_credits" | "platform_error" | "conflict" | "needs_tap_to_post" | "paused",
     message: string,
   ) {
     super(message);
@@ -249,6 +254,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   const [p] = await db.select({ safe: persona.monetizationSafe }).from(persona).where(eq(persona.orgId, input.orgId));
   if (p?.safe && conn.platform === "x") throw new PublishError("monetization_safe", "Monetization-safe mode posts to X through your own X app (tap-to-post).");
   if (xNeedsTapToPost(conn.platform, d.text)) throw new PublishError("needs_tap_to_post", TAP_TO_POST_MESSAGE);
+  await assertNotPaused(db, input.orgId);
 
   const [claimed] = await db
     .update(draft)
@@ -356,6 +362,7 @@ export async function scheduleDraft(db: Db, orgId: string, draftId: string, inpu
   const [conn] = await db.select().from(connection).where(and(eq(connection.orgId, orgId), eq(connection.id, input.connectionId)));
   if (!conn || conn.platform !== d.platform || !API_PUBLISH_PLATFORMS.includes(conn.platform)) throw new PublishError("no_connection", "Connect an account for this platform first.");
   if (xNeedsTapToPost(conn.platform, d.text)) throw new PublishError("needs_tap_to_post", TAP_TO_POST_MESSAGE);
+  await assertNotPaused(db, orgId);
   const [row] = await db
     .update(draft)
     .set({ status: "scheduled", scheduledAt: input.at, connectionId: conn.id, autoScheduled: Boolean(input.auto), urgentUntil: null, updatedAt: new Date() })
@@ -381,7 +388,8 @@ export async function runDuePublishing(deps: PublishDeps, now = new Date(), limi
   const due = await deps.db
     .select({ id: draft.id, orgId: draft.orgId })
     .from(draft)
-    .where(and(eq(draft.status, "scheduled"), lte(draft.scheduledAt, now)))
+    // A paused workspace's posts wait (they go out once it's resumed, if still worth it).
+    .where(and(eq(draft.status, "scheduled"), lte(draft.scheduledAt, now), sql`NOT EXISTS (SELECT 1 FROM org o WHERE o.id = ${draft.orgId} AND o.paused_at IS NOT NULL)`))
     .orderBy(asc(draft.scheduledAt))
     .limit(limit);
   let published = 0;

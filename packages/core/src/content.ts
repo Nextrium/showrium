@@ -37,6 +37,7 @@ import { recordAudit } from "./orgs.js";
 import type { IngestedItem } from "./ingest.js";
 import { openingOf, recentPosts, repeats } from "./repetition.js";
 import { passionForContext } from "./passions.js";
+import { recordAiUsage } from "./ai-usage.js";
 import { addUsage, CREDITS_PER_EXTRA_POST, CREDITS_PER_EXTRA_RESEARCH, getUsage, limitsFor, seatsFor, type Limits, type Plan } from "./plans.js";
 
 // --- Persona ----------------------------------------------------------------
@@ -305,6 +306,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
     if (!research.facts.length && !research.criticism.length && !research.support.length) {
       // Nothing reliable found: don't write a post that pretends otherwise. The search still counts (it cost money).
       await chargeResearch(db, input.orgId, limits, `research:${newId("txn")}`);
+      await recordAiUsage(db, [{ orgId: input.orgId, feature: "research", model: research.model, costMicroUsd: researchCost }]);
       throw new ComposeError("research_empty", "The web search found nothing reliable about this. Add the facts you know (with links if you have them), or write without research.");
     }
   }
@@ -434,6 +436,11 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
     db.insert(draft).values(rows),
   ]);
 
+  // What it cost us: writing (with any fixes), and the web research.
+  await recordAiUsage(db, [
+    { orgId: input.orgId, feature: "write", model: result.model, costMicroUsd: cost - researchCost, refId: briefId },
+    ...(research ? [{ orgId: input.orgId, feature: "research" as const, model: research.model, costMicroUsd: researchCost, refId: briefId }] : []),
+  ]);
   // Charge usage after success. A concurrent request can push slightly past the limit;
   // the extra is billed in credits when available (cost per post is ~$0.00003).
   const { overage } = await addUsage(db, input.orgId, "postsGenerated", rows.length, limits.posts);

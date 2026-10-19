@@ -2,6 +2,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Loading, useLoad } from "./ui";
 import { Overview } from "./pages/Overview";
 import { Waitlist } from "./pages/Waitlist";
+import { Costs } from "./pages/Costs";
+import { Health } from "./pages/Health";
+import { Billing } from "./pages/Billing";
+import { Abuse } from "./pages/Abuse";
 import { Users } from "./pages/Users";
 import { Staff } from "./pages/Staff";
 import { Activity } from "./pages/Activity";
@@ -12,6 +16,10 @@ const PAGES: { path: string; label: string; permission: string; render: (me: Me)
   { path: "/", label: "Overview", permission: "overview", render: () => <Overview /> },
   { path: "/waitlist", label: "Waitlist", permission: "waitlist", render: () => <Waitlist /> },
   { path: "/users", label: "Users", permission: "users", render: (me) => <Users me={me} /> },
+  { path: "/costs", label: "AI costs", permission: "costs", render: () => <Costs /> },
+  { path: "/health", label: "Publishing", permission: "health", render: () => <Health /> },
+  { path: "/billing", label: "Billing", permission: "billing", render: () => <Billing /> },
+  { path: "/abuse", label: "Abuse", permission: "abuse", render: (me) => <Abuse me={me} /> },
   { path: "/staff", label: "Staff", permission: "staff", render: (me) => <Staff me={me} /> },
   { path: "/activity", label: "Activity", permission: "audit", render: () => <Activity /> },
 ];

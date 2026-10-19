@@ -2,6 +2,8 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { CONTENT_MODES, DRAFT_STATUSES, PLATFORMS, STANCES } from "@nextrium/db";
 import {
+  estimateTranscription,
+  recordAiUsage,
   addContextItems,
   addPassionSource,
   addSource,
@@ -237,6 +239,7 @@ contentApi.openapi(
       console.error("transcription failed", error);
       return c.json(apiError("transcription_failed", "We couldn't transcribe that recording. Try a clearer or shorter one."), 400);
     }
+    await recordAiUsage(c.get("db"), [{ orgId: c.get("principal").orgId, feature: "transcription", model: "@cf/openai/whisper-large-v3-turbo", costMicroUsd: estimateTranscription(text), estimated: true }]);
     if (text.length < 10) return c.json(apiError("transcription_empty", "We couldn't hear any speech in that recording."), 400);
     const check = checkTranscript(text);
     // Shown to the person to fix; never saved (or written from) without them seeing it.

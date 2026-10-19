@@ -13,9 +13,9 @@ export { STAFF_ROLES, type StaffRole };
 
 /** What each staff role may do in the admin app. */
 export const STAFF_PERMISSIONS = {
-  owner: ["overview", "waitlist", "users", "users.manage", "billing", "staff", "audit"],
-  support: ["overview", "waitlist", "users"],
-  finance: ["overview", "billing"],
+  owner: ["overview", "waitlist", "users", "users.manage", "billing", "costs", "health", "abuse", "abuse.pause", "staff", "audit"],
+  support: ["overview", "waitlist", "users", "health", "abuse"],
+  finance: ["overview", "billing", "costs"],
 } as const satisfies Record<StaffRole, readonly string[]>;
 export type StaffPermission = (typeof STAFF_PERMISSIONS)[StaffRole][number];
 

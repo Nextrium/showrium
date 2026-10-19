@@ -72,10 +72,13 @@ export async function resolveMembership(
 
 export async function getOrg(db: Db, orgId: string) {
   const [row] = await db
-    .select({ id: org.id, name: org.name, slug: org.slug, plan: org.plan, fullAccess: org.fullAccess })
+    .select({ id: org.id, name: org.name, slug: org.slug, plan: org.plan, fullAccess: org.fullAccess, pausedAt: org.pausedAt })
     .from(org)
     .where(eq(org.id, orgId));
-  return row ?? null;
+  if (!row) return null;
+  const { pausedAt, ...rest } = row;
+  // Paused by Showrium staff: the workspace sees that it is, never the staff's internal reason.
+  return { ...rest, paused: Boolean(pausedAt) };
 }
 
 export async function recordAudit(

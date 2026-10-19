@@ -6,6 +6,13 @@ import { secureHeaders } from "hono/secure-headers";
 import { z } from "zod";
 import { createDb, PAID_PLANS, STAFF_ROLES, type Db, type StaffRole } from "@nextrium/db";
 import {
+  abuseSignals,
+  aiCostReport,
+  billingReport,
+  PauseError,
+  pauseWorkspace,
+  publishingHealth,
+  resumeWorkspace,
   adminOverview,
   createInvite,
   inviteFromWaitlist,
@@ -164,6 +171,40 @@ app.put("/api/workspaces/:id/plan", async (c) => {
   const ok = await setOrgPlan(c.get("db"), c.req.param("id"), input.plan, { actorUserId: null, reason: `admin (${c.get("email")}): ${input.note}`, seats: input.plan === "team_seats" ? (input.seats ?? 2) : null });
   if (!ok) return c.json(err("not_found", "No such workspace."), 404);
   await audit(c, "workspace.plan_changed", c.req.param("id"), { plan: input.plan, note: input.note });
+  return c.body(null, 204);
+});
+
+// --- Phase 2: AI costs, publishing health, billing, abuse (read-only), and Pause/Resume ---------------
+
+app.get("/api/costs", async (c) => (allowed(c, "costs") ? c.json(await aiCostReport(c.get("db"))) : denied(c)));
+app.get("/api/health", async (c) => (allowed(c, "health") ? c.json(await publishingHealth(c.get("db"))) : denied(c)));
+app.get("/api/billing", async (c) => (allowed(c, "billing") ? c.json(await billingReport(c.get("db"))) : denied(c)));
+app.get("/api/abuse", async (c) => (allowed(c, "abuse") ? c.json(await abuseSignals(c.get("db"))) : denied(c)));
+
+// Pause stops a workspace's automation and publishing until it's resumed. Nothing is deleted. Owners only.
+app.post("/api/workspaces/:id/pause", async (c) => {
+  if (!allowed(c, "abuse.pause")) return denied(c);
+  const input = await body(c, z.object({ reason: z.string().trim().min(5).max(300) }));
+  if (!input) return c.json(err("invalid_request", "Give a reason (5 to 300 characters)."), 400);
+  try {
+    await pauseWorkspace(c.get("db"), c.req.param("id"), { reason: input.reason, by: c.get("email") });
+  } catch (error) {
+    if (error instanceof PauseError) return c.json(err(error.code, error.message), error.code === "not_found" ? 404 : error.code === "invalid" ? 400 : 409);
+    throw error;
+  }
+  await audit(c, "workspace.paused", c.req.param("id"), { reason: input.reason });
+  return c.body(null, 204);
+});
+
+app.post("/api/workspaces/:id/resume", async (c) => {
+  if (!allowed(c, "abuse.pause")) return denied(c);
+  try {
+    await resumeWorkspace(c.get("db"), c.req.param("id"));
+  } catch (error) {
+    if (error instanceof PauseError) return c.json(err(error.code, error.message), error.code === "not_found" ? 404 : 409);
+    throw error;
+  }
+  await audit(c, "workspace.resumed", c.req.param("id"));
   return c.body(null, 204);
 });
 

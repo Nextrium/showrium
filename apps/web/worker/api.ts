@@ -132,7 +132,7 @@ async function staff(c: { get: ((k: "principal") => import("./principal.js").Pri
 }
 
 const OrgSchema = z
-  .object({ id: z.string(), name: z.string(), slug: z.string(), plan: z.string(), fullAccess: z.boolean() })
+  .object({ id: z.string(), name: z.string(), slug: z.string(), plan: z.string(), fullAccess: z.boolean(), paused: z.boolean() })
   .openapi("Workspace");
 
 api.openapi(

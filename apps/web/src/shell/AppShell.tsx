@@ -7,7 +7,7 @@ import { authClient, currentOrgId, getTheme, navigate, setTheme, switchWorkspace
 import { Link } from "../ui/Link";
 import { Icon, type IconName } from "../ui/kit";
 
-type Me = { principal: { kind: string; role: string; isPlatformAdmin: boolean }; workspace: { id: string; name: string; plan: string; fullAccess: boolean } };
+type Me = { principal: { kind: string; role: string; isPlatformAdmin: boolean }; workspace: { id: string; name: string; plan: string; fullAccess: boolean; paused?: boolean } };
 type Workspace = { id: string; name: string; plan: string; role: string; personal: boolean };
 type NavItem = { to: string; label: string; icon: IconName; badge?: number | undefined; match?: string[] | undefined };
 
@@ -331,6 +331,11 @@ export function AppShell({ path, children }: { path: string; children: ReactNode
           </button>
         </header>
         <main id="main" className="mx-auto flex w-full max-w-[1280px] flex-1 flex-col gap-6 px-4 pb-28 pt-5 sm:px-6 md:px-8 md:pb-12 md:pt-8">
+          {me?.workspace.paused && (
+            <div role="alert" className="rounded-[18px] border border-warn/50 bg-warn-soft px-4 py-3 text-[14.5px] text-ink">
+              Posting and automation in this workspace are paused by Showrium. Your posts and settings are safe. Contact <a href="mailto:support@showrium.com">support@showrium.com</a>.
+            </div>
+          )}
           {children}
         </main>
       </div>

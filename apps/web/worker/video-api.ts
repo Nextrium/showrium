@@ -1,6 +1,6 @@
 // Phase 4 API: video plans (timelines), edit-by-chat, voice-over, TikTok inbox upload.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { can, connectionTokens, createVideo, EncryptionUnavailableError, getVideo, listVideos, premiumProviders, reviseVideo, VideoError } from "@nextrium/core";
+import { can, connectionTokens, createVideo, estimateNarration, recordAiUsage, EncryptionUnavailableError, getVideo, listVideos, premiumProviders, reviseVideo, VideoError } from "@nextrium/core";
 import { TimelineSchema } from "@nextrium/llm";
 import { PlatformError, tiktokInboxUpload } from "@nextrium/platforms";
 import { aiProviders } from "./ai.js";
@@ -106,6 +106,7 @@ videoApi.openapi(
     try {
       const out = (await c.env.AI.run("@cf/myshell-ai/melotts" as never, { prompt: row.timeline.narration, lang: "en" } as never)) as { audio?: string };
       if (!out?.audio) throw new Error("empty");
+      await recordAiUsage(c.get("db"), [{ orgId: p.orgId, feature: "narration", model: "@cf/myshell-ai/melotts", costMicroUsd: estimateNarration(row.timeline.narration), estimated: true }]);
       return c.json({ audioBase64: out.audio, mime: "audio/mpeg" }, 200);
     } catch {
       return c.json(apiError("voice_unavailable", "Couldn't create the voice-over right now. The video will have captions only."), 503);

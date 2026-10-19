@@ -1,7 +1,7 @@
 // The admin app's data: totals for the overview, finding accounts, and the admin action log.
 // Totals only on the overview (no one's content); account details show settings and usage, not posts.
 import { and, desc, eq, gte, inArray, like, sql } from "drizzle-orm";
-import { adminAudit, brief, draft, org, staffMember, subscription, twoFactor, user, type Db, type StaffRole } from "@nextrium/db";
+import { adminAudit, aiUsage, brief, draft, org, staffMember, subscription, twoFactor, user, type Db, type StaffRole } from "@nextrium/db";
 import { isPlatformAdmin } from "./access.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
@@ -46,7 +46,8 @@ export async function adminOverview(db: Db, now = new Date()) {
     count(db.select({ n }).from(draft).where(and(eq(draft.status, "failed"), gte(draft.createdAt, since30)))),
   ]);
   const plans = await db.select({ plan: org.plan, fullAccess: org.fullAccess, n }).from(org).groupBy(org.plan, org.fullAccess);
-  const [cost] = await db.select({ micro: sql<number>`coalesce(sum(${brief.costMicroUsd}), 0)` }).from(brief).where(gte(brief.createdAt, monthStart));
+  // Every AI call (posts, research, insights, images, video, voice), not just written posts.
+  const [cost] = await db.select({ micro: sql<number>`coalesce(sum(${aiUsage.costMicroUsd}), 0)` }).from(aiUsage).where(gte(aiUsage.createdAt, monthStart));
   const subs = await db.select({ status: subscription.status, n }).from(subscription).groupBy(subscription.status);
   const waitlist = await listWaitlist(db, now.getTime());
 

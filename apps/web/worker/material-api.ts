@@ -1,6 +1,8 @@
 // Sprint 2 API: the daily prompt, and uploading photos and documents as material to write from.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import {
+  AI_ESTIMATES,
+  recordAiUsage,
   addUploadedContext,
   answerPrompt,
   can,
@@ -130,6 +132,7 @@ materialApi.post("/contexts/upload", async (c) => {
       );
       if (out.format === "error") throw new Error(out.error);
       text = out.data;
+      if (type.kind === "photo") await recordAiUsage(c.get("db"), [{ orgId: p.orgId, feature: "photo", model: "workers-ai/toMarkdown (vision)", costMicroUsd: AI_ESTIMATES.photo, estimated: true }]);
     } catch (error) {
       console.warn("upload conversion failed", error instanceof Error ? error.message : error);
       if (type.kind === "document") return c.json(apiError("unreadable", "We couldn't read that document. Try a PDF or paste the text instead."), 422);

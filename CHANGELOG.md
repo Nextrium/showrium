@@ -25,6 +25,10 @@
 - **Less text:** explanations on the Automation page sit behind a "?".
 
 ### For Showrium staff
+- **AI costs:** every AI call is recorded (posts, research, insights, images, video, voice), by day, feature, model and workspace, with the cost per post and the workspaces that cost more than they pay. Workers AI costs are marked as estimates.
+- **Publishing health:** per platform, the reasons posts fail, accounts to reconnect, stuck or overdue posts, and whether the background jobs are keeping up.
+- **Billing:** monthly revenue, subscriptions, past-due follow-ups, payment problems and credits (read-only).
+- **Abuse:** workspaces worth a look, and a reversible **Pause/Resume** (owners only, with a reason, logged). A paused workspace keeps everything; its posting and automation simply wait.
 - **Invite links in the admin app:** create a one-off link for someone who isn't on the waitlist (shown once), see each link's status, and revoke unused ones. Every action is logged.
 - The old staff section in the product's Settings is gone; waitlist, invites and full access are in the admin app.
 

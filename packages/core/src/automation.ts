@@ -27,6 +27,7 @@ import { composeIdea } from "./autonomy.js";
 import { getOrgLimits, getOrgPlan } from "./content.js";
 import { recordAudit } from "./orgs.js";
 import { sourceIsLive, utcDay } from "./passions.js";
+import { isPaused } from "./admin-reports.js";
 import { ageOf, effectiveScore, goodUntil, isApprovable, isUrgent, isWritable, URGENT_EXTRA_PER_DAY, type IdeaOrigin } from "./idea-score.js";
 import { getUsage, PLAN_FEATURES, type Plan } from "./plans.js";
 import { API_PUBLISH_PLATFORMS, scheduleDraft, xNeedsTapToPost } from "./publishing.js";
@@ -470,6 +471,7 @@ async function urgentExtra(
 }
 
 export async function runAutopilotFor(db: Db, providers: Provider[], orgId: string, now = new Date(), afterCompose?: AfterCompose, onScheduled?: OnAutoScheduled) {
+  if (await isPaused(db, orgId)) return { skipped: "paused" as const };
   const s = await getAutopilot(db, orgId);
   const plan = await getOrgPlan(db, orgId);
   const allowed = allowedSwitches(plan); // a downgraded plan caps what runs, without changing the saved settings
@@ -552,7 +554,14 @@ export async function runAutopilot(db: Db, providers: Provider[], now = new Date
   const due = await db
     .select({ orgId: autopilot.orgId })
     .from(autopilot)
-    .where(and(ne(autopilot.level, "coach"), or(isNull(autopilot.lastRunAt), lt(autopilot.lastRunAt, cutoff))))
+    .where(
+      and(
+        ne(autopilot.level, "coach"),
+        or(isNull(autopilot.lastRunAt), lt(autopilot.lastRunAt, cutoff)),
+        // Paused by Showrium staff: automation stops until resumed.
+        sql`NOT EXISTS (SELECT 1 FROM org o WHERE o.id = ${autopilot.orgId} AND o.paused_at IS NOT NULL)`,
+      ),
+    )
     .orderBy(asc(autopilot.lastRunAt))
     .limit(limit);
   let ran = 0;

@@ -25,6 +25,7 @@ import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
 import { ingestFeed, ingestGithubActivity, ingestWatchedPage, resolveBlogSource } from "./ingest.js";
 import { sourceIsLive } from "./passions.js";
+import { recordAiUsage } from "./ai-usage.js";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -486,6 +487,7 @@ export async function refreshInsights(db: Db, providers: Provider[], orgId: stri
   const themes = result.data.themes.map((t) => ({ ...t, count: Math.min(t.count, comments.length) }));
   const id = newId("ins");
   await db.insert(insight).values({ id, orgId, themes, basedOn: comments.length, model: result.model, costMicroUsd: result.costMicroUsd });
+  await recordAiUsage(db, [{ orgId, feature: "insights", model: result.model, costMicroUsd: result.costMicroUsd, refId: id }]);
   return latestInsight(db, orgId);
 }
 

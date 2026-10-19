@@ -7,7 +7,7 @@ import { publishingPaused } from "./env.js";
 import { apiError, type AppEnv } from "./principal.js";
 import { rateLimit } from "./rate-limit.js";
 import { createDb } from "@nextrium/db";
-import { expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, rescoreOldIdeas, runAutopilot, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
+import { backfillAiUsage, expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, rescoreOldIdeas, runAutopilot, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
 import { aiProviders } from "./ai.js";
 import { publishDeps } from "./connections-api.js";
 import { imageDeps } from "./images-api.js";
@@ -159,7 +159,7 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
         job === "sources" ? await runSourcePolling(db, {}, now, 6) // up to ~18 fetches; with Passions there are more sources
         : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now, 3, autoImages(env, db), notifyScheduled(env, db)))
         : job === "engagement" ? await runEngagementSync(db, fetch, now)
-        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now), rescored: await rescoreOldIdeas(db), needsYou: await sendNeedsYouNotices(db, env.BETTER_AUTH_URL, (emails) => sendAll(env, emails, "needs-you notice"), now) };
+        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now), rescored: await rescoreOldIdeas(db), aiCostsCopied: await backfillAiUsage(db), needsYou: await sendNeedsYouNotices(db, env.BETTER_AUTH_URL, (emails) => sendAll(env, emails, "needs-you notice"), now) };
       console.log("cron", job, result);
     })(),
   );
