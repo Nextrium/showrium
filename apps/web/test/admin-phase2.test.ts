@@ -36,6 +36,40 @@ describe("AI cost ledger", () => {
   });
 });
 
+describe("posts waiting on an account that was removed (incident 2026-10-19)", () => {
+  it("move to the account when it's connected again, and post from it", async () => {
+    const u = await user("p2-relink@example.com");
+    const deps: PublishDeps = { db: createDb(env.DB), key: await importTokenKey(env.TOKEN_ENCRYPTION_KEY), configs: { mastodonRedirectUri: `${BASE}/cb` } };
+    // Posts scheduled on an X account that was then removed (the owner disconnected and connected again).
+    const gone = "cn_removed_x";
+    const ids = [`drf_${crypto.randomUUID()}`, `drf_${crypto.randomUUID()}`];
+    for (const id of ids) await env.DB.prepare("INSERT INTO draft (id, org_id, platform, text, status, issues, connection_id, scheduled_at) VALUES (?, ?, 'bluesky', 'Waiting', 'scheduled', '[]', ?, ?)").bind(id, u.orgId, gone, Date.now() + 3600_000).run();
+    const other = `drf_${crypto.randomUUID()}`; // a LinkedIn post isn't touched
+    await env.DB.prepare("INSERT INTO draft (id, org_id, platform, text, status, issues, connection_id, scheduled_at) VALUES (?, ?, 'linkedin', 'Other', 'scheduled', '[]', ?, ?)").bind(other, u.orgId, "cn_removed_li", Date.now() + 3600_000).run();
+    const fresh = await saveConnection(deps, { orgId: u.orgId, platform: "bluesky", account: { accountId: "did:plc:new", handle: "@new" }, secret: { identifier: "n", appPassword: "aaaa-bbbb-cccc-dddd" }, meta: {}, userId: u.userId });
+    const rows = await env.DB.prepare("SELECT id, connection_id FROM draft WHERE org_id = ?").bind(u.orgId).all<{ id: string; connection_id: string }>();
+    for (const id of ids) expect(rows.results.find((r) => r.id === id)!.connection_id).toBe(fresh);
+    expect(rows.results.find((r) => r.id === other)!.connection_id).toBe("cn_removed_li");
+    const audit = await env.DB.prepare("SELECT meta FROM audit_event WHERE org_id = ? AND action = 'connection.saved'").bind(u.orgId).first<{ meta: string }>();
+    expect(JSON.parse(audit!.meta)).toMatchObject({ postsMoved: 2 });
+  });
+
+  it("when publishing, a post whose account was removed uses the one account left on that platform (never guesses between two)", async () => {
+    const u = await user("p2-fallback@example.com");
+    const deps: PublishDeps = { db: createDb(env.DB), key: await importTokenKey(env.TOKEN_ENCRYPTION_KEY), configs: { mastodonRedirectUri: `${BASE}/cb` } };
+    await saveConnection(deps, { orgId: u.orgId, platform: "bluesky", account: { accountId: "did:plc:one", handle: "@one" }, secret: { identifier: "o", appPassword: "aaaa-bbbb-cccc-dddd" }, meta: {}, userId: u.userId });
+    const id = `drf_${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO draft (id, org_id, platform, text, status, issues, connection_id, scheduled_at) VALUES (?, ?, 'bluesky', 'Hello', 'scheduled', '[]', 'cn_gone', ?)").bind(id, u.orgId, Date.now() - 60_000).run();
+    const ok = async (url: string) => (url.includes("createSession") ? Response.json({ accessJwt: "j", did: "did:plc:one", handle: "one" }) : url.includes("createRecord") ? Response.json({ uri: "at://did:plc:one/app.bsky.feed.post/1", cid: "c" }) : new Response("{}", { status: 404 }));
+    expect(await publishDraft({ ...deps, fetch: ok as typeof fetch }, { orgId: u.orgId, draftId: id })).toMatchObject({ status: "published" });
+    // Two Bluesky accounts: it won't guess.
+    await saveConnection(deps, { orgId: u.orgId, platform: "bluesky", account: { accountId: "did:plc:two", handle: "@two" }, secret: { identifier: "t", appPassword: "aaaa-bbbb-cccc-dddd" }, meta: {}, userId: u.userId });
+    const id2 = `drf_${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO draft (id, org_id, platform, text, status, issues, connection_id, scheduled_at) VALUES (?, ?, 'bluesky', 'Hello again', 'scheduled', '[]', 'cn_gone_2', ?)").bind(id2, u.orgId, Date.now() - 60_000).run();
+    await expect(publishDraft({ ...deps, fetch: ok as typeof fetch }, { orgId: u.orgId, draftId: id2 })).rejects.toThrow(/isn't connected any more/);
+  });
+});
+
 describe("a paused workspace", () => {
   it("doesn't post or automate; its scheduled posts wait; it sees that it's paused, not why; resume brings it back", async () => {
     const u = await user("p2-paused@example.com");

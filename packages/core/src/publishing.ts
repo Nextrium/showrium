@@ -66,8 +66,42 @@ export async function saveConnection(
     .values({ id: newId("cn"), orgId: input.orgId, platform: input.platform, accountId: input.account.accountId, createdByUserId: input.userId, ...values })
     .onConflictDoUpdate({ target: [connection.orgId, connection.platform, connection.accountId], set: values })
     .returning({ id: connection.id });
-  await recordAudit(deps.db, { orgId: input.orgId, actorUserId: input.userId, action: "connection.saved", target: row!.id, meta: { platform: input.platform } });
+  // Posts waiting on an account that was removed (e.g. disconnected, then connected again) move to this one.
+  const relinked = await relinkOrphanedPosts(deps.db, input.orgId, input.platform, row!.id);
+  await recordAudit(deps.db, { orgId: input.orgId, actorUserId: input.userId, action: "connection.saved", target: row!.id, meta: { platform: input.platform, ...(relinked ? { postsMoved: relinked } : {}) } });
   return row!.id;
+}
+
+/** Posts still waiting to go out whose account no longer exists, moved to `connectionId` (same workspace and platform). */
+async function relinkOrphanedPosts(db: PublishDeps["db"], orgId: string, platform: ConnectionPlatform, connectionId: string) {
+  const moved = await db
+    .update(draft)
+    .set({ connectionId, updatedAt: new Date() })
+    .where(
+      and(
+        eq(draft.orgId, orgId),
+        eq(draft.platform, platform),
+        inArray(draft.status, ["scheduled", "approved", "failed"]),
+        sql`${draft.connectionId} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM connection c WHERE c.id = ${draft.connectionId})`,
+      ),
+    )
+    .returning({ id: draft.id });
+  return moved.length;
+}
+
+/**
+ * The account to post from: the post's own, or, when that account was removed, the workspace's one
+ * active account on the same platform (if there's exactly one). The post is moved to it.
+ */
+async function connectionFor(deps: PublishDeps, orgId: string, d: { id: string; platform: string; connectionId: string | null }) {
+  if (d.connectionId) {
+    const own = await loadConnection(deps, orgId, d.connectionId);
+    if (own) return own;
+  }
+  const active = await deps.db.select().from(connection).where(and(eq(connection.orgId, orgId), eq(connection.platform, d.platform as ConnectionPlatform), eq(connection.status, "active")));
+  if (active.length !== 1) return null; // none, or more than one: the person chooses
+  await deps.db.update(draft).set({ connectionId: active[0]!.id }).where(and(eq(draft.orgId, orgId), eq(draft.id, d.id)));
+  return active[0]!;
 }
 
 export async function listConnections(db: Db, orgId: string) {
@@ -247,8 +281,8 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   if (!READY.includes(d.status as (typeof READY)[number])) throw new PublishError("not_ready", "Approve the post before publishing it.");
   if (hasErrors(d.issues)) throw new PublishError("has_errors", "Fix the errors on this post first.");
   if (!d.connectionId) throw new PublishError("no_connection", "Choose which connected account to post from.");
-  const conn = await loadConnection(deps, input.orgId, d.connectionId);
-  if (!conn || conn.platform !== d.platform) throw new PublishError("no_connection", "That account isn't connected any more.");
+  const conn = await connectionFor(deps, input.orgId, d);
+  if (!conn || conn.platform !== d.platform) throw new PublishError("no_connection", "That account isn't connected any more. Connect it again in Accounts, then post or schedule it again.");
   if (!API_PUBLISH_PLATFORMS.includes(conn.platform)) throw new PublishError("not_supported", "This platform can't be posted to automatically yet.");
 
   const [p] = await db.select({ safe: persona.monetizationSafe }).from(persona).where(eq(persona.orgId, input.orgId));

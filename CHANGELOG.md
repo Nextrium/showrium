@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### For people
+- **Reconnecting an account keeps your scheduled posts:** posts waiting on an account you disconnected move to it when you connect it again, and still go out on time.
 - **Fresher, cleaner ideas:** ideas are scored for how fresh and relevant they are. Old news, pre-releases, digests and days of only tidying are tucked away ("Show more" brings them back), and the same story from several sources becomes one idea. A new source brings in only its latest few items.
 - **Automation picks well:** it writes only from good, fresh ideas, and "Approve for me" only approves strong ones from the last 48 hours. Approved posts are always scheduled ahead, never sent at once.
 - **Check before it goes out:** you get an email listing what automation scheduled, and those posts are marked "Auto" in Posts with a **Cancel schedule** button.
