@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createDb } from "@nextrium/db";
-import { createCheckout, expireSubscriptions, signCustom, verifySignature, type BillingConfig } from "@nextrium/core";
+import { createCheckout, expireSubscriptions, findUserIdByEmail, listWorkspaces, setOrgPlan, signCustom, verifySignature, type BillingConfig } from "@nextrium/core";
 
 const BASE = "http://localhost:5173";
 const ORIGIN = { Origin: BASE };
@@ -244,13 +244,16 @@ describe("audit and admin", () => {
     await env.DB.prepare("UPDATE membership SET role = 'editor' WHERE org_id = ?").bind(a.orgId).run();
     expect((await a.call("GET", "/audit")).status).toBe(403);
   });
-  it("only platform admins comp plans, and it's audited", async () => {
+  // Staff comp plans in the admin app (apps/admin, behind Access); the web API can't, for anyone.
+  it("plan comps can't be made from the web app; made by staff, they're audited", async () => {
     const u = await user("p6comp@example.com");
-    expect((await u.call("PUT", `/admin/orgs/${u.orgId}/plan`, { plan: "pro", note: "beta tester" })).status).toBe(403);
-    const admin = await user("admin@example.com");
-    const found = (await (await admin.call("GET", "/admin/orgs?email=p6comp@example.com")).json()) as { data: { id: string }[] };
-    expect(found.data[0]!.id).toBe(u.orgId);
-    expect((await admin.call("PUT", `/admin/orgs/${u.orgId}/plan`, { plan: "pro", note: "beta tester" })).status).toBe(204);
+    expect((await u.call("PUT", `/admin/orgs/${u.orgId}/plan`, { plan: "pro", note: "beta tester" })).status).toBe(404);
+    expect(await plan(u.orgId)).toBe("free");
+    const db = createDb(env.DB);
+    const found = await listWorkspaces(db, (await findUserIdByEmail(db, "P6comp@Example.com "))!);
+    expect(found.map((w) => w.id)).toContain(u.orgId);
+    expect(await setOrgPlan(db, u.orgId, "pro", { actorUserId: null, reason: "admin (owner@example.com): beta tester" })).toBe(true);
+    expect(await setOrgPlan(db, "org_missing", "pro", { actorUserId: null, reason: "nobody" })).toBe(false);
     expect(await plan(u.orgId)).toBe("pro");
     const audit = (await (await u.call("GET", "/audit")).json()) as { data: { action: string }[] };
     expect(audit.data[0]!.action).toBe("plan.changed");

@@ -13,6 +13,9 @@ const DAY = 86_400_000;
 // --- Publishing health ------------------------------------------------------------------------
 
 /** How posting is going: per platform, the top reasons posts fail, accounts to reconnect, stuck or overdue posts, and the background jobs. */
+/** Part of the message a post gets when our platform API account is out of paid usage (see the platforms package). */
+export const PROVIDER_BILLING_MARK = "This is on our side, not your account";
+
 export async function publishingHealth(db: Db, now = new Date()) {
   const since30 = new Date(now.getTime() - 30 * DAY);
   const since7 = new Date(now.getTime() - 7 * DAY);
@@ -59,8 +62,13 @@ export async function publishingHealth(db: Db, now = new Date()) {
   const [auto] = await db.select({ at: sql<number | null>`max(${autopilot.lastRunAt})` }).from(autopilot);
   const [src] = await db.select({ at: sql<number | null>`max(${source.lastCheckedAt})` }).from(source);
   const [pub] = await db.select({ at: sql<number | null>`max(${draft.publishedAt})` }).from(draft).where(eq(draft.publishMethod, "api"));
+  // Our own developer account with a platform out of paid API usage (X: "credits depleted"): every
+  // post through it fails until staff top it up, so it's shown first.
+  const outOfCredit = new Map<string, Date>();
+  for (const o of outcomes) if (o.status === "failed" && o.at >= new Date(now.getTime() - DAY) && o.error?.includes(PROVIDER_BILLING_MARK)) outOfCredit.set(o.platform, o.at > (outOfCredit.get(o.platform) ?? new Date(0)) ? o.at : outOfCredit.get(o.platform)!);
   const iso = (n: number | null | undefined) => (n ? new Date(Number(n)).toISOString() : null);
   return {
+    providerCredit: [...outOfCredit.entries()].map(([platform, at]) => ({ platform, lastFailedAt: at.toISOString() })),
     platforms: [...platforms.entries()].map(([platform, p]) => ({ platform, ...p, failRate30: p.published30 + p.failed30 ? Math.round((p.failed30 / (p.published30 + p.failed30)) * 100) : 0 })).sort((a, b) => b.failed30 - a.failed30),
     reasons: [...reasons.values()].sort((a, b) => b.count - a.count).slice(0, 10),
     reconnect: reconnect.map((r) => ({ ...r, since: r.since.toISOString() })),

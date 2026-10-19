@@ -4,7 +4,7 @@ import { NeedsYouBanner } from "../../components/NeedsYou";
 import { authClient, navigate, useApi, useRedirect } from "../../lib";
 import { planLabel } from "../../shell/AppShell";
 import { Link } from "../../ui/Link";
-import { Badge, Button, Dot, Empty, Icon, LinkButton, Meter, PageHeader, Panel } from "../../ui/kit";
+import { Badge, Button, Dot, Empty, Icon, Info, LinkButton, Meter, PageHeader, Panel } from "../../ui/kit";
 import type { Draft, Persona } from "./shared";
 
 type Idea = { id: string; reason: string; title: string; createdAt: string };
@@ -31,7 +31,7 @@ function QuickCreate({ persona }: { persona: Persona | null }) {
     navigate("/app/new");
   };
   return (
-    <Panel title="What did you work on?" id="qc" action={<span className="hidden text-[13px] text-muted sm:inline">One input. A post for every platform.</span>}>
+    <Panel title={<span className="flex items-center gap-1.5">What did you work on? <Info label="About quick posts">One input becomes a post for every platform you use.</Info></span>} id="qc">
       <label className="sr-only" htmlFor="quick">Material to post about</label>
       <textarea
         id="quick"
@@ -90,8 +90,7 @@ export function AppHome() {
           <div className="flex flex-wrap items-center gap-4">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-on-accent"><Icon name="voice" /></span>
             <div className="flex min-w-0 flex-1 flex-col">
-              <span className="font-semibold">Start with your voice</span>
-              <span className="text-sm text-ink-2">Two minutes: who you are, how you sound and where you post. Every post is written from it.</span>
+              <span className="flex items-center gap-1.5 font-semibold">Start with your voice <Info label="About your voice">Two minutes: who you are, how you sound and where you post. Every post is written from it.</Info></span>
             </div>
             <LinkButton to="/app/voice">Set up my voice</LinkButton>
           </div>
@@ -105,7 +104,7 @@ export function AppHome() {
           <div className="grid gap-5 md:grid-cols-2">
             <Panel title="Up next" id="upnext" action={<Link to="/app/posts" className="text-[13.5px] no-underline">All posts →</Link>}>
               {upNext.length === 0 ? (
-                <Empty icon="calendar" title="Nothing scheduled" body="Approve a draft and pick a time, or let automation schedule clean posts." />
+                <Empty icon="calendar" title="Nothing scheduled" body="Approve a draft and pick a time." />
               ) : (
                 <ul className="m-0 flex list-none flex-col p-0">
                   {upNext.map((p) => (
@@ -125,7 +124,7 @@ export function AppHome() {
             </Panel>
             <Panel title="Fresh ideas" id="ideas" action={<Link to="/app/ideas" className="text-[13.5px] no-underline">All ideas →</Link>}>
               {ideas && ideas.data.length === 0 ? (
-                <Empty icon="ideas" title="No new ideas" body="Connect a repository, blog or channel in Sources, and ideas show up here." action={<LinkButton to="/app/sources" variant="secondary" size="sm">Add a source</LinkButton>} />
+                <Empty icon="ideas" title="No new ideas" body="Add a source to get ideas." action={<LinkButton to="/app/sources" variant="secondary" size="sm">Add a source</LinkButton>} />
               ) : (
                 <ul className="m-0 flex list-none flex-col p-0">
                   {ideas?.data.slice(0, 3).map((i) => (
@@ -172,7 +171,7 @@ export function AppHome() {
             )}
           </Panel>
           <Panel title="Accounts" id="accts" action={<Link to="/app/accounts" className="text-[13.5px] no-underline">Manage →</Link>}>
-            {conns && conns.data.length === 0 && <span className="text-sm text-muted">None connected. Tap-to-post works without connecting.</span>}
+            {conns && conns.data.length === 0 && <span className="flex items-center gap-1.5 text-sm text-muted">None connected. <Info label="About accounts">You can still post by tapping Post it myself. No connection needed.</Info></span>}
             <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
               {conns?.data.map((c) => (
                 <li key={c.id} className="flex items-center gap-2.5 text-sm">

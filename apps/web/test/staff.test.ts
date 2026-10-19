@@ -1,10 +1,11 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createDb } from "@nextrium/db";
-import { inviteStaff, staffRoleFor } from "@nextrium/core";
+import { inviteStaff, staffCan, staffRoleFor } from "@nextrium/core";
 
-// Staff in the product's own staff screens: owners from PLATFORM_ADMIN_EMAILS (admin@example.com
-// in tests), everyone else invited with a role. A role only gives what it lists.
+// Staff roles: owners from PLATFORM_ADMIN_EMAILS (admin@example.com in tests), everyone else invited
+// with a role. A role only gives what it lists. Staff screens and their API are in the admin app
+// (apps/admin, behind Cloudflare Access); the web app only reports staff status.
 const BASE = "http://localhost:5173";
 let n = 0;
 const ip = () => `10.47.${Math.floor(++n / 250)}.${n % 250}`;
@@ -29,15 +30,30 @@ describe("invited staff", () => {
     await inviteStaff(db, { email: "support-staff@example.com", role: "support", actor: { email: "admin@example.com", role: "owner" } });
 
     // Email not confirmed yet: not staff.
-    expect(await staffRoleFor(db, { userId: helper.id, email: "support-staff@example.com" }, "admin@example.com")).toBeNull();
-    expect((await helper.call("GET", "/admin/waitlist")).status).toBe(403);
+    const who = { userId: helper.id, email: "support-staff@example.com" };
+    expect(await staffRoleFor(db, who, "admin@example.com")).toBeNull();
+    expect(((await (await helper.call("GET", "/me")).json()) as { principal: { isPlatformAdmin: boolean } }).principal.isPlatformAdmin).toBe(false);
 
     await env.DB.prepare("UPDATE user SET email_verified = 1 WHERE id = ?").bind(helper.id).run();
     expect(((await (await helper.call("GET", "/me")).json()) as { principal: { isPlatformAdmin: boolean } }).principal.isPlatformAdmin).toBe(true);
-    expect((await helper.call("GET", "/admin/waitlist")).status).toBe(200);
-    const me = (await (await helper.call("GET", "/me")).json()) as { workspace: { id: string } };
-    expect((await helper.call("PUT", `/admin/orgs/${me.workspace.id}/plan`, { plan: "pro", note: "self upgrade" })).status).toBe(403);
-    expect((await helper.call("GET", "/admin/access")).status).toBe(403);
+    const role = await staffRoleFor(db, who, "admin@example.com");
+    expect(role).toBe("support");
+    expect(staffCan(role, "waitlist")).toBe(true);
+    expect(staffCan(role, "users.manage")).toBe(false); // no plan changes or access grants
+  });
+
+  it("the old staff endpoints are gone from the web API, even for staff", async () => {
+    const owner = await user("admin@example.com");
+    const me = (await (await owner.call("GET", "/me")).json()) as { principal: { isPlatformAdmin: boolean }; workspace: { id: string } };
+    expect(me.principal.isPlatformAdmin).toBe(true);
+    expect((await owner.call("GET", "/admin/waitlist")).status).toBe(404);
+    expect((await owner.call("GET", "/admin/orgs?email=admin@example.com")).status).toBe(404);
+    expect((await owner.call("POST", "/admin/waitlist/invite", { ids: ["wl_x"] })).status).toBe(404);
+    expect((await owner.call("PUT", `/admin/orgs/${me.workspace.id}/plan`, { plan: "pro", note: "self upgrade" })).status).toBe(404);
+    expect((await owner.call("PUT", `/admin/orgs/${me.workspace.id}/access`, { full: true, note: "self grant" })).status).toBe(404);
+    expect((await owner.call("GET", "/admin/access")).status).toBe(404);
+    const doc = (await (await owner.call("GET", "/openapi.json")).json()) as { paths: Record<string, unknown> };
+    expect(Object.keys(doc.paths).filter((p) => p.startsWith("/admin"))).toEqual([]);
   });
 
   it("only owners can invite staff", async () => {

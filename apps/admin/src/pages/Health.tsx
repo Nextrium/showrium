@@ -3,6 +3,7 @@ import { Alert, Loading, Panel, Tag, useLoad } from "../ui";
 import { ago, Stat, Table } from "./parts";
 
 type Data = {
+  providerCredit: { platform: string; lastFailedAt: string }[];
   platforms: { platform: string; published7: number; failed7: number; published30: number; failed30: number; failRate30: number }[];
   reasons: { reason: string; platform: string; count: number }[];
   reconnect: { orgId: string; orgName: string; platform: string; handle: string; since: string }[];
@@ -20,6 +21,11 @@ export function Health() {
   const j = data.jobs;
   return (
     <>
+      {data.providerCredit.map((p) => (
+        <Alert key={p.platform}>
+          {NAMES[p.platform] ?? p.platform} API usage is used up on our developer account (last failure {ago(p.lastFailedAt)}). Every post sent through {NAMES[p.platform] ?? p.platform} fails until it's topped up in the platform's developer console.
+        </Alert>
+      ))}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Posting" value={j.posting.behind ? "Behind" : "OK"} tone={j.posting.behind ? "danger" : "ok"} sub={`last sent ${ago(j.posting.lastPublishedAt)}`} info="Behind: scheduled posts are more than 15 minutes overdue (the posting job isn't keeping up, or the workspace is paused)." />
         <Stat label="Automation" value={ago(j.automation.lastRunAt)} sub="last run" />

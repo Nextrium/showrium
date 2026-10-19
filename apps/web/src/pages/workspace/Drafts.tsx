@@ -3,7 +3,7 @@ import { ResearchNotes } from "../../components/ResearchNotes";
 import { api, formatDate, setUnsaved, timeAgo, useApi } from "../../lib";
 import { PublishControls } from "./Publish";
 import { IssueList, MODES, usePlatforms, type Draft } from "./shared";
-import { Alert, Button, Empty, Icon, LinkButton, Loading, PageHeader, type IconName } from "../../ui/kit";
+import { Alert, Button, Empty, Icon, Info, LinkButton, Loading, PageHeader, type IconName } from "../../ui/kit";
 import { PostImagePanel } from "../../components/PostImage";
 import { NeedsYouBanner } from "../../components/NeedsYou";
 import { DetailPanel, ListItem, SectionLabel, Split, StatStrip, Tag, useQueryParams } from "../../ui/split";
@@ -222,7 +222,8 @@ function PostEditor({ draft, onChange }: { draft: Draft; onChange?: (d: Draft) =
       {draft.urgentUntil && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-warn/50 bg-warn-soft p-3" role="status">
           <span className="min-w-0 flex-1 text-[13.5px] text-ink">
-            Time-sensitive: best posted before {new Date(draft.urgentUntil).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}. Post it now, post it yourself, or pick a time today.
+            Time-sensitive: best posted before {new Date(draft.urgentUntil).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}.{" "}
+            <Info label="About time-sensitive posts">Post it now, post it yourself, or pick a time today. Skip it if it no longer matters.</Info>
           </span>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => patch({ needsYou: false })}>Skip</Button>
         </div>
@@ -434,7 +435,7 @@ export function DraftsPage() {
           <Empty
             icon="posts"
             title={all.length ? "Nothing matches" : `No ${STATUSES.find((s) => s.id === status)?.label.toLowerCase() ?? ""} posts`}
-            body={all.length ? "Try another word or platform." : status === "draft" ? "Write something new, or turn an idea into posts." : "Posts move here as you approve, schedule and publish them."}
+            body={all.length ? "Try another word or platform." : status === "draft" ? "Write one, or start from an idea." : "Nothing here yet."}
             action={!all.length && status === "draft" ? <LinkButton to="/app/new" size="sm">New post</LinkButton> : undefined}
           />
         )}
@@ -468,7 +469,15 @@ export function DraftsPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Posts" subtitle="Everything you’ve written: waiting, scheduled, or out in the world." actions={<LinkButton to="/app/new" variant="inverse" icon="plus">New post</LinkButton>} />
+      <PageHeader
+        title="Posts"
+        actions={
+          <>
+            <Info label="About posts">Everything you’ve written: waiting, scheduled, or published.</Info>
+            <LinkButton to="/app/new" variant="inverse" icon="plus">New post</LinkButton>
+          </>
+        }
+      />
       {needs ? (
         <div className="flex flex-wrap items-center gap-3 rounded-[18px] border border-warn/50 bg-warn-soft px-4 py-3">
           <span className="min-w-0 flex-1 text-[14.5px] text-ink">Time-sensitive posts that need you</span>
@@ -493,7 +502,7 @@ export function DraftsPage() {
             <PostDetail key={detailId} id={detailId} onSelect={(id) => setParams({ id }, true)} />
           ) : (
             <DetailPanel>
-              <Empty icon="posts" title="Pick a post" body="Its details, where it came from and what to do next appear here." />
+              <Empty icon="posts" title="Pick a post" body="Its details show here." />
             </DetailPanel>
           )
         }

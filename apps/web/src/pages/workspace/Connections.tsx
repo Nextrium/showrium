@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { api, formatDate, useApi } from "../../lib";
-import { PageHeader } from "../../ui/kit";
+import { Info, PageHeader } from "../../ui/kit";
 
 type Connection = { id: string; platform: string; handle: string; status: "active" | "needs_reconnect"; createdAt: string; longPosts?: boolean };
 type List = { data: Connection[]; available: string[] };
@@ -53,11 +53,10 @@ export function ConnectionsPage() {
   const available = data?.available ?? [];
   return (
     <div className="dash">
-      <PageHeader title="Accounts" subtitle="The social accounts Showrium can post to. Tokens are encrypted, and you can disconnect at any time." />
+      <PageHeader title="Accounts" />
       {notice && <p className="note" role="status">{notice}</p>}
       <section className="card">
-        <h2 className="h3">Connected accounts</h2>
-        <p className="note">Showrium posts only what you approve. Tokens are encrypted and you can disconnect at any time.</p>
+        <h2 className="h3 flex items-center gap-1.5">Connected accounts <Info label="About connected accounts">The social accounts Showrium can post to. It posts only what you approve. Tokens are encrypted, and you can disconnect at any time.</Info></h2>
         <div className="table-wrap">
           <table>
             <tbody>
@@ -69,7 +68,7 @@ export function ConnectionsPage() {
                   <td className="num"><button className="button danger" onClick={() => disconnect(c.id)}>Disconnect</button></td>
                 </tr>
               ))}
-              {data?.data.length === 0 && <tr><td className="muted">No accounts connected. You can still post with tap-to-post.</td></tr>}
+              {data?.data.length === 0 && <tr><td className="muted">No accounts connected. <Info label="Posting without an account">You can still post with tap-to-post.</Info></td></tr>}
             </tbody>
           </table>
         </div>
@@ -77,7 +76,7 @@ export function ConnectionsPage() {
 
       <section className="card">
         <h2 className="h3">Connect an account</h2>
-        {available.length === 0 && <p className="note">Connecting accounts isn't set up in this environment yet. Tap-to-post still works.</p>}
+        {available.length === 0 && <p className="note">Connecting isn't set up here yet. Tap-to-post still works.</p>}
         <div className="row">
           {(["x", "linkedin", "tiktok"] as const).filter((p) => available.includes(p)).map((p) => (
             <button key={p} className="button secondary" onClick={() => start(p)}>Connect {NAMES[p]}</button>
@@ -92,12 +91,12 @@ export function ConnectionsPage() {
         {available.includes("bluesky") && (
           <form className="row" onSubmit={bluesky}>
             <label>Bluesky handle<input id="bsky-id" name="identifier" required placeholder="you.bsky.social" autoComplete="off" /></label>
-            <label>App password<input id="bsky-pw" name="appPassword" required placeholder="xxxx-xxxx-xxxx-xxxx" autoComplete="off" /></label>
+            <label htmlFor="bsky-pw"><span className="flex items-center gap-1.5">App password <Info label="How to get an app password">Create one in Bluesky: Settings, then Privacy and security, then App passwords.</Info></span><input id="bsky-pw" name="appPassword" required placeholder="xxxx-xxxx-xxxx-xxxx" autoComplete="off" /></label>
             <button className="button secondary">Connect Bluesky</button>
           </form>
         )}
         {available.includes("bluesky") && (
-          <p className="note">Create an app password in Bluesky: Settings → Privacy and security → App passwords. Never use your main password.</p>
+          <p className="note">Never use your main password.</p>
         )}
         {error && <p className="error" role="alert">{error}</p>}
       </section>

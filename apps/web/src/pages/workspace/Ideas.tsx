@@ -208,7 +208,7 @@ export function IdeasPage() {
         <Empty
           icon="ideas"
           title={all.length ? "Nothing matches" : status === "new" ? "No new ideas yet" : status === "drafted" ? "Nothing written yet" : "Nothing set aside"}
-          body={all.length ? "Try another word." : status === "new" ? "Connect a source, upload a photo, or answer today’s question on Home, and ideas appear here." : "Ideas move here as you use them."}
+          body={all.length ? "Try another word." : status === "new" ? "Add a source to get ideas." : "Ideas move here as you use them."}
           action={!all.length && status === "new" ? <LinkButton to="/app/sources" size="sm">Add a source</LinkButton> : undefined}
         />
       )}
@@ -244,7 +244,15 @@ export function IdeasPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Ideas" subtitle="Post-worthy moments from your sources, uploads and answers. Pick one to see it and write from it." actions={<LinkButton to="/app/sources" variant="secondary" icon="sources">Sources</LinkButton>} />
+      <PageHeader
+        title="Ideas"
+        actions={
+          <>
+            <Info label="About ideas">Post-worthy moments from your sources, uploads and answers to today’s question. Pick one to see it and write from it.</Info>
+            <LinkButton to="/app/sources" variant="secondary" icon="sources">Sources</LinkButton>
+          </>
+        }
+      />
       <div className="max-w-xl">
         <StatStrip
           label="Idea status"
@@ -263,7 +271,7 @@ export function IdeasPage() {
             <IdeaDetail key={detailId} id={detailId} persona={personaData?.persona ?? null} />
           ) : (
             <DetailPanel>
-              <Empty icon="ideas" title="Pick an idea" body="See the material behind it and turn it into posts in one step." />
+              <Empty icon="ideas" title="Pick an idea" body="Its material shows here." />
             </DetailPanel>
           )
         }

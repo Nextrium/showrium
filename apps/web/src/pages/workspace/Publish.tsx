@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { copyImage, saveFile, useImageFiles, type ImageSize } from "../../components/PostImage";
 import { api, ApiError, useApi } from "../../lib";
+import { Info } from "../../ui/kit";
 import type { Draft } from "./shared";
 
 type Connection = { id: string; platform: string; handle: string; status: string };
@@ -162,8 +163,9 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
       </div>
       {files.length > 0 && (
         <div className="flex flex-col gap-2 rounded-xl border border-line p-3">
-          <span className="text-[13px] text-ink-2">
-            {files.length === 1 ? "The image" : `The ${files.length} images`} for this post{parts ? " (add to the first part)" : ""}: copy and paste {files.length === 1 ? "it" : "each one"} into the post, or save and attach.
+          <span className="flex items-center gap-1.5 text-[13px] text-ink-2">
+            {files.length === 1 ? "The image" : `The ${files.length} images`} for this post{parts ? " (first part)" : ""}
+            <Info label="About the images">Copy and paste {files.length === 1 ? "it" : "each one"} into the post, or save and attach {files.length === 1 ? "it" : "them"}.</Info>
           </span>
           <ul className="m-0 flex list-none flex-wrap gap-2.5 p-0" aria-label="Images to add to the post">
             {files.map((f, i) => (
@@ -182,13 +184,13 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
         </div>
       )}
       {xLink && API_PLATFORMS.includes(draft.platform) && accounts.length > 0 && (
-        <p className="note">This post has a link, so it goes to X with "Post it myself" (free). X charges a lot more for links sent through the app.</p>
+        <p className="note">Has a link, so it goes to X with "Post it myself" (free). <Info label="Why links go this way">X charges a lot more for links sent through the app.</Info></p>
       )}
       {opened && parts && draft.platform === "x" && (
-        <label className="flex flex-col gap-1">
-          Link to your post on X
-          <input type="url" inputMode="url" value={rootUrl} onChange={(e) => setRootUrl(e.target.value.trim())} placeholder="https://x.com/you/status/…" />
-          <span className="text-[12.5px] text-muted">{rootId ? "Each reply below now opens X already replying to your post." : "Paste it (Share › Copy link on X) and each reply becomes one click."}</span>
+        <label className="flex flex-col gap-1" htmlFor={`x-root-${draft.id}`}>
+          <span className="flex items-center gap-1.5">Link to your post on X <Info label="About the post link">Paste it from X (Share, then Copy link). Each reply below then opens X already replying to your post.</Info></span>
+          <input id={`x-root-${draft.id}`} type="url" inputMode="url" value={rootUrl} onChange={(e) => setRootUrl(e.target.value.trim())} placeholder="https://x.com/you/status/…" />
+          {rootId && <span className="text-[12.5px] text-muted">Replies now open already replying to your post.</span>}
         </label>
       )}
       {opened && parts && (

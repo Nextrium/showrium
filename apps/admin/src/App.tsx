@@ -58,7 +58,7 @@ export function App() {
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-30 focus:rounded-lg focus:bg-panel focus:p-2">
         Skip to content
       </a>
-      <aside className="flex flex-col gap-4 border-b border-line bg-[var(--sidebar)] p-4 md:min-h-dvh md:border-b-0 md:border-r">
+      <aside className="sticky top-0 z-20 flex flex-col gap-4 border-b border-line bg-[var(--sidebar)] p-4 md:h-dvh md:overflow-y-auto md:border-b-0 md:border-r">
         <div className="flex items-center gap-2">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent font-display font-bold text-on-accent">S</span>
           <span className="font-display text-[17px] font-semibold">Admin</span>

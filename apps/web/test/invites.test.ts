@@ -1,6 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { isPlatformAdmin, readCookie } from "@nextrium/core";
+import { createDb } from "@nextrium/db";
+import { createInvite, isPlatformAdmin, listInvites, readCookie, revokeInvite } from "@nextrium/core";
 
 const BASE = "http://localhost:5173";
 const ORIGIN = { Origin: BASE };
@@ -25,19 +26,11 @@ async function adminSession() {
   });
   return sessionCookie(signIn);
 }
-async function createInvite(cookie: string, note?: string) {
-  return SELF.fetch(`${BASE}/api/v1/admin/invites`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Cookie: cookie, ...ORIGIN },
-    body: JSON.stringify(note ? { note } : {}),
-  });
+// Staff make invite links in the admin app (apps/admin, its own tests); here, straight from core.
+async function newInvite(note?: string) {
+  return createInvite(createDb(env.DB), { createdByUserId: null, note: note ?? null });
 }
-async function newInviteToken(cookie: string) {
-  const res = await createInvite(cookie);
-  expect(res.status).toBe(201);
-  const { link } = (await res.json()) as { link: string };
-  return new URL(link).searchParams.get("token")!;
-}
+const newInviteToken = async () => (await newInvite()).token;
 /** Accepts the invite and returns the invite cookie to send with sign-up. */
 async function accept(token: string) {
   return SELF.fetch(`${BASE}/api/v1/invites/accept`, {
@@ -65,31 +58,29 @@ describe("platform admin and cookie helpers", () => {
 });
 
 describe("invite management", () => {
-  it("only platform admins can create invites; members and API keys cannot", async () => {
+  it("the web API no longer makes, lists or revokes invites, for anyone (staff use the admin app)", async () => {
     const member = sessionCookie(await signUp("member@example.com", "Member"));
-    expect((await createInvite(member)).status).toBe(403);
-
     const admin = await adminSession();
-    expect((await createInvite(admin, "for Kemi")).status).toBe(201);
-
     const keyRes = await SELF.fetch(`${BASE}/api/v1/api-keys`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: admin, ...ORIGIN },
       body: JSON.stringify({ name: "admin key" }),
     });
     const { key } = (await keyRes.json()) as { key: string };
-    const viaKey = await SELF.fetch(`${BASE}/api/v1/admin/invites`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: "{}",
-    });
-    expect(viaKey.status).toBe(403);
+    const { id } = await newInvite("for Kemi");
+    for (const auth of [{ Cookie: member }, { Cookie: admin }, { Authorization: `Bearer ${key}` }]) {
+      const post = await SELF.fetch(`${BASE}/api/v1/admin/invites`, { method: "POST", headers: { "Content-Type": "application/json", ...ORIGIN, ...auth }, body: "{}" });
+      expect(post.status).toBe(404);
+      expect((await SELF.fetch(`${BASE}/api/v1/admin/invites`, { headers: auth })).status).toBe(404);
+      expect((await SELF.fetch(`${BASE}/api/v1/admin/invites/${id}`, { method: "DELETE", headers: { ...ORIGIN, ...auth } })).status).toBe(404);
+    }
+    // Nothing was revoked by those calls.
+    expect((await listInvites(createDb(env.DB))).find((i) => i.id === id)?.revokedAt).toBeNull();
   });
 
   it("never returns tokens or hashes in the list", async () => {
-    const admin = await adminSession();
-    const token = await newInviteToken(admin);
-    const text = await (await SELF.fetch(`${BASE}/api/v1/admin/invites`, { headers: { Cookie: admin } })).text();
+    const { token } = await newInvite();
+    const text = JSON.stringify(await listInvites(createDb(env.DB)));
     expect(text).not.toContain(token);
     expect(text).not.toContain("token");
     expect(text).not.toMatch(/[0-9a-f]{64}/);
@@ -106,8 +97,7 @@ describe("invite management", () => {
 
 describe("invite redemption", () => {
   it("lets someone off the allowlist create an account, once", async () => {
-    const admin = await adminSession();
-    const token = await newInviteToken(admin);
+    const token = await newInviteToken();
     const acc = await accept(token);
     expect(acc.status).toBe(200);
     const setCookie = acc.headers.get("Set-Cookie") ?? "";
@@ -135,21 +125,16 @@ describe("invite redemption", () => {
   });
 
   it("rejects expired and revoked invites", async () => {
-    const admin = await adminSession();
-    const expired = await newInviteToken(admin);
+    const expired = await newInviteToken();
     await env.DB.prepare("UPDATE invite SET expires_at = 1 WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?")
       .bind(Date.now())
       .run();
     expect((await accept(expired)).status).toBe(400);
 
-    const revokedToken = await newInviteToken(admin);
-    const list = (await (await SELF.fetch(`${BASE}/api/v1/admin/invites`, { headers: { Cookie: admin } })).json()) as {
-      data: { id: string; status: string }[];
-    };
-    const pending = list.data.find((i) => i.status === "pending")!;
-    const del = await SELF.fetch(`${BASE}/api/v1/admin/invites/${pending.id}`, { method: "DELETE", headers: { Cookie: admin, ...ORIGIN } });
-    expect(del.status).toBe(204);
-    expect((await accept(revokedToken)).status).toBe(400);
+    const revoked = await newInvite();
+    expect(await revokeInvite(createDb(env.DB), revoked.id)).toBe(true);
+    expect(await revokeInvite(createDb(env.DB), revoked.id)).toBe(false); // already revoked
+    expect((await accept(revoked.token)).status).toBe(400);
   });
 
   it("rejects garbage tokens", async () => {
@@ -159,8 +144,7 @@ describe("invite redemption", () => {
   });
 
   it("two sign-ups racing on one invite: exactly one account is created", async () => {
-    const admin = await adminSession();
-    const token = await newInviteToken(admin);
+    const token = await newInviteToken();
     const inviteCookie = (await accept(token)).headers.get("Set-Cookie")!.split(";")[0]!;
     const results = await Promise.all([
       signUp("race-a@outside.io", "A", inviteCookie),

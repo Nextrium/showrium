@@ -18,6 +18,7 @@ import {
   listIdeas,
   parseFeed,
   publishDraft,
+  publishingHealth,
   rescoreOldIdeas,
   goodUntil,
   inQuietHours,
@@ -318,6 +319,27 @@ describe("when a scheduled post fails", () => {
     expect(emails[0]).toMatchObject({ to: "is-fail@example.com", subject: "A scheduled post didn't go out" });
     expect(emails[0]!.text).toContain("One or more parameters");
     expect(emails[0]!.text).toContain(`${BASE}/app/posts?status=failed`);
+  });
+
+  it("X out of paid API usage (HTTP 402 \"credits depleted\"): blamed on us, not the person; nothing charged; staff alerted", async () => {
+    // The incident of 2026-10-19: our X developer account ran out of prepaid API credits.
+    const u = await user("is-x402@example.com");
+    const conn = await connect(u, "x");
+    const id = await approvedPost(u.orgId, "x", "A short post.");
+    await env.DB.prepare("UPDATE draft SET status = 'scheduled', connection_id = ?, scheduled_at = ? WHERE id = ?").bind(conn, Date.now() - 60_000, id).run();
+    const depleted = async (url: string) =>
+      url.includes("/2/tweets") ? Response.json({ title: "CreditsDepleted", detail: "Your enrolled account does not have any credits", type: "https://api.x.com/2/problems/credits" }, { status: 402 }) : new Response("{}", { status: 404 });
+    await runDuePublishing({ ...(await deps()), fetch: depleted as typeof fetch }, new Date(), 25);
+    const row = (await env.DB.prepare("SELECT status, last_error FROM draft WHERE id = ?").bind(id).first<{ status: string; last_error: string }>())!;
+    expect(row.status).toBe("failed");
+    expect(row.last_error).toContain("on our side, not your account or your credits");
+    expect(row.last_error).toContain("Post it yourself");
+    expect(row.last_error).not.toContain("credits depleted"); // X's wording would read as the person's Showrium credits
+    // The account isn't marked to reconnect, and the plan's X post is given back.
+    expect((await env.DB.prepare("SELECT status FROM connection WHERE id = ?").bind(conn).first<{ status: string }>())!.status).toBe("active");
+    expect((await env.DB.prepare("SELECT x_api_posts AS n FROM usage_counter WHERE org_id = ?").bind(u.orgId).first<{ n: number }>())?.n ?? 0).toBe(0);
+    // Staff see it at the top of Publishing health.
+    expect((await publishingHealth(createDb(env.DB))).providerCredit).toEqual([expect.objectContaining({ platform: "x" })]);
   });
 
   it("a long X post after the sign-in expired: renews once, uploads the image and posts (X rotates renewal tokens)", async () => {

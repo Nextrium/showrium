@@ -3,7 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import qrcode from "qrcode-generator";
 import { authClient, timeAgo } from "../lib";
-import { Alert, Badge, Button, Panel } from "../ui/kit";
+import { Alert, Badge, Button, Info, Panel } from "../ui/kit";
 
 type SessionRow = { id: string; token: string; userAgent?: string | null; ipAddress?: string | null; createdAt: string | Date; updatedAt?: string | Date };
 
@@ -62,10 +62,9 @@ function TwoStep({ enabled, onChange }: { enabled: boolean; onChange: () => void
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-medium">Two-step sign-in</span>
+        <span className="flex items-center gap-1.5 font-medium">Two-step sign-in <Info label="About two-step sign-in">After your password, enter a code from an authenticator app, like Google Authenticator or 1Password. It protects your account even if your password leaks.</Info></span>
         <Badge tone={enabled ? "ok" : "neutral"}>{enabled ? "On" : "Off"}</Badge>
       </div>
-      <p className="m-0 text-sm text-muted">After your password, enter a code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password…). Protects your account even if your password leaks.</p>
       {step === "idle" && (
         <Button variant={enabled ? "ghost" : "secondary"} className="self-start" onClick={() => setStep(enabled ? "disable" : "password")}>
           {enabled ? "Turn off" : "Turn on two-step sign-in"}

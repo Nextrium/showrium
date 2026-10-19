@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, navigate, useApi } from "../lib";
-import { Alert, Button, Icon, LinkButton, Panel } from "../ui/kit";
+import { Alert, Button, Icon, Info, LinkButton, Panel } from "../ui/kit";
 
 type Prompt = { question: string; day: string; answeredContextId: string | null };
 
@@ -27,7 +27,7 @@ export function DailyPrompt() {
   };
 
   return (
-    <Panel title="Today’s question" id="prompt" action={<span className="flex items-center gap-1.5 text-[12.5px] text-muted"><Icon name="comment" size={14} />Daily prompt</span>}>
+    <Panel title="Today’s question" id="prompt" action={<Info label="About today’s question">One short question a day, matched to what you do. Your answer becomes an idea.</Info>}>
       <p className="m-0 font-display text-lg font-semibold leading-snug text-ink">{data.question}</p>
       {data.answeredContextId ? (
         <div className="flex flex-wrap items-center gap-3">

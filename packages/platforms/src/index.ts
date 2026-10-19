@@ -56,7 +56,7 @@ export interface ReplyTo {
 export class PlatformError extends Error {
   constructor(
     readonly platform: string,
-    readonly kind: "auth" | "rate_limited" | "rejected" | "unavailable",
+    readonly kind: "auth" | "rate_limited" | "rejected" | "unavailable" | "provider_billing",
     message: string,
   ) {
     super(message);
@@ -98,10 +98,13 @@ async function request(platform: string, doFetch: FetchLike, url: string, init: 
   }
   if (res.ok) return res;
   // Sign-in failures never carry the platform's text (it can describe tokens); other refusals do.
-  const reason = res.status === 401 || res.status === 403 || res.status === 429 || res.status >= 500 ? "" : await errorReason(res);
+  const reason = res.status === 401 || res.status === 402 || res.status === 403 || res.status === 429 || res.status >= 500 ? "" : await errorReason(res);
   const why = reason ? ` ${platform} said: "${reason}"` : "";
   if (res.status === 401 || res.status === 403) throw new PlatformError(platform, "auth", `${platform} refused the request. Reconnect the account and try again.`);
   if (res.status === 429) throw new PlatformError(platform, "rate_limited", `${platform} is rate-limiting requests. Try again later.`);
+  // 402: Showrium's own developer account with the platform is out of paid API usage (X: "credits
+  // depleted"). It's on our side, not the person's account or their Showrium credits.
+  if (res.status === 402) throw new PlatformError(platform, "provider_billing", `Posting to ${platform} through Showrium isn't available right now. This is on our side, not your account or your credits. Post it yourself (free), or try again later.`);
   if (res.status >= 500) throw new PlatformError(platform, "unavailable", `${platform} is having problems (HTTP ${res.status}). Try again shortly.`);
   throw new PlatformError(platform, "rejected", `${platform} rejected ${what} (HTTP ${res.status}).${why}`);
 }

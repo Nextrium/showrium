@@ -4,7 +4,7 @@ import { ImageSettingsPanel } from "../../components/PostImage";
 import { useState, type FormEvent } from "react";
 import { api, authClient, formatDate, timeAgo, useApi } from "../../lib";
 import { planLabel, ThemePicker } from "../../shell/AppShell";
-import { Alert, Badge, Button, PageHeader, Panel } from "../../ui/kit";
+import { Alert, Badge, Button, Info, PageHeader, Panel } from "../../ui/kit";
 
 type Me = { principal: { kind: string; role: string; isPlatformAdmin: boolean }; workspace: { id: string; name: string; plan: string; fullAccess: boolean } };
 type ApiKey = { id: string; name: string; prefix: string; lastUsedAt: string | null; revokedAt: string | null; createdAt: string };
@@ -43,8 +43,9 @@ function ApiKeys({ canManage }: { canManage: boolean }) {
 
   return (
     <Panel title="API keys" id="keys">
-      <p className="m-0 text-sm text-muted">
-        For developers and AI agents. Call the <a href="/api/docs">Showrium API</a> with <code>Authorization: Bearer &lt;key&gt;</code>, or connect an agent to the MCP server at <code>{window.location.origin}/api/mcp</code>.
+      <p className="m-0 flex flex-wrap items-center gap-1.5 text-sm text-muted">
+        <a href="/api/docs">Showrium API</a> · MCP server <code>{window.location.origin}/api/mcp</code>
+        <Info label="About API keys">For developers and AI agents. Send the key in the header <code>Authorization: Bearer &lt;key&gt;</code>.</Info>
       </p>
       {canManage && (
         <form className="flex flex-wrap items-end gap-2.5" onSubmit={create}>
@@ -103,12 +104,10 @@ export function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        subtitle="Appearance, security, images, your data and developer access."
         actions={me && <Badge tone={me.workspace.fullAccess ? "info" : "neutral"}>{me.workspace.name} · {planLabel(me.workspace.plan, me.workspace.fullAccess)}</Badge>}
       />
       <div className="grid gap-5 lg:grid-cols-2">
-        <Panel title="Appearance" id="appearance">
-          <p className="m-0 text-sm text-muted">Choose a theme, or follow your device. Saved in this browser.</p>
+        <Panel title={<span className="flex items-center gap-1.5">Appearance <Info label="About appearance">Choose a theme, or follow your device. Saved in this browser.</Info></span>} id="appearance">
           <ThemePicker />
         </Panel>
         <ApiKeys canManage={canManage} />

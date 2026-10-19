@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, formatDate, orgHeaders, useApi } from "../../lib";
 import { audioPeak, canvasSize, decodeAudio, drawFrame, play, sceneTotal, type Timeline } from "../../video/render";
 import type { Draft } from "./shared";
-import { PageHeader } from "../../ui/kit";
+import { Info, PageHeader } from "../../ui/kit";
 
 type Video = { id: string; timeline: Timeline; revisions: number; createdAt: string };
 type Connection = { id: string; platform: string; handle: string; status: string };
@@ -110,7 +110,7 @@ function Player({ video, onRevised }: { video: Video; onRevised: (v: Video) => v
             <button className="button" disabled={Boolean(busy)} onClick={record}>Make the video file</button>
           </div>
           {busy && <p className="note" role="status">{busy} {Math.round(progress * 100)}%</p>}
-          {busy?.startsWith("Recording") && <p className="note">Keep this tab open while recording. It plays in real time, and switching to another tab can make the video choppy.</p>}
+          {busy?.startsWith("Recording") && <p className="note">Keep this tab open while recording. <Info label="Why keep the tab open">It plays in real time. Switching to another tab can make the video choppy.</Info></p>}
           {file && (
             <div className="row">
               <a className="button" href={file.url} download={`showrium-${video.id}.${ext}`}>Download ({(file.blob.size / 1e6).toFixed(1)} MB)</a>
@@ -160,10 +160,10 @@ export function StudioPage() {
   const candidates = (drafts.data?.data ?? []).filter((d) => d.status !== "discarded");
   return (
     <div className="dash">
-      <PageHeader title="Video" subtitle="Turn a post into a short explainer with captions and a voice-over, made on your device." />
+      <PageHeader title="Video" actions={<Info label="About videos">Turn a post into a short explainer with captions and an AI voice-over.</Info>} />
       <section className="card">
         <h2 className="h3">Make a video</h2>
-        <p className="note">Turn a post into a short explainer with captions and an AI voice-over. It's made on your device, so it's quick and free to render.</p>
+        <p className="note">Made on your device, so it's quick and free to render.</p>
         <form className="row" onSubmit={create}>
           <label>
             From post
@@ -181,7 +181,7 @@ export function StudioPage() {
           </label>
           <button className="button" disabled={busy || !candidates.length}>{busy ? "Planning…" : "Plan the video"}</button>
         </form>
-        {!candidates.length && <p className="note">Create a post first, then turn it into a video.</p>}
+        {!candidates.length && <p className="note">Write a post first.</p>}
         {error && <p className="error" role="alert">{error}</p>}
         <p className="note">
           Talking-avatar and cinematic AI clips: {videos.data?.premium.avatar || videos.data?.premium.cinematic ? "available with credits." : "coming soon."}

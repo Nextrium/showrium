@@ -262,7 +262,9 @@ export function Info({ children, label = "More information" }: { children: React
         aria-expanded={open}
         onFocus={show}
         onBlur={() => setOpen(false)}
-        onClick={() => (open ? setOpen(false) : show())}
+        // A tap fires hover, focus and click in a row, so toggling here would close it at once: a click
+        // only opens. Moving away, tapping elsewhere (blur) or Escape closes it.
+        onClick={show}
         onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
         className="inline-flex h-[18px] w-[18px] cursor-help items-center justify-center rounded-full border border-line-strong text-[11px] font-semibold text-muted hover:text-ink"
       >

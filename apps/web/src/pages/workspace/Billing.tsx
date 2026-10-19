@@ -1,6 +1,6 @@
 import { BillingCard } from "../../components/BusinessCards";
 import { formatDate, useApi } from "../../lib";
-import { Meter, PageHeader, Panel } from "../../ui/kit";
+import { Info, Meter, PageHeader, Panel } from "../../ui/kit";
 
 type Me = { principal: { role: string } };
 type Credits = { balance: number; transactions: { id: string; kind: string; description: string; amount: number; createdAt: string }[] };
@@ -13,7 +13,7 @@ export function BillingPage() {
   const canManage = me?.principal.role === "owner" || me?.principal.role === "admin";
   return (
     <>
-      <PageHeader title="Billing and usage" subtitle="Every plan gets the same quality. Plans change how much you can do, and what can run for you." />
+      <PageHeader title="Billing and usage" actions={<Info label="About plans">Every plan gets the same quality. Plans change how much you can do, and what can run for you.</Info>} />
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex min-w-0 flex-col gap-5">
           <BillingCard canManage={canManage} />
