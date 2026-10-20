@@ -22,6 +22,14 @@ export const CREDITS_PER_X_API_POST = 2;
 /** Photos and documents beyond the plan's daily uploads (reading an image costs real money). */
 export const CREDITS_PER_EXTRA_UPLOAD = 2;
 export const CREDITS_PER_X_API_POST_WITH_LINK = 25;
+/** Each image after the first on an X post sent with credits (X charges for each image's description). */
+export const CREDITS_PER_EXTRA_X_IMAGE = 1;
+/**
+ * What X charges us per paid call, in micro US dollars (X API pay-per-use, measured against the
+ * developer console on 2026-10-20). Uploading an image, the Premium check and renewing the sign-in
+ * are free. Re-check when X changes its prices.
+ */
+export const X_API_COST_MICRO = { post: 15_000, post_with_link: 200_000, image_description: 5_000 } as const;
 /** A web research beyond the plan's monthly allowance (search plus a stronger model, about $0.02). */
 export const CREDITS_PER_EXTRA_RESEARCH = 3;
 

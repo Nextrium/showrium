@@ -345,6 +345,26 @@ export const aiUsage = sqliteTable(
   (t) => [index("ai_usage_created_idx").on(t.createdAt), index("ai_usage_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("ai_usage_feature_ref_uq").on(t.feature, t.refId)],
 );
 
+export const PLATFORM_COST_KINDS = ["post", "post_with_link", "image_description"] as const;
+export type PlatformCostKind = (typeof PLATFORM_COST_KINDS)[number];
+/**
+ * What platforms charge us for API calls (X's pay-per-use, in micro US dollars), one row per paid
+ * call that succeeded, with the post it was for. Shown in the admin Costs page and to the workspace.
+ */
+export const platformUsage = sqliteTable(
+  "platform_usage",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    platform: text("platform").notNull(),
+    kind: text("kind", { enum: PLATFORM_COST_KINDS }).notNull(),
+    costMicroUsd: integer("cost_micro_usd").notNull().default(0),
+    draftId: text("draft_id"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("platform_usage_created_idx").on(t.createdAt), index("platform_usage_org_created_idx").on(t.orgId, t.createdAt)],
+);
+
 export const PASSION_RELATIONS = ["follow", "involved", "ours"] as const;
 export type PassionRelation = (typeof PASSION_RELATIONS)[number];
 

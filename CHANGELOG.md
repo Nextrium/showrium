@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### For people
+- **See what your use costs us:** Billing and usage shows what Showrium paid this month for your workspace's AI (by feature) and X posts. Those are our costs, not charges to you.
+- **X posts with several images:** through the app, beyond your plan's X posts, each image after the first adds 1 credit (X charges for each image).
 - **Clearer when X posting is down on our side:** if X stops accepting posts from Showrium for billing reasons, the post says it's on our side (not your account or your credits) and offers Post it myself. Nothing is charged.
 - **Less text everywhere:** explanations on every page now sit behind a "?". A "?" now opens on tap as well as on hover.
 - **Reconnecting an account keeps your scheduled posts:** posts waiting on an account you disconnected move to it when you connect it again, and still go out on time.
@@ -29,6 +31,7 @@
 
 ### For Showrium staff
 - **AI costs:** every AI call is recorded (posts, research, insights, images, video, voice), by day, feature, model and workspace, with the cost per post and the workspaces that cost more than they pay. Workers AI costs are marked as estimates.
+- **X API costs** are recorded per post from what X really charges ($0.015 a post, $0.005 per image description) and shown on the Costs page, per workspace too.
 - **Publishing health** warns at the top when our own X API account has run out of paid usage, so it can be topped up.
 - The admin menu stays in place while a page scrolls.
 - The product's old staff endpoints (`/api/v1/admin/*`) are removed; all of it is in the admin app.

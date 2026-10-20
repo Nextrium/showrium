@@ -24,6 +24,7 @@ import {
   getPersona,
   getSource,
   getUsage,
+  workspaceCosts,
   GITHUB_REPO_RE,
   ingestFeed,
   ingestUrl,
@@ -60,7 +61,7 @@ export const contentApi = new OpenAPIHono<AppEnv>({
   },
 });
 
-for (const path of ["/persona", "/contexts", "/contexts/*", "/sources", "/sources/*", "/compose", "/drafts", "/drafts/*", "/usage", "/platforms", "/passions", "/passions/*"]) {
+for (const path of ["/persona", "/contexts", "/contexts/*", "/sources", "/sources/*", "/compose", "/drafts", "/drafts/*", "/usage", "/costs", "/platforms", "/passions", "/passions/*"]) {
   contentApi.use(path, requirePrincipal);
 }
 
@@ -697,4 +698,22 @@ contentApi.openapi(
       200,
     );
   },
+);
+
+const CostsSchema = z.object({
+  since: z.string(),
+  totalUsd: z.number(),
+  ai: z.object({ usd: z.number(), byFeature: z.array(z.object({ feature: z.string(), usd: z.number(), calls: z.number(), estimated: z.boolean() })) }),
+  x: z.object({ usd: z.number(), posts: z.number(), images: z.number() }),
+});
+
+contentApi.openapi(
+  createRoute({
+    method: "get",
+    path: "/costs",
+    tags: ["Account"],
+    summary: "What this workspace's use has cost Showrium this month (AI and X API), for transparency",
+    responses: { 200: json(CostsSchema), ...errs },
+  }),
+  async (c) => c.json(await workspaceCosts(c.get("db"), c.get("principal").orgId), 200),
 );

@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createDb } from "@nextrium/db";
-import { estimateNarration, estimateTranscription, importTokenKey, pauseWorkspace, publishDraft, resumeWorkspace, runAutopilotFor, runDuePublishing, saveConnection, type PublishDeps } from "@nextrium/core";
+import { aiCostReport, estimateNarration, estimateTranscription, getBalance, importTokenKey, pauseWorkspace, postCreditTxn, publishDraft, resumeWorkspace, runAutopilotFor, runDuePublishing, saveConnection, workspaceCosts, type PublishDeps } from "@nextrium/core";
 import { fakeProvider } from "@nextrium/llm";
 
 // Admin phase 2 (owner decisions 2026-10-19): every AI call's cost is recorded, and a paused workspace
@@ -33,6 +33,58 @@ describe("AI cost ledger", () => {
     expect(estimateTranscription("one two three")).toBeGreaterThanOrEqual(1);
     expect(estimateTranscription("word ".repeat(300))).toBe(1000); // 2 minutes at $0.0005
     expect(estimateNarration("x".repeat(1800))).toBe(400); // 2 minutes at $0.0002
+  });
+});
+
+describe("X costs (measured against X's console 2026-10-20)", () => {
+  it("charges 1 credit per image after the first, records what X charged, and shows it to the workspace (only its own)", async () => {
+    const u = await user("p2-xcost@example.com");
+    await env.DB.prepare("UPDATE org SET plan = 'free' WHERE id = ?").bind(u.orgId).run(); // no X allowance: credits
+    const deps: PublishDeps = { db: createDb(env.DB), key: await importTokenKey(env.TOKEN_ENCRYPTION_KEY), configs: { mastodonRedirectUri: `${BASE}/cb` } };
+    await saveConnection(deps, { orgId: u.orgId, platform: "x", account: { accountId: "x-cost", handle: "@cost" }, secret: { tokens: { accessToken: "a1", refreshToken: "r1", expiresAt: Date.now() + 3600_000 } }, meta: {}, userId: u.userId });
+    const conn = (await env.DB.prepare("SELECT id FROM connection WHERE org_id = ? AND platform = 'x'").bind(u.orgId).first<{ id: string }>())!.id;
+    const id = `drf_${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO draft (id, org_id, platform, text, status, issues, connection_id, own_images) VALUES (?, ?, 'x', 'Three pictures from the launch.', 'approved', '[]', ?, 1)").bind(id, u.orgId, conn).run();
+    const original = (n: number) => JSON.stringify({ key: `orgs/${u.orgId}/images/${id}-${n}.png`, mime: "image/png", bytes: 10243, width: 512, height: 512 });
+    for (let n = 0; n < 3; n++) await env.DB.prepare("INSERT INTO post_image (id, org_id, draft_id, position, source, alt, original, variants) VALUES (?, ?, ?, ?, 'upload', ?, ?, '{}')").bind(`img_${crypto.randomUUID()}`, u.orgId, id, n, `Photo ${n + 1}`, original(n)).run();
+    await postCreditTxn(deps.db, { orgId: u.orgId, kind: "purchase", amount: 100, idempotencyKey: `topup:${u.orgId}`, description: "Pack" });
+    const before = await getBalance(deps.db, u.orgId);
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 2, 0, 0, 0, 2, 0]);
+    const media = { put: async () => undefined, delete: async () => undefined, get: async () => ({ arrayBuffer: async () => png.buffer.slice(0) }) };
+    let uploads = 0;
+    const fakeX = async (url: string) =>
+      url.endsWith("/2/media/upload") ? Response.json({ data: { id: `m${++uploads}` } }) : url.endsWith("/2/media/metadata") ? Response.json({}) : url.endsWith("/2/tweets") ? Response.json({ data: { id: "t1" } }) : new Response("{}", { status: 404 });
+    expect(await publishDraft({ ...deps, fetch: fakeX as typeof fetch, media }, { orgId: u.orgId, draftId: id })).toMatchObject({ status: "published" });
+    expect(uploads).toBe(3);
+    // 2 for the post, plus 1 each for images 2 and 3.
+    expect(before - (await getBalance(deps.db, u.orgId))).toBe(4);
+    // What X charged: one post ($0.015) and three image descriptions ($0.005 each).
+    const rows = await env.DB.prepare("SELECT kind, cost_micro_usd AS c FROM platform_usage WHERE org_id = ? ORDER BY kind").bind(u.orgId).all<{ kind: string; c: number }>();
+    expect(rows.results).toEqual([{ kind: "image_description", c: 5000 }, { kind: "image_description", c: 5000 }, { kind: "image_description", c: 5000 }, { kind: "post", c: 15000 }]);
+    expect((await workspaceCosts(deps.db, u.orgId)).x).toEqual({ usd: 0.03, posts: 1, images: 3 });
+    // The workspace sees its own costs (AI and X); another workspace sees none of them.
+    const mine = (await (await u.call("GET", "/costs")).json()) as { totalUsd: number; x: { usd: number } };
+    expect(mine.x.usd).toBe(0.03);
+    expect(mine.totalUsd).toBeGreaterThanOrEqual(0.03);
+    const other = await user("p2-xcost-other@example.com");
+    expect(((await (await other.call("GET", "/costs")).json()) as { x: { usd: number; posts: number } }).x).toMatchObject({ usd: 0, posts: 0 });
+    // Staff see it in the admin cost report, against the workspace.
+    const report = await aiCostReport(deps.db);
+    expect(report.xApi.images).toBeGreaterThanOrEqual(3);
+    expect(report.workspaces.find((w) => w.orgId === u.orgId)).toMatchObject({ xUsd: 0.03 });
+  });
+
+  it("a failed X post records no cost; the costs endpoint needs a signed-in workspace", async () => {
+    const u = await user("p2-xcost-fail@example.com");
+    const deps: PublishDeps = { db: createDb(env.DB), key: await importTokenKey(env.TOKEN_ENCRYPTION_KEY), configs: { mastodonRedirectUri: `${BASE}/cb` } };
+    await saveConnection(deps, { orgId: u.orgId, platform: "x", account: { accountId: "x-fail", handle: "@fail" }, secret: { tokens: { accessToken: "a1", refreshToken: "r1", expiresAt: Date.now() + 3600_000 } }, meta: {}, userId: u.userId });
+    const conn = (await env.DB.prepare("SELECT id FROM connection WHERE org_id = ? AND platform = 'x'").bind(u.orgId).first<{ id: string }>())!.id;
+    const id = `drf_${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO draft (id, org_id, platform, text, status, issues, connection_id) VALUES (?, ?, 'x', 'Hello.', 'approved', '[]', ?)").bind(id, u.orgId, conn).run();
+    const refuse = async (url: string) => (url.endsWith("/2/tweets") ? Response.json({ detail: "nope" }, { status: 400 }) : new Response("{}", { status: 404 }));
+    await expect(publishDraft({ ...deps, fetch: refuse as typeof fetch }, { orgId: u.orgId, draftId: id })).rejects.toThrow();
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM platform_usage WHERE org_id = ?").bind(u.orgId).first<{ n: number }>())!.n).toBe(0);
+    expect((await SELF.fetch(`${BASE}/api/v1/costs`)).status).toBe(401);
   });
 });
 

@@ -1,10 +1,9 @@
 // What AI costs us: one row per AI call (see `aiUsage` in the schema), and the admin app's cost report.
 // Recording never fails the request it belongs to: a cost row is bookkeeping, not the product.
 import { and, eq, gte, sql } from "drizzle-orm";
-import { aiUsage, brief, draft, insight, org, subscription, usageCounter, type AiFeature, type Db } from "@nextrium/db";
+import { aiUsage, brief, draft, insight, org, platformUsage, subscription, type AiFeature, type Db } from "@nextrium/db";
 import { planPriceCents } from "./billing.js";
 import { newId } from "./ids.js";
-import { currentPeriod } from "./plans.js";
 
 const DAY = 86_400_000;
 
@@ -62,7 +61,7 @@ const usd = (micro: number) => Math.round(micro) / 1_000_000;
 
 /**
  * The admin app's AI cost report: this month and the last 30 days, by day, feature and model, the
- * cost of writing one post, the workspaces that cost most against what they pay, and X API spend.
+ * cost of writing one post, the workspaces that cost most (AI plus X) against what they pay, and X API spend.
  */
 export async function aiCostReport(db: Db, now = new Date()) {
   const since30 = new Date(now.getTime() - 30 * DAY);
@@ -97,8 +96,18 @@ export async function aiCostReport(db: Db, now = new Date()) {
   const posts30 = Number(written?.n ?? 0);
 
   // The workspaces that cost most, against what they pay a month (yearly plans divided by 12).
+  // Platform API costs (X), from the ledger of paid calls that went out.
+  const xRows = await db
+    .select({ orgId: platformUsage.orgId, kind: platformUsage.kind, micro: platformUsage.costMicroUsd, at: platformUsage.createdAt })
+    .from(platformUsage)
+    .where(gte(platformUsage.createdAt, since30 < monthStart ? since30 : monthStart));
+  const x30 = xRows.filter((r) => r.at >= since30);
+  const xPerOrg = new Map<string, number>();
+  for (const r of x30) xPerOrg.set(r.orgId, (xPerOrg.get(r.orgId) ?? 0) + r.micro);
+
   const perOrg = new Map<string, number>();
   for (const r of last30) perOrg.set(r.orgId, (perOrg.get(r.orgId) ?? 0) + r.micro);
+  for (const [orgId, micro] of xPerOrg) perOrg.set(orgId, (perOrg.get(orgId) ?? 0) + micro);
   const top = [...perOrg.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
   const workspaces = [];
   for (const [orgId, micro] of top) {
@@ -106,12 +115,8 @@ export async function aiCostReport(db: Db, now = new Date()) {
     const [sub] = await db.select({ plan: subscription.plan, interval: subscription.interval, seats: subscription.seats, status: subscription.status }).from(subscription).where(eq(subscription.orgId, orgId));
     const cents = sub && sub.status !== "expired" ? planPriceCents(sub.plan, sub.interval, sub.seats ?? undefined) : null;
     const paysUsd = cents === null ? 0 : (sub!.interval === "year" ? cents / 12 : cents) / 100;
-    workspaces.push({ orgId, name: o?.name ?? orgId, plan: o?.fullAccess ? "staff" : (o?.plan ?? "free"), costUsd: usd(micro), paysUsd: Math.round(paysUsd * 100) / 100, losing: paysUsd > 0 ? usd(micro) > paysUsd : usd(micro) >= FREE_COST_FLAG_USD });
+    workspaces.push({ orgId, name: o?.name ?? orgId, plan: o?.fullAccess ? "staff" : (o?.plan ?? "free"), costUsd: usd(micro), xUsd: usd(xPerOrg.get(orgId) ?? 0), paysUsd: Math.round(paysUsd * 100) / 100, losing: paysUsd > 0 ? usd(micro) > paysUsd : usd(micro) >= FREE_COST_FLAG_USD });
   }
-
-  // X API: posts sent through the app this month, at X's $0.015 a post (link posts aren't sent: owner decision 2026-10-19).
-  const [x] = await db.select({ n: sql<number>`coalesce(sum(${usageCounter.xApiPosts}), 0)` }).from(usageCounter).where(eq(usageCounter.period, currentPeriod(now)));
-  const xPosts = Number(x?.n ?? 0);
 
   return {
     monthToDateUsd: usd(sum(rows.filter((r) => r.at >= monthStart))),
@@ -122,7 +127,12 @@ export async function aiCostReport(db: Db, now = new Date()) {
     byModel: group("model"),
     perPost: { posts: posts30, usd: posts30 ? usd(writeMicro / posts30) : 0 },
     workspaces,
-    xApi: { posts: xPosts, usd: Math.round(xPosts * 0.015 * 100) / 100 },
+    xApi: {
+      monthToDateUsd: usd(xRows.filter((r) => r.at >= monthStart).reduce((a, r) => a + r.micro, 0)),
+      last30Usd: usd(x30.reduce((a, r) => a + r.micro, 0)),
+      posts: x30.filter((r) => r.kind !== "image_description").length,
+      images: x30.filter((r) => r.kind === "image_description").length,
+    },
   };
 }
 
@@ -135,3 +145,33 @@ export async function aiCostFor(db: Db, orgId: string, now = new Date()) {
   return usd(Number(row?.micro ?? 0));
 }
 
+
+/**
+ * What one workspace's use has cost us this month (UTC): AI by feature and X API calls. Shown to the
+ * workspace in Billing & usage, for transparency. These are our costs, not charges to them.
+ */
+export async function workspaceCosts(db: Db, orgId: string, now = new Date()) {
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const ai = await db
+    .select({ feature: aiUsage.feature, micro: sql<number>`sum(${aiUsage.costMicroUsd})`, calls: sql<number>`count(*)`, estimated: sql<number>`max(${aiUsage.estimated})` })
+    .from(aiUsage)
+    .where(and(eq(aiUsage.orgId, orgId), gte(aiUsage.createdAt, monthStart)))
+    .groupBy(aiUsage.feature);
+  const xs = await db
+    .select({ kind: platformUsage.kind, micro: sql<number>`sum(${platformUsage.costMicroUsd})`, calls: sql<number>`count(*)` })
+    .from(platformUsage)
+    .where(and(eq(platformUsage.orgId, orgId), gte(platformUsage.createdAt, monthStart)))
+    .groupBy(platformUsage.kind);
+  const aiMicro = ai.reduce((a, r) => a + Number(r.micro), 0);
+  const xMicro = xs.reduce((a, r) => a + Number(r.micro), 0);
+  const xCalls = (k: string) => Number(xs.find((r) => r.kind === k)?.calls ?? 0);
+  return {
+    since: monthStart.toISOString(),
+    totalUsd: usd(aiMicro + xMicro),
+    ai: {
+      usd: usd(aiMicro),
+      byFeature: ai.map((r) => ({ feature: r.feature, usd: usd(Number(r.micro)), calls: Number(r.calls), estimated: Boolean(Number(r.estimated)) })).sort((a, b) => b.usd - a.usd),
+    },
+    x: { usd: usd(xMicro), posts: xCalls("post") + xCalls("post_with_link"), images: xCalls("image_description") },
+  };
+}

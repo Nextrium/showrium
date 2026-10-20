@@ -1,6 +1,6 @@
 // Connected accounts and publishing. Tokens are decrypted only here, just before use.
 import { and, asc, eq, gt, inArray, lte, sql } from "drizzle-orm";
-import { connection, draft, mastodonApp, oauthState, org, persona, type ConnectionPlatform, type Db } from "@nextrium/db";
+import { connection, draft, mastodonApp, oauthState, org, persona, platformUsage, type ConnectionPlatform, type Db } from "@nextrium/db";
 import { bluesky, linkedin, mastodon, PlatformError, tiktok, x, type Account, type FetchLike, type OAuthConfig, type ImageUpload, type ReplyTo, type TokenSet } from "@nextrium/platforms";
 import { hasErrors, X_LONG_SUBSCRIPTIONS, xWeightedLength } from "@nextrium/policy";
 import { postCreditTxn, InsufficientCreditsError } from "./credits.js";
@@ -9,7 +9,7 @@ import { newId } from "./ids.js";
 import { imagesForPublishing, type ImageStore } from "./images.js";
 import { recordAudit } from "./orgs.js";
 import { getOrgLimits, getOrgPlan } from "./content.js";
-import { addUsage, CREDITS_PER_X_API_POST, CREDITS_PER_X_API_POST_WITH_LINK, PLAN_LIMITS } from "./plans.js";
+import { addUsage, CREDITS_PER_EXTRA_X_IMAGE, CREDITS_PER_X_API_POST, CREDITS_PER_X_API_POST_WITH_LINK, PLAN_LIMITS, X_API_COST_MICRO } from "./plans.js";
 
 export interface PlatformConfigs {
   x?: OAuthConfig | undefined;
@@ -304,7 +304,13 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   const startAt = posted.length;
   const remaining = parts.slice(startAt);
 
-  // X charges per API post: plan allowance first, then credits (links cost more). Each part is a post.
+  const images = deps.media ? await imagesForPublishing(db, deps.media, input.orgId, d).catch(() => []) : [];
+  // Images go on the first part only; X charges for each image's description.
+  const imagesOnFirst = startAt === 0 ? images.length : 0;
+  const describedOnFirst = startAt === 0 ? images.filter((i) => i.alt).length : 0;
+
+  // X charges per API post: plan allowance first, then credits (links cost more, and each image after
+  // the first adds a credit). Each part is a post.
   const partCharge: number[] = remaining.map(() => 0);
   if (conn.platform === "x") {
     const xLimit = (await getOrgLimits(db, input.orgId)).limits.xApiPosts;
@@ -315,7 +321,9 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
       await db.update(draft).set({ status: "approved", scheduledAt: null, autoScheduled: false, lastError: "This month's X posts in your plan are used up. Approve it yourself to post with credits, or post it yourself (free).", updatedAt: new Date() }).where(eq(draft.id, d.id));
       throw new PublishError("insufficient_credits", "This month's X posts are used up; automation doesn't spend credits.");
     }
-    for (let i = remaining.length - overage; i < remaining.length; i++) partCharge[i] = /https?:\/\//i.test(remaining[i]!) ? CREDITS_PER_X_API_POST_WITH_LINK : CREDITS_PER_X_API_POST;
+    for (let i = remaining.length - overage; i < remaining.length; i++) {
+      partCharge[i] = (/https?:\/\//i.test(remaining[i]!) ? CREDITS_PER_X_API_POST_WITH_LINK : CREDITS_PER_X_API_POST) + (i === 0 ? Math.max(0, imagesOnFirst - 1) * CREDITS_PER_EXTRA_X_IMAGE : 0);
+    }
     const charged = partCharge.reduce((a, b) => a + b, 0);
     if (charged > 0) {
       try {
@@ -330,7 +338,6 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   }
 
   const cache: SendCache = {};
-  const images = deps.media ? await imagesForPublishing(db, deps.media, input.orgId, d).catch(() => []) : [];
   try {
     if (conn.platform === "x" && parts.some((p) => xWeightedLength(p) > 280)) await confirmXLong(deps, conn);
     let result: { externalId: string; url: string | null };
@@ -352,6 +359,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
       .update(draft)
       .set({ status: "published", publishedAt: new Date(), externalPostId: result.externalId, externalUrl: result.url, publishMethod: "api", urgentUntil: null, lastError: cache.imageNotes?.length ? `Posted, but not every image went with it. ${cache.imageNotes.join(" ")}` : null, updatedAt: new Date() })
       .where(eq(draft.id, d.id));
+    if (conn.platform === "x") await recordXCosts(db, input.orgId, d.id, remaining.slice(0, parts.length - startAt), describedOnFirst);
     await recordAudit(db, { orgId: input.orgId, actorUserId: input.actorUserId ?? null, action: "draft.published", target: d.id, meta: { platform: conn.platform, parts: parts.length, images: images.length, imagesLeftOut: cache.imageNotes?.length ?? 0 } });
     return { status: "published" as const, url: result.url };
   } catch (error) {
@@ -366,6 +374,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     // Give back the allowance and credits for the parts that didn't go out.
     if (conn.platform === "x") {
       const sentNow = posted.length - startAt;
+      if (sentNow > 0) await recordXCosts(db, input.orgId, d.id, remaining.slice(0, sentNow), describedOnFirst);
       const unsent = remaining.length - sentNow;
       const refund = partCharge.slice(sentNow).reduce((a, b) => a + b, 0);
       if (unsent > 0) await addUsage(db, input.orgId, "xApiPosts", -unsent, (await getOrgLimits(db, input.orgId)).limits.xApiPosts).catch(() => undefined);
@@ -374,6 +383,20 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
       }
     }
     throw new PublishError("platform_error", message);
+  }
+}
+
+/** What X charged us for the parts that went out (one row per paid call). Never fails the post. */
+async function recordXCosts(db: Db, orgId: string, draftId: string, sentParts: string[], images: number) {
+  const rows = [
+    ...sentParts.map((p) => ({ kind: /https?:\/\//i.test(p) ? ("post_with_link" as const) : ("post" as const) })),
+    ...Array.from({ length: sentParts.length ? Math.max(0, images) : 0 }, () => ({ kind: "image_description" as const })),
+  ].map((r) => ({ id: newId("pfu"), orgId, platform: "x", kind: r.kind, costMicroUsd: X_API_COST_MICRO[r.kind], draftId }));
+  if (!rows.length) return;
+  try {
+    await db.insert(platformUsage).values(rows);
+  } catch (error) {
+    console.warn("platform usage not recorded", error instanceof Error ? error.message : error);
   }
 }
 

@@ -30,6 +30,19 @@ async function user(email: string, plan = "creator", platforms = ["bluesky", "li
 }
 
 const off = { write: false, schedule: false, approve: false };
+/** Next Monday at 08:00 UTC (never in the past: the scheduler refuses times that have gone by). */
+function nextMonday() {
+  const d = new Date();
+  d.setUTCHours(8, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() + (((8 - d.getUTCDay()) % 7) || 7));
+  return d;
+}
+/** The run below happens at a fixed time, so its ideas must be from just before it, not from when the test runs. */
+async function dateIdeas(orgId: string, at: Date) {
+  const before = at.getTime() - 3600_000;
+  await env.DB.prepare("UPDATE idea SET created_at = ? WHERE org_id = ?").bind(before, orgId).run();
+  await env.DB.prepare("UPDATE context_item SET created_at = ? WHERE org_id = ?").bind(before, orgId).run();
+}
 const settings = (over: Record<string, unknown> = {}) => ({ findIdeas: true, rules: {}, mix: { build_in_public: 2, teach: 1 }, days: [1, 3, 5], publishHourUtc: 9, ...over });
 const reply = (user: string) => {
   const ids = (user.match(/Platform ids: ([^.]+)\./)?.[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -122,7 +135,8 @@ describe("the automation run", () => {
     const cid = `ctx_${crypto.randomUUID()}`;
     await env.DB.prepare("INSERT INTO context_item (id, org_id, source_id, kind, title, body) VALUES (?, ?, ?, 'rss_item', 'Cardano node 1.0 released', 'Faster sync for everyone.')").bind(cid, u.orgId, src!.id).run();
     await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: cid, title: "Cardano node 1.0 released" }], "Cardano", { passionName: "Cardano" });
-    const monday = new Date("2026-10-19T08:00:00Z");
+    const monday = nextMonday();
+    await dateIdeas(u.orgId, monday);
     expect(await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, monday)).toEqual({ skipped: "no_ideas" });
     await u.call("PATCH", `/passions/${p.id}`, { active: true });
     const out = await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, monday);
@@ -139,7 +153,8 @@ describe("the automation run", () => {
     const cid = `ctx_${crypto.randomUUID()}`;
     await env.DB.prepare("INSERT INTO context_item (id, org_id, kind, title, body) VALUES (?, ?, 'rss_item', 'We released queue retries v2.0', 'A long article.')").bind(cid, u.orgId).run();
     await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: cid, title: "We released queue retries v2.0" }]);
-    const monday = new Date("2026-10-19T08:00:00Z");
+    const monday = nextMonday();
+    await dateIdeas(u.orgId, monday);
     const out = await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, monday);
     expect(out).toMatchObject({ mode: "teach", drafts: 2, approved: 1, scheduled: 1 });
     const rows = await env.DB.prepare("SELECT platform, status FROM draft WHERE org_id = ? ORDER BY platform").bind(u.orgId).all<{ platform: string; status: string }>();
@@ -147,7 +162,7 @@ describe("the automation run", () => {
     const log = await env.DB.prepare("SELECT week_log FROM autopilot WHERE org_id = ?").bind(u.orgId).first<{ week_log: string }>();
     expect(JSON.parse(log!.week_log)).toHaveLength(1);
     // Again the same day: each platform's posts for the day are written (1 a day by default).
-    expect(await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, new Date("2026-10-19T12:00:00Z"))).toEqual({ skipped: "daily_limit" });
+    expect(await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, new Date(monday.getTime() + 4 * 3600_000))).toEqual({ skipped: "daily_limit" });
     // Saturday isn't a posting day here (Monday, Wednesday, Friday).
     expect(await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId, new Date("2026-10-24T08:00:00Z"))).toEqual({ skipped: "day_off" });
   });

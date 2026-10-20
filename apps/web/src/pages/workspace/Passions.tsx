@@ -115,7 +115,7 @@ function Details({ passion, onSaved }: { passion: Passion; onSaved: () => void }
         <span className="flex items-center gap-1.5 text-[13.5px] font-medium">
           Link to the source{" "}
           <Info label="About the source link">
-            Each post ends with the link to what it's about. On X it goes in the first reply, and the post says so. Through the app, X charges more for a post with a link (25 credits beyond your plan); posting it yourself is free.
+            Each post ends with the link to what it's about. On X it goes in the first reply, and the post says so. X posts with a link are always Post it myself (free).
           </Info>
         </span>
         <Switch label="Link to the source" on={linkSource} onChange={setLinkSource} />
