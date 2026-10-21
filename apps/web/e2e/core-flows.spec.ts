@@ -109,6 +109,17 @@ test.describe("A post", () => {
     await page.getByRole("button", { name: "I've posted it" }).click();
     await expect(page.getByText(/published/i).first()).toBeVisible();
   });
+
+  test("the details panel scrolls on its own and never makes the page longer", async ({ page }) => {
+    await signUp(page);
+    const id = await composeOne(page);
+    await page.goto(`/app/posts?id=${id}`);
+    await page.getByLabel("Upload photos for this post").setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: png(1600, 1200) });
+    await expect(page.getByText("Image 1 · Your photo")).toBeVisible();
+    // The page is no taller than the app around it (nothing in the panel spills past its end).
+    const [page_, shell] = await page.evaluate(() => [document.documentElement.scrollHeight, document.getElementById("main")!.parentElement!.parentElement!.getBoundingClientRect().height]);
+    expect(page_).toBeLessThanOrEqual(Math.ceil(shell) + 1);
+  });
 });
 
 test.describe("Layout on a phone @phone", () => {
