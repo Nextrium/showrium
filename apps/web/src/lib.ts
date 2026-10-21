@@ -1,3 +1,4 @@
+import { apiPath } from "./api-path";
 import { createAuthClient } from "better-auth/react";
 import { twoFactorClient } from "better-auth/client/plugins";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -150,7 +151,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 async function request<T>(path: string, init: RequestInit): Promise<T> {
-  const res = await fetch(`/api/v1${path}`, {
+  const res = await fetch(apiPath(path), {
     ...init,
     headers: { ...(init.body ? { "Content-Type": "application/json" } : {}), ...orgHeaders(), ...init.headers },
   });

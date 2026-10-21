@@ -513,14 +513,25 @@ export interface PostEngagement {
   comments: { externalId: string; author: string; text: string }[];
 }
 
+/**
+ * Every tag removed, in one pass: whatever sits between "<" and the next ">" goes, so no nesting
+ * ("<scr<script>ipt>") can leave a tag behind, and no "<" or ">" survives at all.
+ */
+function stripTags(html: string): string {
+  let out = "";
+  let inTag = false;
+  for (const ch of html) {
+    if (ch === "<") inTag = true;
+    else if (ch === ">") inTag = false;
+    else if (!inTag) out += ch;
+  }
+  return out;
+}
+
 // Reply text is shown as plain text (React escapes it), never as HTML.
-// Any leftover < or > is dropped, and &amp; is decoded last so "&amp;lt;" stays "&lt;".
+// Line breaks become new lines, then every tag goes, and &amp; is decoded last so "&amp;lt;" stays "&lt;".
 const plain = (html: string) =>
-  html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<[^<>]*>/g, "")
-    .replace(/[<>]/g, "")
+  stripTags(html.replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n"))
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
