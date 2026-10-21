@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { dataChanged, orgHeaders, useApi } from "../lib";
 import { preparePhoto } from "../photos";
-import { Alert, Button } from "../ui/kit";
+import { Alert, Button, Info } from "../ui/kit";
 
 const ACCEPT = "image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,text/markdown,.md";
 
@@ -52,7 +52,7 @@ export function UploadForm({ onUploaded, compact }: { onUploaded: (item: { id: s
     <form onSubmit={submit} className="flex flex-col gap-3">
       <label className="flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-2xl border border-dashed border-line-strong bg-sunken px-4 py-6 text-center hover:border-accent">
         <span className="text-sm font-semibold text-ink">{fileName ?? "Choose a photo or document"}</span>
-        <span className="text-[12.5px] font-normal text-muted">Photos (including iPhone), PDF, Word, PowerPoint or text · up to 10 MB</span>
+        <span className="text-[12.5px] font-normal text-muted">Photo, PDF, Word, PowerPoint or text · up to 10 MB</span>
         <input name="file" type="file" accept={ACCEPT} className="sr-only" onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)} />
       </label>
       <label>
@@ -61,9 +61,9 @@ export function UploadForm({ onUploaded, compact }: { onUploaded: (item: { id: s
       </label>
       {error && <Alert>{error}</Alert>}
       <Button disabled={busy} className="self-start">{busy ? (step ?? "Uploading…") : left === 0 && allowance ? `Upload for ${allowance.creditsPerExtra} credits` : "Upload"}</Button>
-      <span className="text-[12.5px] text-muted">
-        Stored privately. Photos can become your post’s image later.
-        {allowance && (left! > 0 ? ` ${left} of ${allowance.limit} uploads left today.` : ` You’ve used today’s ${allowance.limit} uploads; extra ones cost ${allowance.creditsPerExtra} credits each (you have ${allowance.balance}).`)}
+      <span className="flex items-center gap-1.5 text-[12.5px] text-muted">
+        {allowance && (left! > 0 ? `${left} of ${allowance.limit} uploads left today.` : `You’ve used today’s ${allowance.limit} uploads. Extra ones cost ${allowance.creditsPerExtra} credits each (you have ${allowance.balance}).`)}
+        <Info label="About uploads">Stored privately. Photos can become your post’s image later.</Info>
       </span>
     </form>
   );

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { api, formatDate, useApi } from "../lib";
+import { Info } from "../ui/kit";
 
 type Item = { kind: "plan"; plan: string; interval: "month" | "year"; seats?: number } | { kind: "credits"; pack: "c500" | "c1100" };
 type Billing = {
@@ -168,7 +169,7 @@ export function TeamCard({ canManage, myEmail }: { canManage: boolean; myEmail: 
   return (
     <section className="card" aria-labelledby="team-title">
       <h2 className="h3" id="team-title">Team</h2>
-      <p className="note">{used} of {data.seats} seat{data.seats === 1 ? "" : "s"} used. Roles: viewers read; editors write; approvers approve and publish; admins manage everything but owners.</p>
+      <p className="note">{used} of {data.seats} seat{data.seats === 1 ? "" : "s"} used. <Info label="About roles">Viewers read. Editors write. Approvers approve and publish. Admins manage everything except owners.</Info></p>
       {data.seats === 1 && <p className="note">Each plan is for one person. To work with others, switch to a Team plan in Billing.</p>}
       <div className="table-wrap">
         <table>

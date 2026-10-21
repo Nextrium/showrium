@@ -7,6 +7,7 @@ import { brief, contextItem, draft, imageSetting, postImage, type Db, type Image
 import { chunkRows } from "./chunk.js";
 import { getOrgLimits, getOrgPlan } from "./content.js";
 import { newId } from "./ids.js";
+import { AI_ESTIMATES, recordAiUsage } from "./ai-usage.js";
 import { PLAN_LIMITS } from "./plans.js";
 import { assertSafeUrl, safeFetchBytes, safeFetchText } from "./safe-fetch.js";
 
@@ -463,6 +464,7 @@ export async function findImage(
       return null;
     }
     const bytes = await generateAiImage(deps.ai, postText).catch(() => null);
+    if (bytes) await recordAiUsage(deps.db, [{ orgId, feature: "image", model: "@cf/black-forest-labs/flux-1-schnell", costMicroUsd: AI_ESTIMATES.image, estimated: true }]);
     if (bytes) return { bytes, source: "ai", alt: `AI-generated illustration: ${postText.split("\n")[0]!.slice(0, 200)}` };
   }
   return null;

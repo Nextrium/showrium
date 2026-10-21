@@ -1,0 +1,1 @@
+ALTER TABLE `passion` ADD `x_handle` text DEFAULT '' NOT NULL;

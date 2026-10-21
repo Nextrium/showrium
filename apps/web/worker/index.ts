@@ -7,15 +7,37 @@ import { publishingPaused } from "./env.js";
 import { apiError, type AppEnv } from "./principal.js";
 import { rateLimit } from "./rate-limit.js";
 import { createDb } from "@nextrium/db";
-import { expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, runAutopilot, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
+import { backfillAiUsage, expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, rescoreOldIdeas, runAutopilot, setAsideWeakPassionIdeas, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
 import { aiProviders } from "./ai.js";
 import { publishDeps } from "./connections-api.js";
+import { xReaderFor } from "./content-api.js";
 import { imageDeps } from "./images-api.js";
-import { autoImagesForBrief, type AfterCompose } from "@nextrium/core";
+import { autoImagesForBrief, autoScheduledEmails, failedPostEmails, fillFreedSlots, sendEmail, sendNeedsYouNotices, type AfterCompose, type Email, type OnAutoScheduled, type OnPublishFailed } from "@nextrium/core";
 import type { Db } from "@nextrium/db";
 import type { Env } from "./env.js";
 
 /** Automation finds an image for the posts it writes, like people's own posts. */
+async function sendAll(env: Env, emails: Email[], what: string) {
+  for (const email of emails) {
+    const out = await sendEmail(env, email).catch((error) => (console.warn(`${what} email failed`, error instanceof Error ? error.message : error), { sent: false }));
+    if (!out.sent) console.log(`${what} not emailed (email isn't set up or failed); it's shown in Posts`);
+  }
+}
+
+/** Emails owners and admins what automation just scheduled, so they can cancel before it goes out. */
+function notifyScheduled(env: Env, db: Db): OnAutoScheduled {
+  return async (orgId, draftIds) => sendAll(env, await autoScheduledEmails(db, orgId, draftIds, env.BETTER_AUTH_URL), "schedule notice");
+}
+
+/** Emails owners and admins when scheduled posts didn't go out, with the platform's reason. */
+function notifyFailed(env: Env, db: Db): OnPublishFailed {
+  return async (orgId, draftIds) => {
+    // The failed posts' time is free: later automated posts on those accounts move up into it.
+    const moved = await fillFreedSlots(db, orgId, draftIds).catch((error) => (console.warn("fill freed slots failed", error instanceof Error ? error.message : error), []));
+    await sendAll(env, await failedPostEmails(db, orgId, draftIds, env.BETTER_AUTH_URL, moved), "failure notice");
+  };
+}
+
 function autoImages(env: Env, db: Db): AfterCompose | undefined {
   const deps = imageDeps(env, db);
   return deps ? (orgId, briefId) => autoImagesForBrief(deps, orgId, briefId) : undefined;
@@ -133,16 +155,16 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
       const paused = publishingPaused(env);
       if (event.cron === PUBLISH_CRON) {
         if (!env.TOKEN_ENCRYPTION_KEY || paused) return;
-        const result = await runDuePublishing(await publishDeps(env, db), now, 5);
+        const result = await runDuePublishing(await publishDeps(env, db), now, 5, notifyFailed(env, db));
         if (result.due) console.log("scheduled publishing", result);
         return;
       }
       const job = cronJob(event.scheduledTime);
       const result =
-        job === "sources" ? await runSourcePolling(db, {}, now)
-        : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now, 3, autoImages(env, db)))
+        job === "sources" ? await runSourcePolling(db, { xReader: await xReaderFor(env, db) }, now, 6) // up to ~18 fetches; with Passions there are more sources
+        : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now, 3, autoImages(env, db), notifyScheduled(env, db)))
         : job === "engagement" ? await runEngagementSync(db, fetch, now)
-        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now) };
+        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now), rescored: await rescoreOldIdeas(db), setAside: await setAsideWeakPassionIdeas(db, now), aiCostsCopied: await backfillAiUsage(db), needsYou: await sendNeedsYouNotices(db, env.BETTER_AUTH_URL, (emails) => sendAll(env, emails, "needs-you notice"), now) };
       console.log("cron", job, result);
     })(),
   );

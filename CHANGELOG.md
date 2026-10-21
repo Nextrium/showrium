@@ -2,12 +2,60 @@
 
 ## Unreleased
 
+## v0.2.0: beta update (2026-10-21)
+
+Everything built and tested on preview since v0.1.0, for the invited testers.
+
 ### For people
+- **Follow X accounts properly:** paste an X account (x.com/name or @name) as a source, and its new posts are read through X's API with your connected X account. Showrium no longer reads X, LinkedIn, Instagram, Facebook, TikTok or Threads pages (their terms don't allow it); Bluesky profiles use their official feed. X profiles you added as pages switch over on their next check.
+- **Only a passion's strong ideas are kept:** a passion's ideas scoring under 55 are set aside (shown under "Not now" with the reason), so nothing is written from weak ones. Bring one back to write from it. Your own material isn't affected.
+- **A failed post no longer leaves the day empty:** later automated posts on the account move up into the free time, and the failure email says what moved. Posts you scheduled keep their time.
+- **Links:** on LinkedIn the source link goes in the first comment (a link in the post hides its image); Showrium adds the comment, or gives you a copy button when you post it yourself. On X the link is back at the end of the post, where X shows its preview.
+- **Quotes and mentions on X:** a post written from an X post quotes it, and a passion can have its official X account to mention. X posts with a link, a quote or a mention are always "Post it myself" (free).
+- **Less repetition:** your passion's "angle" now shapes the voice without being restated in every post, and a post that repeats a sentence from a recent one is flagged.
+- **See what your use costs us:** Billing and usage shows what Showrium paid this month for your workspace's AI (by feature) and X posts. Those are our costs, not charges to you.
+- **X posts with several images:** through the app, beyond your plan's X posts, each image after the first adds 1 credit (X charges for each image).
+- **Clearer when X posting is down on our side:** if X stops accepting posts from Showrium for billing reasons, the post says it's on our side (not your account or your credits) and offers Post it myself. Nothing is charged.
+- **Less text everywhere:** explanations on every page now sit behind a "?". A "?" now opens on tap as well as on hover.
+- **Reconnecting an account keeps your scheduled posts:** posts waiting on an account you disconnected move to it when you connect it again, and still go out on time.
+- **Fresher, cleaner ideas:** ideas are scored for how fresh and relevant they are. Old news, pre-releases, digests and days of only tidying are tucked away ("Show more" brings them back), and the same story from several sources becomes one idea. A new source brings in only its latest few items.
+- **Automation picks well:** it writes only from good, fresh ideas, and "Approve for me" only approves strong ones from the last 48 hours. Approved posts are always scheduled ahead, never sent at once.
+- **Check before it goes out:** you get an email listing what automation scheduled, and those posts are marked "Auto" in Posts with a **Cancel schedule** button.
+- **No clashing posts:** schedule a post near another one on the same account and you're asked first: move the automated one, keep both, or pick another time. Your post always keeps its time.
+- **X:** "Approve for me" now works on X too, after a one-time agreement (as X's rules ask). It only uses your plan's X posts, never credits.
+- **Passions** can be approved by automation as well, with the same scheduling and email.
+- **Your connection to a passion:** "I follow it", "I'm involved" or "It's ours". Posts are written to match: your view of someone else's work, your part in a project, or your own team ("we"). If a post about something you only follow sounds as if you're on its team, it's flagged for you to check.
+- **The source link goes with the post:** at the end on LinkedIn, Facebook, Threads, Bluesky and Mastodon, and on X in the first reply (the post says so). It can be switched off per passion.
+- **No more old news on a schedule:** news from your passions is never scheduled more than 48 hours after it came out (your own releases and posts: a week). If there's no free slot in time, the post is handed to you instead.
+- **"Needs you" for time-sensitive posts:** when fresh news is worth posting but today's automated posts are used, it's written for you and flagged on Home and in Posts, with one email (at most 3 posts a day, never at night). Post it now, post it yourself, pick a time today, or skip it.
+- **X posts with a link are always "Post it myself"** (free): they're never sent, scheduled or approved by the app, because X charges much more for links. X posts without a link can still be automated.
+- **Easier X threads with "Post it myself":** paste the link to your first post and each reply opens X already replying to it, one click each. Your place is kept if you switch to the X app and back.
+- **When a scheduled post fails,** you get an email with the platform's own reason (for example what X said), and the post shows it too, so you know what to fix.
+- **Passions:** add the subjects you care about (a project, an ecosystem, a cause) and give each one its own sources: news sites, blogs, YouTube channels, podcasts or GitHub repositories. New items become ideas labelled with the passion, and posts are written as your view, never as its official voice. Switch a passion on or off, or give it dates. An optional disclosure (for example "I'm a Cardano ambassador") is added word for word to every post about it. Free: 1 passion with 3 sources; Lite 1 with 5; Starter 2; Creator 3; Pro and Team 10, with up to 10 sources each. Posts about a passion are never approved automatically.
+- **Posts stay in your language:** the writer no longer switches language on its own.
 - **Automation that posts at good times, not like clockwork:** choose your timezone, days and times of day (morning, midday, afternoon, evening). Each post goes out at a different minute, at most one per time of day and at least 4 hours apart, and Showrium learns which time works best for you.
 - **Posts a day per platform**, within safe limits (X 5; Bluesky, Threads and Mastodon 3; LinkedIn and Facebook 2; Instagram, TikTok and YouTube Shorts 1).
 - **No repeats:** new posts avoid how your recent posts began; a post that repeats a recent one is flagged and never approved automatically.
 - **Style balance** replaces the weekly mix.
 - **Less text:** explanations on the Automation page sit behind a "?".
+
+### For Showrium staff
+- **AI costs:** every AI call is recorded (posts, research, insights, images, video, voice), by day, feature, model and workspace, with the cost per post and the workspaces that cost more than they pay. Workers AI costs are marked as estimates.
+- **X API costs** are recorded per post from what X really charges ($0.015 a post, $0.005 per image description) and shown on the Costs page, per workspace too.
+- **Publishing health** warns at the top when our own X API account has run out of paid usage, so it can be topped up.
+- The admin menu stays in place while a page scrolls.
+- The product's old staff endpoints (`/api/v1/admin/*`) are removed; all of it is in the admin app.
+- **Publishing health:** per platform, the reasons posts fail, accounts to reconnect, stuck or overdue posts, and whether the background jobs are keeping up.
+- **Billing:** monthly revenue, subscriptions, past-due follow-ups, payment problems and credits (read-only).
+- **Abuse:** workspaces worth a look, and a reversible **Pause/Resume** (owners only, with a reason, logged). A paused workspace keeps everything; its posting and automation simply wait.
+- **Invite links in the admin app:** create a one-off link for someone who isn't on the waitlist (shown once), see each link's status, and revoke unused ones. Every action is logged.
+- The old staff section in the product's Settings is gone; waitlist, invites and full access are in the admin app.
+
+### For contributors
+- **Contributor handbook** (`docs/HANDBOOK.md`): what Showrium is, how work flows from a task to a release, the standards, the checks every change passes, and how data is protected.
+- **Tasks** live in the [Nextrium contributors portal](https://contribute.nextrium.org/). GitHub issues are for findings (bugs, gaps, risks not on the roadmap), with a Finding template.
+- **Data can't be lost by a merge:** a required migration guard refuses destructive or edited migrations; `develop` and `main` accept changes only through approved pull requests; deploy keys are held only by the deploy pipeline.
+- **`pnpm check`** runs types, server tests and build in one go. A [code of conduct](CODE_OF_CONDUCT.md) applies everywhere.
 
 ## v0.1.0: private beta (2026-10-15)
 

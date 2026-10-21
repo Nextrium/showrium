@@ -66,16 +66,35 @@ const actor = (p: Principal) => ({ actorUserId: p.kind === "user" ? p.userId : n
 // --- Ideas -----------------------------------------------------------------------------
 
 const IdeaSchema = z
-  .object({ id: z.string(), reason: z.string(), score: z.number(), status: z.enum(["new", "drafted", "dismissed"]), title: z.string(), kind: z.string(), body: z.string(), url: z.string().nullable(), createdAt: z.string() })
+  .object({
+    id: z.string(),
+    reason: z.string(),
+    /** 0 to 100, as of now: what it is, how relevant and how fresh. */
+    score: z.number(),
+    status: z.enum(["new", "drafted", "dismissed"]),
+    /** Set aside by the person, or automatically (a passion's idea scoring under 55). */
+    dismissedReason: z.enum(["person", "low_score"]).nullable(),
+    title: z.string(),
+    kind: z.string(),
+    body: z.string(),
+    url: z.string().nullable(),
+    /** When the source published it, if known. */
+    publishedAt: z.string().nullable(),
+    createdAt: z.string(),
+  })
   .openapi("Idea");
-const Counts = z.object({ new: z.number(), drafted: z.number(), dismissed: z.number() });
+/** "new" counts the ideas worth looking at; "hidden" the weak or stale ones (shown with all=true). */
+const Counts = z.object({ new: z.number(), drafted: z.number(), dismissed: z.number(), hidden: z.number() });
+type IdeaRow = { id: string; reason: string; score: number; status: "new" | "drafted" | "dismissed"; dismissedReason: "person" | "low_score" | null; title: string; kind: string; body: string; url: string | null; publishedAt: Date | null; createdAt: Date };
+const toIdea = (r: IdeaRow) => ({ id: r.id, reason: r.reason, score: r.score, status: r.status, dismissedReason: r.dismissedReason, title: r.title, kind: r.kind, body: r.body, url: r.url, publishedAt: r.publishedAt?.toISOString() ?? null, createdAt: r.createdAt.toISOString() });
 
 autonomyApi.openapi(
-  createRoute({ method: "get", path: "/ideas", tags: ["Autonomy"], request: { query: z.object({ status: z.enum(["new", "drafted", "dismissed"]).default("new") }) }, responses: { 200: json(z.object({ data: z.array(IdeaSchema), counts: Counts })), ...errs } }),
+  createRoute({ method: "get", path: "/ideas", tags: ["Autonomy"], request: { query: z.object({ status: z.enum(["new", "drafted", "dismissed"]).default("new"), all: z.enum(["true", "false"]).optional() }) }, responses: { 200: json(z.object({ data: z.array(IdeaSchema), counts: Counts })), ...errs } }),
   async (c) => {
     const { orgId } = c.get("principal");
-    const [rows, counts] = await Promise.all([listIdeas(c.get("db"), orgId, c.req.valid("query").status), ideaCounts(c.get("db"), orgId)]);
-    return c.json({ data: rows.map((r) => ({ id: r.id, reason: r.reason, score: r.score, status: r.status, title: r.title, kind: r.kind, body: r.body, url: r.url, createdAt: r.createdAt.toISOString() })), counts }, 200);
+    const q = c.req.valid("query");
+    const [rows, counts] = await Promise.all([listIdeas(c.get("db"), orgId, q.status, { all: q.all === "true" }), ideaCounts(c.get("db"), orgId)]);
+    return c.json({ data: rows.map(toIdea), counts }, 200);
   },
 );
 
@@ -84,7 +103,7 @@ autonomyApi.openapi(
   async (c) => {
     const r = await getIdea(c.get("db"), c.get("principal").orgId, c.req.valid("param").id);
     if (!r) return c.json(apiError("not_found", "No such idea in this workspace."), 404);
-    return c.json({ idea: { id: r.id, reason: r.reason, score: r.score, status: r.status, title: r.title, kind: r.kind, body: r.body, url: r.url, createdAt: r.createdAt.toISOString(), briefId: r.briefId } }, 200);
+    return c.json({ idea: { ...toIdea(r), briefId: r.briefId } }, 200);
   },
 );
 
@@ -151,6 +170,10 @@ const AutomationInput = z
     windows: z.array(z.enum(["morning", "midday", "afternoon", "evening"])).min(1).max(4).optional(),
     /** Posts per day per platform (each platform has its own limit). Kept as is when left out. */
     perDay: z.partialRecord(z.enum(PLATFORMS), z.number().int().min(1).max(5)).optional(),
+    /** Email owners and admins when automation approves and schedules posts. Kept as is when left out. */
+    notifyEmail: z.boolean().optional(),
+    /** Agree that automation may approve X posts (asked once; needed to switch "Approve for me" on for X). */
+    xConsent: z.boolean().optional(),
   })
   .openapi("Automation");
 // The earlier single-level shape, still accepted.
@@ -172,9 +195,12 @@ const AutomationOut = AutomationInput.extend({
   platforms: z.array(z.enum(PLATFORMS)),
   postsPerWeek: z.number(),
   lastRunAt: z.string().nullable(),
+  notifyEmail: z.boolean(),
+  /** When "Approve for me" on X was agreed to (null when it's off). */
+  xConsentAt: z.string().nullable(),
 }).openapi("AutomationSettings");
 type Saved = Awaited<ReturnType<typeof getAutopilot>>;
-const out = (s: Saved) => ({ ...s, lastRunAt: s.lastRunAt?.toISOString() ?? null });
+const out = (s: Saved) => ({ ...s, lastRunAt: s.lastRunAt?.toISOString() ?? null, xConsentAt: s.xConsentAt?.toISOString() ?? null });
 
 autonomyApi.openapi(
   createRoute({ method: "get", path: "/autopilot", tags: ["Autonomy"], responses: { 200: json(AutomationOut), ...errs } }),
@@ -194,10 +220,10 @@ autonomyApi.openapi(
         const current = await getAutopilot(c.get("db"), p.orgId);
         s = await saveAutopilot(c.get("db"), p.orgId, { ...input, timezone: input.timezone ?? current.timezone, windows: input.windows ?? current.windows, perDay: input.perDay ?? current.perDay });
       } else s = await saveLegacyAutopilot(c.get("db"), p.orgId, input);
-      await recordAudit(c.get("db"), { orgId: p.orgId, ...actor(p), action: "autopilot.updated", meta: { level: s.level, rules: s.rules, mix: s.mix, findIdeas: s.findIdeas, perDay: s.perDay, windows: s.windows, timezone: s.timezone } });
+      await recordAudit(c.get("db"), { orgId: p.orgId, ...actor(p), action: "autopilot.updated", meta: { level: s.level, rules: s.rules, mix: s.mix, findIdeas: s.findIdeas, perDay: s.perDay, windows: s.windows, timezone: s.timezone, notifyEmail: s.notifyEmail, xConsent: Boolean(s.xConsentAt) } });
       return c.json(out(s), 200);
     } catch (error) {
-      if (error instanceof AutopilotError) return error.code === "plan_required" ? c.json(apiError("plan_required", error.message), 402) : c.json(apiError("invalid_autopilot", error.message), 409);
+      if (error instanceof AutopilotError) return error.code === "plan_required" ? c.json(apiError("plan_required", error.message), 402) : c.json(apiError(error.code === "x_consent_required" ? "x_consent_required" : "invalid_autopilot", error.message), 409);
       throw error;
     }
   },
@@ -415,6 +441,6 @@ autonomyApi.openapi(
 
 autonomyApi.use("/summary", requirePrincipal);
 autonomyApi.openapi(
-  createRoute({ method: "get", path: "/summary", tags: ["Autonomy"], responses: { 200: json(z.object({ drafts: z.number(), ideas: z.number() })), ...errs } }),
+  createRoute({ method: "get", path: "/summary", tags: ["Autonomy"], responses: { 200: json(z.object({ drafts: z.number(), ideas: z.number(), needsYou: z.number() })), ...errs } }),
   async (c) => c.json(await getSummary(c.get("db"), c.get("principal").orgId), 200),
 );

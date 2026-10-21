@@ -104,6 +104,10 @@ export const org = sqliteTable("org", {
   fullAccessNote: text("full_access_note"),
   fullAccessBy: text("full_access_by"),
   fullAccessAt: integer("full_access_at", { mode: "timestamp_ms" }),
+  /** Paused by Showrium staff (abuse): automation and publishing stop until resumed. Nothing is deleted. */
+  pausedAt: integer("paused_at", { mode: "timestamp_ms" }),
+  pausedReason: text("paused_reason"),
+  pausedBy: text("paused_by"),
   createdAt: createdAt(),
 });
 
@@ -318,15 +322,93 @@ export const persona = sqliteTable("persona", {
   updatedAt: updatedAt(),
 });
 
+/**
+ * Every AI call's cost, for the admin app (cost per feature, model and workspace). Workers AI calls
+ * (images, transcription, photo reading, narration) don't return a price: those are estimates from
+ * Cloudflare's published rates, marked `estimated`.
+ */
+export const AI_FEATURES = ["write", "research", "insights", "video_plan", "narration", "image", "transcription", "photo"] as const;
+export type AiFeature = (typeof AI_FEATURES)[number];
+export const aiUsage = sqliteTable(
+  "ai_usage",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    feature: text("feature", { enum: AI_FEATURES }).notNull(),
+    model: text("model").notNull(),
+    costMicroUsd: integer("cost_micro_usd").notNull().default(0),
+    estimated: integer("estimated", { mode: "boolean" }).notNull().default(false),
+    /** What it was for (a brief, insight or video id), so older costs are copied in once. */
+    refId: text("ref_id"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("ai_usage_created_idx").on(t.createdAt), index("ai_usage_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("ai_usage_feature_ref_uq").on(t.feature, t.refId)],
+);
+
+export const PLATFORM_COST_KINDS = ["post", "post_with_link", "image_description", "user_read", "post_read"] as const;
+export type PlatformCostKind = (typeof PLATFORM_COST_KINDS)[number];
+/**
+ * What platforms charge us for API calls (X's pay-per-use, in micro US dollars), one row per paid
+ * call that succeeded, with the post it was for. Shown in the admin Costs page and to the workspace.
+ */
+export const platformUsage = sqliteTable(
+  "platform_usage",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    platform: text("platform").notNull(),
+    kind: text("kind", { enum: PLATFORM_COST_KINDS }).notNull(),
+    costMicroUsd: integer("cost_micro_usd").notNull().default(0),
+    draftId: text("draft_id"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("platform_usage_created_idx").on(t.createdAt), index("platform_usage_org_created_idx").on(t.orgId, t.createdAt)],
+);
+
+export const PASSION_RELATIONS = ["follow", "involved", "ours"] as const;
+export type PassionRelation = (typeof PASSION_RELATIONS)[number];
+
+/**
+ * Passions: subjects the person cares about and posts on (a project, an ecosystem, a cause), each
+ * with its own sources. Posts about a passion are the person's view of someone else's work.
+ * Off, or outside its dates (UTC days, "YYYY-MM-DD"): its sources aren't checked and automation skips it.
+ */
+export const passion = sqliteTable(
+  "passion",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    /** The person's angle or relationship, in their words (optional). */
+    about: text("about").notNull().default(""),
+    /** Optional disclosure added to posts, e.g. "I'm a Cardano ambassador". */
+    disclosure: text("disclosure").notNull().default(""),
+    /** The person's connection: follows it (outsider), involved (contributor, ambassador, partner), or ours (their own team). */
+    relation: text("relation", { enum: PASSION_RELATIONS }).notNull().default("follow"),
+    /** Add the source's link to posts (LinkedIn: as the first comment; an X post's link makes it a quote). */
+    linkSource: integer("link_source", { mode: "boolean" }).notNull().default(true),
+    /** Its official X account (a handle, without "@"), which X posts may mention once. Empty when none. */
+    xHandle: text("x_handle").notNull().default(""),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    startsOn: text("starts_on"),
+    endsOn: text("ends_on"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("passion_org_idx").on(t.orgId)],
+);
+
 /** github_repo; rss (a feed); page (a blog or news page without a feed, watched for new article links). */
-export const SOURCE_KINDS = ["github_repo", "rss", "page"] as const;
+export const SOURCE_KINDS = ["github_repo", "rss", "page", "x_account"] as const;
 export const source = sqliteTable(
   "source",
   {
     id: text("id").primaryKey(),
     orgId: text("org_id").notNull().references(() => org.id, { onDelete: "cascade" }),
     kind: text("kind", { enum: SOURCE_KINDS }).notNull(),
-    /** "owner/repo" for GitHub, a feed URL for RSS, the page URL for a watched page. */
+    /** Set when the source belongs to a passion (it then doesn't count against the plan's own sources). */
+    passionId: text("passion_id").references(() => passion.id, { onDelete: "cascade" }),
+    /** "owner/repo" for GitHub, a feed URL for RSS, the page URL for a watched page, the handle for an X account. */
     key: text("key").notNull(),
     /** Watched pages: article links already seen, so only new ones become ideas (newest first, capped). */
     seen: text("seen", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
@@ -353,6 +435,8 @@ export const contextItem = sqliteTable(
     externalId: text("external_id"),
     /** Uploaded photo or document in the private R2 bucket (orgs/<org>/uploads/<id>), if any. */
     mediaKey: text("media_key"),
+    /** When the source published it (feeds and GitHub give a date); null if unknown. Drives idea freshness. */
+    publishedAt: integer("published_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
   },
   (t) => [index("context_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("context_org_external_uq").on(t.orgId, t.externalId)],
@@ -411,6 +495,14 @@ export const draft = sqliteTable(
     aiGenerated: integer("ai_generated", { mode: "boolean" }).notNull().default(true),
     scheduledAt: integer("scheduled_at", { mode: "timestamp_ms" }),
     publishedAt: integer("published_at", { mode: "timestamp_ms" }),
+    /** Approved by automation ("Approve for me"), not by a person. */
+    autoApproved: integer("auto_approved", { mode: "boolean" }).notNull().default(false),
+    /** Its time was picked by automation (a person may have approved it). */
+    autoScheduled: integer("auto_scheduled", { mode: "boolean" }).notNull().default(false),
+    /** Time-sensitive and automation couldn't fit it in time: the person should act before this. */
+    urgentUntil: integer("urgent_until", { mode: "timestamp_ms" }),
+    /** When the person was emailed about it (each post at most once). */
+    urgentNotifiedAt: integer("urgent_notified_at", { mode: "timestamp_ms" }),
     /** Account to publish to (API path) and how it was published. */
     connectionId: text("connection_id"),
     publishMethod: text("publish_method", { enum: ["api", "tap_to_post", "manual"] }),
@@ -419,6 +511,8 @@ export const draft = sqliteTable(
     lastError: text("last_error"),
     /** A thread: the parts in order (null for a single post). `text` holds them joined, for search and display. */
     parts: text("parts", { mode: "json" }).$type<string[] | null>(),
+    /** LinkedIn: the source link, posted as the first comment (a link in the post hides its image). */
+    linkComment: text("link_comment"),
     /** Thread parts already posted (in order), so a retry continues instead of posting twice. */
     postedParts: text("posted_parts", { mode: "json" }).$type<{ id: string; cid?: string | undefined; url: string | null }[] | null>(),
     /** Sprint 6's single image. Superseded by `post_image` (copied there by migration 0017); kept for older rows. */
@@ -571,6 +665,12 @@ export const idea = sqliteTable(
     score: integer("score").notNull().default(0),
     status: text("status", { enum: IDEA_STATUSES }).notNull().default("new"),
     draftedAt: integer("drafted_at", { mode: "timestamp_ms" }),
+    /** How the score was worked out: 1 the first rules, 2 freshness and relevance (2026-10-18). Old ones are re-scored. */
+    scoreVersion: integer("score_version").notNull().default(1),
+    /** Why it was set aside: by the person, or automatically (a passion's idea scoring under 55). */
+    dismissedReason: text("dismissed_reason", { enum: ["person", "low_score"] }),
+    /** Brought back by the person: never set aside automatically again. */
+    kept: integer("kept", { mode: "boolean" }).notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("idea_org_context_uq").on(t.orgId, t.contextItemId), index("idea_org_status_idx").on(t.orgId, t.status, t.score)],
@@ -602,7 +702,7 @@ export const autopilot = sqliteTable(
     /** Days of the week to post on (0 = Sunday, UTC). */
     days: text("days", { mode: "json" }).$type<number[]>().notNull().default(sql`'[0,1,2,3,4,5,6]'`),
     /** What automation wrote in the last 7 days (style, platforms, brief), to follow the mix and daily limits. */
-    weekLog: text("week_log", { mode: "json" }).$type<{ at: number; mode: ContentMode; platforms?: Platform[]; briefId?: string }[]>().notNull().default(sql`'[]'`),
+    weekLog: text("week_log", { mode: "json" }).$type<{ at: number; mode: ContentMode; platforms?: Platform[]; briefId?: string; urgent?: boolean }[]>().notNull().default(sql`'[]'`),
     // Automation v2 (2026-10-17): posting windows in the person's timezone, and posts per day per platform.
     /** IANA timezone, e.g. "Africa/Lagos". */
     timezone: text("timezone").notNull().default("UTC"),
@@ -610,6 +710,10 @@ export const autopilot = sqliteTable(
     windows: text("windows", { mode: "json" }).$type<("morning" | "midday" | "afternoon" | "evening")[]>().notNull().default(sql`'["morning","midday","afternoon","evening"]'`),
     /** Posts per day per platform (within each platform's limit). */
     perDay: text("per_day", { mode: "json" }).$type<Partial<Record<Platform, number>>>().notNull().default(sql`'{}'`),
+    /** Email the owners when automation approves and schedules posts (their chance to cancel). */
+    notifyEmail: integer("notify_email", { mode: "boolean" }).notNull().default(true),
+    /** When the person agreed that automation may approve X posts (X's automation rules ask for express consent). */
+    xConsentAt: integer("x_consent_at", { mode: "timestamp_ms" }),
     lastRunAt: integer("last_run_at", { mode: "timestamp_ms" }),
     updatedAt: updatedAt(),
   },

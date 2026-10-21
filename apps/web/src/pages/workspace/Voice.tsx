@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, timeAgo, useApi, useEditable } from "../../lib";
 import { Link } from "../../ui/Link";
-import { Alert, Button, Chip, Icon, LinkButton, Loading, PageHeader, Panel, SaveBar, Switch } from "../../ui/kit";
+import { Alert, Button, Chip, Icon, Info, LinkButton, Loading, PageHeader, Panel, SaveBar, Switch } from "../../ui/kit";
 import { usePlatforms, type Persona, type Platform } from "./shared";
 
 // Suggestions people pick from; "Other" adds their own. Lists and free text are both stored
@@ -64,8 +64,8 @@ function ChipGroup({ k, values, onChange }: { k: GroupKey; values: string[]; onC
     <fieldset className="m-0 grid gap-3 border-0 border-t border-line p-0 pt-4 first:border-t-0 first:pt-0 md:grid-cols-[200px_minmax(0,1fr)] md:gap-6">
       <legend className="sr-only">{g.label}</legend>
       <div className="flex flex-col gap-0.5">
-        <span className="text-[14.5px] font-semibold">{g.label}</span>
-        <span className="text-[13px] text-muted">{g.hint}{full ? ` · up to ${g.max}` : ""}</span>
+        <span className="flex items-center gap-1.5 text-[14.5px] font-semibold">{g.label} <Info label={`About “${g.label}”`}>{g.hint}. Up to {g.max}.</Info></span>
+        {full && <span className="text-[13px] text-muted">Up to {g.max}</span>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {options.map((o) => {
@@ -166,14 +166,16 @@ export function VoicePage() {
     <>
       <PageHeader
         title="Brand voice"
-        subtitle="Who you are and how you sound. Every post is written from this."
         actions={
-          !showForm && (
-            <>
-              <span className="flex items-center gap-1.5 text-[13.5px] text-ok"><Icon name="check" size={15} strokeWidth={2.2} />{savedAt ? `Saved ${timeAgo(savedAt)}` : "Saved"}</span>
-              <Button variant="secondary" icon="edit" onClick={() => setEditing(true)}>Edit</Button>
-            </>
-          )
+          <>
+            <Info label="About brand voice">Who you are and how you sound. Every post is written from this.</Info>
+            {!showForm && (
+              <>
+                <span className="flex items-center gap-1.5 text-[13.5px] text-ok"><Icon name="check" size={15} strokeWidth={2.2} />{savedAt ? `Saved ${timeAgo(savedAt)}` : "Saved"}</span>
+                <Button variant="secondary" icon="edit" onClick={() => setEditing(true)}>Edit</Button>
+              </>
+            )}
+          </>
         }
       />
 
@@ -203,8 +205,7 @@ export function VoicePage() {
               <fieldset className="m-0 grid gap-3 border-0 border-t border-line p-0 pt-4 md:grid-cols-[200px_minmax(0,1fr)] md:gap-6">
                 <legend className="sr-only">Platforms you use</legend>
                 <div className="flex flex-col gap-0.5">
-                  <span className="text-[14.5px] font-semibold">You post on</span>
-                  <span className="text-[13px] text-muted">Only these are used. Nothing is chosen for you.</span>
+                  <span className="flex items-center gap-1.5 text-[14.5px] font-semibold">You post on <Info label="About platforms">Only these are used. Nothing is chosen for you.</Info></span>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {platforms.map((p) => {
@@ -214,10 +215,9 @@ export function VoicePage() {
                 </div>
               </fieldset>
               <div className="grid items-center gap-3 border-t border-line pt-4 md:grid-cols-[200px_minmax(0,1fr)] md:gap-6">
-                <span className="text-[14.5px] font-semibold">Monetization-safe</span>
+                <span className="flex items-center gap-1.5 text-[14.5px] font-semibold">Monetization-safe <Info label="About monetization-safe">Every post needs your approval. No full autopilot. X posts go through your own X app.</Info></span>
                 <div className="flex items-start gap-3">
                   <Switch on={draft.monetizationSafe} onChange={(v) => set("monetizationSafe", v)} label="Monetization-safe mode" />
-                  <span className="text-[13.5px] text-muted">Every post needs your approval, no full autopilot, and X posts go through your own X app.</span>
                 </div>
               </div>
             </div>
@@ -232,7 +232,7 @@ export function VoicePage() {
               dirty={dirty}
               saving={saving}
               error={error}
-              savedNote="No changes yet. Pick or remove anything above."
+              savedNote="No changes yet."
               onSave={save}
               onDiscard={() => {
                 reset();
@@ -248,7 +248,7 @@ export function VoicePage() {
           )}
         </>
       )}
-      {!showForm && <p className="m-0 text-sm text-muted">Tip: the more specific “You know about” is, the more your posts sound like you. <Link to="/app/new">Try it on a post →</Link></p>}
+      {!showForm && <p className="m-0 flex items-center gap-1.5 text-sm text-muted"><Link to="/app/new">Try it on a post →</Link> <Info label="Tip">The more specific “You know about” is, the more your posts sound like you.</Info></p>}
     </>
   );
 }

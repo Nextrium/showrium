@@ -118,7 +118,9 @@ describe("account-state matrix", () => {
 describe("rate limiting", () => {
   it("slows repeated sign-in attempts from one IP (429 after the limit)", async () => {
     const statuses: number[] = [];
-    for (let i = 0; i < 15; i++) {
+    // The limiter counts in one-minute windows: 25 attempts put at least 11 in one window even if
+    // the run straddles a window boundary (15 sometimes didn't, making this test flaky).
+    for (let i = 0; i < 25; i++) {
       const res = await SELF.fetch(`${BASE}/api/auth/sign-in/email`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...ORIGIN, "CF-Connecting-IP": "203.0.113.7" },

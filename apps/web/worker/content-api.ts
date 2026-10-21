@@ -1,9 +1,19 @@
 // Phase 2 API: persona, context, sources, voice notes, compose, drafts, usage.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { CONTENT_MODES, DRAFT_STATUSES, PLATFORMS, STANCES } from "@nextrium/db";
+import { CONTENT_MODES, DRAFT_STATUSES, PLATFORMS, STANCES, type Db } from "@nextrium/db";
 import {
+  estimateTranscription,
+  recordAiUsage,
   addContextItems,
+  addPassionSource,
   addSource,
+  createPassion,
+  listPassions,
+  PassionError,
+  passionIsLive,
+  removePassion,
+  updatePassion,
+  utcDay,
   assertSafeUrl,
   can,
   compose,
@@ -14,6 +24,10 @@ import {
   getPersona,
   getSource,
   getUsage,
+  workspaceCosts,
+  socialSource,
+  xReader,
+  hasActiveConnection,
   GITHUB_REPO_RE,
   ingestFeed,
   ingestUrl,
@@ -43,6 +57,7 @@ import { PLATFORM_RULES } from "@nextrium/policy";
 import { aiProviders, researchProviders } from "./ai.js";
 import { ImageSummary, findImagesLater, toImageSummary } from "./images-api.js";
 import { apiError, requirePrincipal, type AppEnv } from "./principal.js";
+import { publishDeps } from "./connections-api.js";
 
 export const contentApi = new OpenAPIHono<AppEnv>({
   defaultHook: (result, c) => {
@@ -50,7 +65,7 @@ export const contentApi = new OpenAPIHono<AppEnv>({
   },
 });
 
-for (const path of ["/persona", "/contexts", "/contexts/*", "/sources", "/sources/*", "/compose", "/drafts", "/drafts/*", "/usage", "/platforms"]) {
+for (const path of ["/persona", "/contexts", "/contexts/*", "/sources", "/sources/*", "/compose", "/drafts", "/drafts/*", "/usage", "/costs", "/platforms", "/passions", "/passions/*"]) {
   contentApi.use(path, requirePrincipal);
 }
 
@@ -229,6 +244,7 @@ contentApi.openapi(
       console.error("transcription failed", error);
       return c.json(apiError("transcription_failed", "We couldn't transcribe that recording. Try a clearer or shorter one."), 400);
     }
+    await recordAiUsage(c.get("db"), [{ orgId: c.get("principal").orgId, feature: "transcription", model: "@cf/openai/whisper-large-v3-turbo", costMicroUsd: estimateTranscription(text), estimated: true }]);
     if (text.length < 10) return c.json(apiError("transcription_empty", "We couldn't hear any speech in that recording."), 400);
     const check = checkTranscript(text);
     // Shown to the person to fix; never saved (or written from) without them seeing it.
@@ -240,6 +256,35 @@ contentApi.openapi(
 );
 
 // --- Sources ----------------------------------------------------------------------
+
+const SourceInput = z.discriminatedUnion("kind", [z.object({ kind: z.literal("github_repo"), repo: z.string().trim().regex(GITHUB_REPO_RE, "Use the form owner/repository.") }), z.object({ kind: z.literal("rss"), url: z.string().trim().max(2000) })]);
+
+/** Reading X accounts (sources) with the workspace's X sign-in, when tokens can be decrypted here. */
+export async function xReaderFor(env: AppEnv["Bindings"], db: Db) {
+  return env.TOKEN_ENCRYPTION_KEY ? xReader(await publishDeps(env, db)) : undefined;
+}
+
+/**
+ * People paste a blog or channel page, not its feed: find the feed, or watch the page itself. Social
+ * sites are only read the way their terms allow: an X account through X's API (with the workspace's
+ * connected X account), Bluesky through its RSS; other social sites' pages aren't read at all.
+ */
+async function resolveSourceInput(input: z.infer<typeof SourceInput>, ctx: { db: Db; orgId: string }): Promise<{ kind: "github_repo" | "rss" | "page" | "x_account"; key: string; note: string | null } | { error: string }> {
+  if (input.kind === "github_repo") return { kind: "github_repo", key: input.repo.toLowerCase(), note: null };
+  const social = socialSource(input.url);
+  if (social && "kind" in social && social.kind === "x_account") {
+    if (!(await hasActiveConnection(ctx.db, ctx.orgId, "x"))) return { error: "Connect your X account in Accounts first: Showrium follows X accounts through X's API with it." };
+    return { kind: "x_account", key: social.handle, note: "Followed through X's API with your X account." };
+  }
+  try {
+    assertSafeUrl(input.url);
+    const resolved = await resolveBlogSource(input.url);
+    const note = resolved.how === "page" ? "This site has no feed, so Showrium watches the page for new articles." : resolved.how === "feed" ? null : "Found this site's feed and connected that.";
+    return { kind: resolved.kind, key: resolved.key, note };
+  } catch (error) {
+    return { error: error instanceof UnsafeUrlError ? error.message : error instanceof Error ? error.message : "We couldn't read that address." };
+  }
+}
 
 const SourceSchema = z.object({ id: z.string(), kind: z.string(), key: z.string(), lastCheckedAt: z.string().nullable(), lastError: z.string().nullable() }).openapi("Source");
 
@@ -256,38 +301,19 @@ contentApi.openapi(
     method: "post",
     path: "/sources",
     tags: ["Sources"],
-    request: body(z.discriminatedUnion("kind", [z.object({ kind: z.literal("github_repo"), repo: z.string().trim().regex(GITHUB_REPO_RE, "Use the form owner/repository.") }), z.object({ kind: z.literal("rss"), url: z.string().trim().max(2000) })])),
+    request: body(SourceInput),
     responses: {
-      201: json(z.object({ id: z.string(), kind: z.enum(["github_repo", "rss", "page"]), key: z.string(), note: z.string().nullable() }), "Added"),
+      201: json(z.object({ id: z.string(), kind: z.enum(["github_repo", "rss", "page", "x_account"]), key: z.string(), note: z.string().nullable() }), "Added"),
       409: json(Err, "Limit reached or already added"),
       ...errs,
     },
   }),
   async (c) => {
     if (denied(c, "content.write")) return c.json(forbidden("connect sources"), 403);
-    const input = c.req.valid("json");
     const { orgId } = c.get("principal");
-    let kind: "github_repo" | "rss" | "page" = input.kind;
-    let key = input.kind === "github_repo" ? input.repo.toLowerCase() : input.url;
-    let note: string | null = null;
-    if (input.kind === "rss") {
-      // People paste the blog page, not its feed: find the feed, or watch the page itself.
-      try {
-        assertSafeUrl(input.url);
-        const resolved = await resolveBlogSource(input.url);
-        kind = resolved.kind;
-        key = resolved.key;
-        note =
-          resolved.how === "page"
-            ? "This site has no feed, so Showrium watches the page for new articles."
-            : resolved.how === "feed"
-              ? null
-              : "Found this site's feed and connected that.";
-      } catch (error) {
-        const message = error instanceof UnsafeUrlError ? error.message : error instanceof Error ? error.message : "We couldn't read that address.";
-        return c.json(apiError("unreadable_source", message), 400);
-      }
-    }
+    const resolved = await resolveSourceInput(c.req.valid("json"), { db: c.get("db"), orgId });
+    if ("error" in resolved) return c.json(apiError("unreadable_source", resolved.error), 400);
+    const { kind, key, note } = resolved;
     try {
       const created = await addSource(c.get("db"), orgId, await getOrgPlan(c.get("db"), orgId), kind, key);
       if (!created) return c.json(apiError("already_added", "That source is already connected."), 409);
@@ -321,8 +347,147 @@ contentApi.openapi(
     const { orgId } = c.get("principal");
     const src = await getSource(c.get("db"), orgId, c.req.valid("param").id);
     if (!src) return c.json(apiError("not_found", "No such source in this workspace."), 404);
-    const out = await syncSource(c.get("db"), src);
+    const out = await syncSource(c.get("db"), src, { xReader: await xReaderFor(c.env, c.get("db")) });
     return c.json({ added: out.added, error: out.error }, 200);
+  },
+);
+
+// --- Passions -----------------------------------------------------------------------
+// Subjects the person cares about, each with its own sources. Removing or checking one of a
+// passion's sources uses the /sources/{id} routes above.
+
+const Day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use dates like 2026-11-01.");
+const PassionFields = z.object({
+  name: z.string().trim().min(1).max(60),
+  about: z.string().max(300).optional(),
+  disclosure: z.string().max(120).optional(),
+  active: z.boolean().optional(),
+  startsOn: Day.nullable().optional(),
+  endsOn: Day.nullable().optional(),
+  /** follow: you follow it; involved: contributor, ambassador or partner; ours: your own team (posts say "we"). */
+  relation: z.enum(["follow", "involved", "ours"]).optional(),
+  /** Add the source's link to posts (on LinkedIn, as the first comment). */
+  linkSource: z.boolean().optional(),
+  /** Its official X account ("@name"), which X posts may mention once. Empty to remove. */
+  xHandle: z.string().max(80).optional(),
+});
+const PassionSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    about: z.string(),
+    disclosure: z.string(),
+    active: z.boolean(),
+    live: z.boolean(),
+    startsOn: z.string().nullable(),
+    endsOn: z.string().nullable(),
+    relation: z.enum(["follow", "involved", "ours"]),
+    linkSource: z.boolean(),
+    xHandle: z.string(),
+    sources: z.array(SourceSchema),
+  })
+  .openapi("Passion");
+type PassionRow = { id: string; name: string; about: string; disclosure: string; active: boolean; startsOn: string | null; endsOn: string | null; relation: "follow" | "involved" | "ours"; linkSource: boolean; xHandle: string; sources?: { id: string; kind: string; key: string; lastCheckedAt: Date | null; lastError: string | null }[] };
+const toPassion = (p: PassionRow) => ({
+  id: p.id,
+  name: p.name,
+  about: p.about,
+  disclosure: p.disclosure,
+  active: p.active,
+  live: passionIsLive(p, utcDay()),
+  startsOn: p.startsOn,
+  endsOn: p.endsOn,
+  relation: p.relation,
+  linkSource: p.linkSource,
+  xHandle: p.xHandle,
+  sources: (p.sources ?? []).map((r) => ({ id: r.id, kind: r.kind, key: r.key, lastCheckedAt: r.lastCheckedAt?.toISOString() ?? null, lastError: r.lastError })),
+});
+const actorOf = (p: { kind: "user"; userId: string } | { kind: "api_key"; apiKeyId: string }) => ({ actorUserId: p.kind === "user" ? p.userId : null, actorApiKeyId: p.kind === "api_key" ? p.apiKeyId : null });
+/** A PassionError as an API answer: bad input 400, unknown 404, limits and duplicates 409. */
+function passionFailure(error: unknown): { status: 400 | 404 | 409; body: ReturnType<typeof apiError> } {
+  if (!(error instanceof PassionError)) throw error;
+  const code = error.code === "limit" ? "passion_limit" : error.code === "exists" ? "already_added" : error.code;
+  return { status: error.code === "not_found" ? 404 : error.code === "invalid" ? 400 : 409, body: apiError(code, error.message) };
+}
+
+contentApi.openapi(
+  createRoute({ method: "get", path: "/passions", tags: ["Passions"], responses: { 200: json(z.object({ data: z.array(PassionSchema), limits: z.object({ passions: z.number(), sourcesEach: z.number() }) })), ...errs } }),
+  async (c) => {
+    const { orgId } = c.get("principal");
+    const [rows, { limits }] = await Promise.all([listPassions(c.get("db"), orgId), getOrgLimits(c.get("db"), orgId)]);
+    return c.json({ data: rows.map(toPassion), limits: { passions: limits.passions, sourcesEach: limits.passionSources } }, 200);
+  },
+);
+
+contentApi.openapi(
+  createRoute({ method: "post", path: "/passions", tags: ["Passions"], request: body(PassionFields), responses: { 201: json(PassionSchema, "Created"), 409: json(Err, "Limit reached or name in use"), ...errs } }),
+  async (c) => {
+    if (denied(c, "content.write")) return c.json(forbidden("add passions"), 403);
+    const principal = c.get("principal");
+    const { orgId } = principal;
+    try {
+      const row = await createPassion(c.get("db"), orgId, c.req.valid("json"));
+      await recordAudit(c.get("db"), { orgId, ...actorOf(principal), action: "passion.created", target: row.id, meta: { name: row.name } });
+      return c.json(toPassion(row), 201);
+    } catch (error) {
+      const f = passionFailure(error);
+      return c.json(f.body, f.status);
+    }
+  },
+);
+
+contentApi.openapi(
+  createRoute({ method: "patch", path: "/passions/{id}", tags: ["Passions"], request: { params: z.object({ id: z.string().max(64) }), ...body(PassionFields.partial()) }, responses: { 200: json(PassionSchema), 409: json(Err, "Name in use"), ...errs } }),
+  async (c) => {
+    if (denied(c, "content.write")) return c.json(forbidden("change passions"), 403);
+    const principal = c.get("principal");
+    const { orgId } = principal;
+    try {
+      const row = await updatePassion(c.get("db"), orgId, c.req.valid("param").id, c.req.valid("json"));
+      await recordAudit(c.get("db"), { orgId, ...actorOf(principal), action: "passion.updated", target: row.id, meta: { active: row.active, startsOn: row.startsOn, endsOn: row.endsOn, disclosure: Boolean(row.disclosure), relation: row.relation, linkSource: row.linkSource, xHandle: row.xHandle } });
+      const full = (await listPassions(c.get("db"), orgId)).find((p) => p.id === row.id) ?? row;
+      return c.json(toPassion(full), 200);
+    } catch (error) {
+      const f = passionFailure(error);
+      return c.json(f.body, f.status);
+    }
+  },
+);
+
+contentApi.openapi(
+  createRoute({ method: "delete", path: "/passions/{id}", tags: ["Passions"], request: { params: z.object({ id: z.string().max(64) }) }, responses: { 204: { description: "Removed; its sources are no longer watched (posts already written stay)" }, ...errs } }),
+  async (c) => {
+    if (denied(c, "content.write")) return c.json(forbidden("remove passions"), 403);
+    const principal = c.get("principal");
+    const { orgId } = principal;
+    const id = c.req.valid("param").id;
+    if (!(await removePassion(c.get("db"), orgId, id))) return c.json(apiError("not_found", "No such passion in this workspace."), 404);
+    await recordAudit(c.get("db"), { orgId, ...actorOf(principal), action: "passion.removed", target: id });
+    return c.body(null, 204);
+  },
+);
+
+contentApi.openapi(
+  createRoute({
+    method: "post",
+    path: "/passions/{id}/sources",
+    tags: ["Passions"],
+    request: { params: z.object({ id: z.string().max(64) }), ...body(SourceInput) },
+    responses: { 201: json(z.object({ id: z.string(), kind: z.enum(["github_repo", "rss", "page", "x_account"]), key: z.string(), note: z.string().nullable() }), "Added"), 409: json(Err, "Limit reached or already added"), ...errs },
+  }),
+  async (c) => {
+    if (denied(c, "content.write")) return c.json(forbidden("connect sources"), 403);
+    const { orgId } = c.get("principal");
+    const resolved = await resolveSourceInput(c.req.valid("json"), { db: c.get("db"), orgId });
+    if ("error" in resolved) return c.json(apiError("unreadable_source", resolved.error), 400);
+    try {
+      const created = await addPassionSource(c.get("db"), orgId, c.req.valid("param").id, resolved.kind, resolved.key);
+      if (!created) return c.json(apiError("already_added", "That source is already connected (here or in Sources)."), 409);
+      return c.json({ id: created.id, kind: resolved.kind, key: resolved.key, note: resolved.note }, 201);
+    } catch (error) {
+      const f = passionFailure(error);
+      return c.json(f.body, f.status);
+    }
   },
 );
 
@@ -340,10 +505,17 @@ const DraftSchema = z
     publishedAt: z.string().nullable(),
     externalUrl: z.string().nullable(),
     lastError: z.string().nullable(),
+    /** Approved by automation ("Approve for me"); its time picked by automation. */
+    autoApproved: z.boolean(),
+    autoScheduled: z.boolean(),
+    /** Time-sensitive: best posted before this (automation couldn't fit it in time). */
+    urgentUntil: z.string().nullable(),
     createdAt: z.string(),
     /** A thread's parts in order (null for a single post), and how many have been posted. */
     parts: z.array(z.string()).nullable(),
     partsPosted: z.number(),
+    /** LinkedIn: the source link, posted as the first comment (a link in the post hides its image). */
+    linkComment: z.string().nullable(),
     /** The post's images, in order (up to 4). The files are at /images/{id}. */
     images: z.array(ImageSummary),
     /** True when the post has its own images; false when it shares those of its material with the other posts. */
@@ -382,9 +554,13 @@ export const toDraft = (d: DraftRow, images: ImageRow[] = []) => ({
   publishedAt: d.publishedAt?.toISOString() ?? null,
   externalUrl: d.externalUrl,
   lastError: d.lastError,
+  autoApproved: d.autoApproved,
+  autoScheduled: d.autoScheduled,
+  urgentUntil: d.urgentUntil && d.urgentUntil.getTime() > Date.now() && (d.status === "draft" || d.status === "approved") ? d.urgentUntil.toISOString() : null,
   createdAt: d.createdAt.toISOString(),
   parts: d.parts ?? null,
   partsPosted: d.postedParts?.length ?? 0,
+  linkComment: d.linkComment ?? null,
   images: images.map(toImageSummary),
   ownImages: d.ownImages || !d.briefId,
 });
@@ -453,13 +629,13 @@ contentApi.openapi(
     method: "get",
     path: "/drafts",
     tags: ["Content"],
-    request: { query: z.object({ status: z.enum(DRAFT_STATUSES).optional(), briefId: z.string().max(64).optional() }) },
+    request: { query: z.object({ status: z.enum(DRAFT_STATUSES).optional(), briefId: z.string().max(64).optional(), needsYou: z.enum(["true"]).optional() }) },
     responses: { 200: json(z.object({ data: z.array(DraftSchema) })), ...errs },
   }),
   async (c) => {
-    const { status, briefId } = c.req.valid("query");
+    const { status, briefId, needsYou } = c.req.valid("query");
     const { orgId } = c.get("principal");
-    const rows = await listDrafts(c.get("db"), orgId, { ...(status ? { status } : {}), ...(briefId ? { briefId } : {}) });
+    const rows = await listDrafts(c.get("db"), orgId, { ...(status ? { status } : {}), ...(briefId ? { briefId } : {}), ...(needsYou ? { needsYou: true } : {}) });
     const sources = await draftSources(c.get("db"), orgId, rows.map((d) => d.briefId));
     const out = await draftsWithImages(c.get("db"), orgId, rows);
     return c.json({ data: out.map((d) => ({ ...d, source: d.briefId ? sources.get(d.briefId) ?? null : null })) }, 200);
@@ -489,7 +665,7 @@ contentApi.openapi(
     method: "patch",
     path: "/drafts/{id}",
     tags: ["Content"],
-    request: { params: z.object({ id: z.string() }), ...body(z.object({ text: z.string().trim().min(1).max(30000).optional(), parts: z.array(z.string().max(30000)).min(1).max(20).optional(), status: z.enum(["draft", "approved", "discarded"]).optional() })) },
+    request: { params: z.object({ id: z.string() }), ...body(z.object({ text: z.string().trim().min(1).max(30000).optional(), parts: z.array(z.string().max(30000)).min(1).max(20).optional(), status: z.enum(["draft", "approved", "discarded"]).optional(), needsYou: z.literal(false).optional() })) },
     responses: { 200: json(z.object({ draft: DraftSchema })), 409: json(Err, "Invalid state change"), ...errs },
   }),
   async (c) => {
@@ -499,13 +675,18 @@ contentApi.openapi(
     if (patch.status && patch.status !== "approved" && denied(c, "content.write")) return c.json(forbidden("change posts"), 403);
     const principal = c.get("principal");
     try {
+      // Approving a scheduled post means "cancel the schedule": it stays approved, never rescheduled on its own.
+      const wasScheduled = patch.status === "approved" && (await getDraft(c.get("db"), principal.orgId, c.req.valid("param").id))?.status === "scheduled";
       const updated = await updateDraft(c.get("db"), principal.orgId, c.req.valid("param").id, {
         ...(patch.text !== undefined ? { text: patch.text } : {}),
         ...(patch.parts !== undefined ? { parts: patch.parts } : {}),
         ...(patch.status ? { status: patch.status } : {}),
+        ...(patch.needsYou === false ? { needsYou: false as const } : {}),
       });
       if (!updated) return c.json(apiError("not_found", "No such post in this workspace."), 404);
-      if (patch.status === "approved") {
+      if (patch.status === "approved" && wasScheduled) {
+        await recordAudit(c.get("db"), { orgId: principal.orgId, actorUserId: principal.kind === "user" ? principal.userId : null, actorApiKeyId: principal.kind === "api_key" ? principal.apiKeyId : null, action: "draft.unscheduled", target: updated.id });
+      } else if (patch.status === "approved") {
         // "Schedule when approved": the post goes to the next free slot, if switched on for its platform.
         if (can(principal.role, "publish") && (await autoScheduleApproved(c.get("db"), principal.orgId, [updated.id]))) {
           const now = await getDraft(c.get("db"), principal.orgId, updated.id);
@@ -542,4 +723,22 @@ contentApi.openapi(
       200,
     );
   },
+);
+
+const CostsSchema = z.object({
+  since: z.string(),
+  totalUsd: z.number(),
+  ai: z.object({ usd: z.number(), byFeature: z.array(z.object({ feature: z.string(), usd: z.number(), calls: z.number(), estimated: z.boolean() })) }),
+  x: z.object({ usd: z.number(), posts: z.number(), images: z.number(), reads: z.number() }),
+});
+
+contentApi.openapi(
+  createRoute({
+    method: "get",
+    path: "/costs",
+    tags: ["Account"],
+    summary: "What this workspace's use has cost Showrium this month (AI and X API), for transparency",
+    responses: { 200: json(CostsSchema), ...errs },
+  }),
+  async (c) => c.json(await workspaceCosts(c.get("db"), c.get("principal").orgId), 200),
 );

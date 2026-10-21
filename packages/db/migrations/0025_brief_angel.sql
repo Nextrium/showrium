@@ -1,0 +1,1 @@
+ALTER TABLE `idea` ADD `score_version` integer DEFAULT 1 NOT NULL;

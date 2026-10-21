@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { api, formatDate, useApi } from "../../lib";
 import type { Draft } from "./shared";
-import { PageHeader } from "../../ui/kit";
+import { Info, PageHeader } from "../../ui/kit";
 
 type Idea = { id: string; reason: string; score: number; title: string; body: string; url: string | null; createdAt: string };
 type Theme = { label: string; kind: string; count: number; examples: string[]; suggestion: string };
@@ -24,7 +24,7 @@ function Stats() {
   const max = Math.max(1, ...data.perWeek);
   return (
     <section className="card">
-      <h2 className="h3">How it's going</h2>
+      <h2 className="h3 flex items-center gap-1.5">How it's going <Info label="Where counts come from">Counts come from Bluesky and Mastodon automatically. For other platforms, from the numbers you enter below.</Info></h2>
       <div className="row stats">
         <div><strong>{data.statuses.published ?? 0}</strong><span className="note">published</span></div>
         <div><strong>{(data.statuses.draft ?? 0) + (data.statuses.approved ?? 0)}</strong><span className="note">waiting</span></div>
@@ -47,7 +47,6 @@ function Stats() {
           <ul className="items">{data.top.map((t) => <li key={t.id}>{t.url ? <a href={t.url} target="_blank" rel="noreferrer">{t.text}</a> : t.text} <span className="muted">· {t.platform} · score {t.score}</span></li>)}</ul>
         </>
       )}
-      <p className="note">Counts come from Bluesky and Mastodon automatically, and from the numbers you enter for other platforms.</p>
     </section>
   );
 }
@@ -110,7 +109,7 @@ function Audience({ onIdea }: { onIdea: () => void }) {
 
       <details>
         <summary>Add comments from LinkedIn, X, TikTok or elsewhere</summary>
-        <p className="note">These platforms don't let apps read comments, so paste them here (one per line). Only you see them; they're used to find themes.</p>
+        <p className="note">Paste them one per line. Only you see them. <Info label="Why paste comments">These platforms don't let apps read comments. Pasted comments are used to find themes.</Info></p>
         <form className="form" onSubmit={paste}>
           <label>Post<select name="draftId" required>{published.data?.data.map((d) => <option key={d.id} value={d.id}>{d.platform}: {d.text.slice(0, 60)}</option>)}</select></label>
           <label>Comments<textarea name="comments" rows={4} maxLength={50_000} /></label>
@@ -138,7 +137,7 @@ function Audience({ onIdea }: { onIdea: () => void }) {
 export function InsightsPage() {
   return (
     <div className="dash">
-      <PageHeader title="Insights" subtitle="How your posts are doing, and what your audience is saying." />
+      <PageHeader title="Insights" />
       <Stats />
       <Audience onIdea={() => undefined} />
     </div>

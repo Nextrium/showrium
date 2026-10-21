@@ -2,6 +2,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Loading, useLoad } from "./ui";
 import { Overview } from "./pages/Overview";
 import { Waitlist } from "./pages/Waitlist";
+import { Costs } from "./pages/Costs";
+import { Health } from "./pages/Health";
+import { Billing } from "./pages/Billing";
+import { Abuse } from "./pages/Abuse";
 import { Users } from "./pages/Users";
 import { Staff } from "./pages/Staff";
 import { Activity } from "./pages/Activity";
@@ -12,6 +16,10 @@ const PAGES: { path: string; label: string; permission: string; render: (me: Me)
   { path: "/", label: "Overview", permission: "overview", render: () => <Overview /> },
   { path: "/waitlist", label: "Waitlist", permission: "waitlist", render: () => <Waitlist /> },
   { path: "/users", label: "Users", permission: "users", render: (me) => <Users me={me} /> },
+  { path: "/costs", label: "AI costs", permission: "costs", render: () => <Costs /> },
+  { path: "/health", label: "Publishing", permission: "health", render: () => <Health /> },
+  { path: "/billing", label: "Billing", permission: "billing", render: () => <Billing /> },
+  { path: "/abuse", label: "Abuse", permission: "abuse", render: (me) => <Abuse me={me} /> },
   { path: "/staff", label: "Staff", permission: "staff", render: (me) => <Staff me={me} /> },
   { path: "/activity", label: "Activity", permission: "audit", render: () => <Activity /> },
 ];
@@ -50,7 +58,7 @@ export function App() {
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-30 focus:rounded-lg focus:bg-panel focus:p-2">
         Skip to content
       </a>
-      <aside className="flex flex-col gap-4 border-b border-line bg-[var(--sidebar)] p-4 md:min-h-dvh md:border-b-0 md:border-r">
+      <aside className="sticky top-0 z-20 flex flex-col gap-4 border-b border-line bg-[var(--sidebar)] p-4 md:h-dvh md:overflow-y-auto md:border-b-0 md:border-r">
         <div className="flex items-center gap-2">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent font-display font-bold text-on-accent">S</span>
           <span className="font-display text-[17px] font-semibold">Admin</span>

@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, dataChanged, orgHeaders, useApi, useEditable } from "../lib";
 import { prepareForPosting } from "../photos";
-import { Alert, Button, Chip, Loading, Panel, SaveBar, Switch } from "../ui/kit";
+import { Alert, Button, Chip, Info, Loading, Panel, SaveBar, Switch } from "../ui/kit";
 import type { Draft, DraftImage, Persona, Platform } from "../pages/workspace/shared";
 
 export type ImageSize = "square" | "portrait" | "landscape" | "none";
@@ -287,7 +287,7 @@ export function PostImagePanel({ draft }: { draft: Draft }) {
   const size = (settings?.sizes[draft.platform] ?? "landscape") as ImageSize;
   if (!settings || !set) return <Loading />;
   const images = set.images;
-  if (size === "none" && !images.length) return <p className="m-0 text-sm text-muted">This platform posts video, so no image is added. Change this in Settings → Images.</p>;
+  if (size === "none" && !images.length) return <p className="m-0 text-sm text-muted">No image: this platform posts video. Change it in Settings → Images.</p>;
   const room = MAX_IMAGES - images.length;
 
   const act: Act = async (label, fn) => {
@@ -324,12 +324,13 @@ export function PostImagePanel({ draft }: { draft: Draft }) {
     <div className="flex flex-col gap-3">
       {draft.briefId && (
         <div className="flex items-center justify-between gap-3 rounded-xl bg-sunken px-3 py-2.5">
-          <span className="text-[13px] text-ink-2">
+          <span className="flex items-center gap-1.5 text-[13px] text-ink-2">
             {set.own
-              ? "This post has its own images. Switch off to use the shared ones again."
+              ? "This post has its own images."
               : set.sharedWith > 0
-                ? `Shared with the ${set.sharedWith} other post${set.sharedWith === 1 ? "" : "s"} written from the same material. A change here shows there too.`
-                : "Shared by every post written from this material."}
+                ? `Shared with ${set.sharedWith} other post${set.sharedWith === 1 ? "" : "s"}.`
+                : "Shared with posts from this material."}
+            <Info label="About shared images">Posts written from the same material share their images. A change here shows there too. Switch on to use different images for this post.</Info>
           </span>
           {!locked && <Switch label="Use different images for this post" on={set.own} disabled={Boolean(busy)} onChange={(v) => void setOwn(v)} />}
         </div>
@@ -341,7 +342,7 @@ export function PostImagePanel({ draft }: { draft: Draft }) {
           ))}
         </ul>
       ) : (
-        <p className="m-0 text-sm text-muted">No images yet. Posts with an image usually get more attention. Up to {MAX_IMAGES}.</p>
+        <p className="m-0 flex items-center gap-1.5 text-sm text-muted">No images yet. Up to {MAX_IMAGES}. <Info label="About images">Posts with an image usually get more attention.</Info></p>
       )}
       {error && <Alert>{error}</Alert>}
       {busy && <Loading label={busy} />}
@@ -396,8 +397,8 @@ export function ImageSettingsPanel({ canManage }: { canManage: boolean }) {
     }
   };
   return (
-    <Panel title="Images" id="images">
-      <p className="m-0 text-sm text-muted">Up to 4 images per post, cropped to the shape each platform shows best. The original is always kept.</p>
+    <Panel title={<span className="flex items-center gap-1.5">Images <Info label="About image sizes">Each image is cropped to the shape the platform shows best. The original is always kept.</Info></span>} id="images">
+      <p className="m-0 text-sm text-muted">Up to 4 images per post.</p>
       <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
         {platforms.map((p) => (
           <li key={p} className="flex flex-col gap-1.5">
@@ -417,7 +418,7 @@ export function ImageSettingsPanel({ canManage }: { canManage: boolean }) {
         <Switch label="Find images automatically" on={draft.auto} disabled={!canManage} onChange={(v) => setDraft((d) => (d ? { ...d, auto: v } : d))} />
       </div>
       <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-ink-2">Allow AI images when there's no real one (always labelled)</span>
+        <span className="flex items-center gap-1.5 text-sm text-ink-2">Allow AI images (always labelled) <Info label="About AI images">Used only when no real image is found.</Info></span>
         <Switch label="Allow AI images" on={draft.allowAi} disabled={!canManage} onChange={(v) => setDraft((d) => (d ? { ...d, allowAi: v } : d))} />
       </div>
       {!canManage && <p className="m-0 text-[13px] text-muted">Only owners and admins can change these.</p>}

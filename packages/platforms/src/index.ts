@@ -56,7 +56,7 @@ export interface ReplyTo {
 export class PlatformError extends Error {
   constructor(
     readonly platform: string,
-    readonly kind: "auth" | "rate_limited" | "rejected" | "unavailable",
+    readonly kind: "auth" | "rate_limited" | "rejected" | "unavailable" | "provider_billing",
     message: string,
   ) {
     super(message);
@@ -66,18 +66,47 @@ export class PlatformError extends Error {
 
 const TIMEOUT = 15_000;
 
-async function request(platform: string, doFetch: FetchLike, url: string, init: RequestInit): Promise<Response> {
+/**
+ * The platform's own explanation of a refused request, from its structured error fields only (X's
+ * problem+json "detail", or "message"/"errors[].message"). Raw text and HTML are never echoed, and
+ * anything that looks like a token or key is masked, so nothing sensitive reaches the person or logs.
+ */
+export async function errorReason(res: Response): Promise<string> {
+  let raw = "";
+  try {
+    const j = JSON.parse((await res.text()).slice(0, 4000)) as Record<string, unknown> & { errors?: { message?: unknown; detail?: unknown }[] };
+    const first = Array.isArray(j?.errors) ? j.errors[0] : undefined;
+    const pick = [j?.detail, first?.detail, first?.message, j?.message, j?.error_description, j?.title].find((v) => typeof v === "string" && v.trim());
+    raw = typeof pick === "string" ? pick : "";
+  } catch {
+    raw = ""; // not JSON: say nothing rather than echo it
+  }
+  return raw
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/[A-Za-z0-9_\-.~+/=]{24,}/g, "…")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200);
+}
+
+async function request(platform: string, doFetch: FetchLike, url: string, init: RequestInit, what = "the post"): Promise<Response> {
   let res: Response;
   try {
     res = await doFetch(url, { ...init, signal: AbortSignal.timeout(TIMEOUT) });
   } catch {
     throw new PlatformError(platform, "unavailable", `${platform} didn't respond. Try again shortly.`);
   }
+  if (res.ok) return res;
+  // Sign-in failures never carry the platform's text (it can describe tokens); other refusals do.
+  const reason = res.status === 401 || res.status === 402 || res.status === 403 || res.status === 429 || res.status >= 500 ? "" : await errorReason(res);
+  const why = reason ? ` ${platform} said: "${reason}"` : "";
   if (res.status === 401 || res.status === 403) throw new PlatformError(platform, "auth", `${platform} refused the request. Reconnect the account and try again.`);
   if (res.status === 429) throw new PlatformError(platform, "rate_limited", `${platform} is rate-limiting requests. Try again later.`);
+  // 402: Showrium's own developer account with the platform is out of paid API usage (X: "credits
+  // depleted"). It's on our side, not the person's account or their Showrium credits.
+  if (res.status === 402) throw new PlatformError(platform, "provider_billing", `Posting to ${platform} through Showrium isn't available right now. This is on our side, not your account or your credits. Post it yourself (free), or try again later.`);
   if (res.status >= 500) throw new PlatformError(platform, "unavailable", `${platform} is having problems (HTTP ${res.status}). Try again shortly.`);
-  if (!res.ok) throw new PlatformError(platform, "rejected", `${platform} rejected the post (HTTP ${res.status}).`);
-  return res;
+  throw new PlatformError(platform, "rejected", `${platform} rejected ${what} (HTTP ${res.status}).${why}`);
 }
 
 const form = (data: Record<string, string>) => new URLSearchParams(data).toString();
@@ -101,11 +130,17 @@ export const x = {
     return { accessToken: t.access_token, refreshToken: t.refresh_token, expiresAt: expiry(t.expires_in) };
   },
   async refresh(cfg: OAuthConfig, refreshToken: string, doFetch: FetchLike = fetch): Promise<TokenSet> {
-    const res = await request("X", doFetch, "https://api.x.com/2/oauth2/token", {
-      method: "POST",
-      headers: { ...FORM, Authorization: `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}` },
-      body: form({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: cfg.clientId }),
-    });
+    const res = await request(
+      "X",
+      doFetch,
+      "https://api.x.com/2/oauth2/token",
+      {
+        method: "POST",
+        headers: { ...FORM, Authorization: `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}` },
+        body: form({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: cfg.clientId }),
+      },
+      "the sign-in renewal",
+    );
     const t = (await res.json()) as { access_token: string; refresh_token?: string; expires_in?: number };
     return { accessToken: t.access_token, refreshToken: t.refresh_token ?? refreshToken, expiresAt: expiry(t.expires_in) };
   },
@@ -118,11 +153,17 @@ export const x = {
   },
   /** Uploads an image (needs the media.write scope) and sets its alt text. Returns the media id. */
   async uploadImage(tokens: TokenSet, image: ImageUpload, doFetch: FetchLike = fetch): Promise<string> {
-    const res = await request("X", doFetch, "https://api.x.com/2/media/upload", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${tokens.accessToken}` },
-      body: multipart({ media: { bytes: image.bytes, mime: image.mime, name: "image" }, media_category: "tweet_image" }),
-    });
+    const res = await request(
+      "X",
+      doFetch,
+      "https://api.x.com/2/media/upload",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tokens.accessToken}` },
+        body: multipart({ media: { bytes: image.bytes, mime: image.mime, name: "image" }, media_category: "tweet_image" }),
+      },
+      "the image",
+    );
     const { data } = (await res.json()) as { data: { id: string } };
     if (image.alt) {
       await request("X", doFetch, "https://api.x.com/2/media/metadata", {
@@ -132,6 +173,26 @@ export const x = {
       }).catch(() => undefined); // alt text is best effort; the image still posts
     }
     return data.id;
+  },
+  /** An account's id from its handle (X charges this as one user read). Null when there's no such account. */
+  async userByUsername(tokens: TokenSet, username: string, doFetch: FetchLike = fetch): Promise<{ id: string; username: string } | null> {
+    const handle = username.replace(/^@/, "");
+    if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) return null;
+    // An unknown handle comes back as 200 with an "errors" list and no data.
+    const res = await request("X", doFetch, `https://api.x.com/2/users/by/username/${handle}`, { headers: { Authorization: `Bearer ${tokens.accessToken}` } }, "the account lookup");
+    const { data } = (await res.json()) as { data?: { id: string; username: string } };
+    return data ?? null;
+  },
+  /**
+   * An account's newest original posts (no reposts or replies), newer than `sinceId` when given. X
+   * charges per post returned, so at most `max` (5 to 10) come back.
+   */
+  async recentPosts(tokens: TokenSet, userId: string, opts: { sinceId?: string | undefined; max?: number } = {}, doFetch: FetchLike = fetch): Promise<{ id: string; text: string; createdAt: string | null }[]> {
+    const q = new URLSearchParams({ max_results: String(Math.min(10, Math.max(5, opts.max ?? 5))), exclude: "retweets,replies", "tweet.fields": "created_at" });
+    if (opts.sinceId) q.set("since_id", opts.sinceId);
+    const res = await request("X", doFetch, `https://api.x.com/2/users/${encodeURIComponent(userId)}/tweets?${q}`, { headers: { Authorization: `Bearer ${tokens.accessToken}` } }, "the account's posts");
+    const { data } = (await res.json()) as { data?: { id: string; text: string; created_at?: string }[] };
+    return (data ?? []).map((t) => ({ id: t.id, text: t.text, createdAt: t.created_at ?? null }));
   },
   async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, mediaIds: string[] = []): Promise<PublishResult> {
     const res = await request("X", doFetch, "https://api.x.com/2/tweets", {
@@ -213,6 +274,20 @@ export const linkedin = {
         return;
       }
     }
+  },
+  /** A comment on a post by the same member (the source link as the first comment). w_member_social covers it. */
+  async comment(tokens: TokenSet, account: Account, postUrn: string, text: string, doFetch: FetchLike = fetch): Promise<void> {
+    await request(
+      "LinkedIn",
+      doFetch,
+      `https://api.linkedin.com/rest/socialActions/${encodeURIComponent(postUrn)}/comments`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json", "LinkedIn-Version": LINKEDIN_VERSION, "X-Restli-Protocol-Version": "2.0.0" },
+        body: JSON.stringify({ actor: `urn:li:person:${account.accountId}`, object: postUrn, message: { text: text.slice(0, 1250) } }),
+      },
+      "the link comment",
+    );
   },
   async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, images: { urn: string; alt: string }[] = []): Promise<PublishResult> {
     const res = await request("LinkedIn", doFetch, "https://api.linkedin.com/rest/posts", {

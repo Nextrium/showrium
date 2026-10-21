@@ -5,6 +5,7 @@ import { checkTimeline, generateStructured, TimelineSchema, videoRevisePrompt, v
 import { getBalance, postCreditTxn } from "./credits.js";
 import { getOrgLimits, getOrgPlan, getPersona } from "./content.js";
 import { newId } from "./ids.js";
+import { recordAiUsage } from "./ai-usage.js";
 import { addUsage, getUsage, PLAN_LIMITS } from "./plans.js";
 
 export const CREDITS_PER_EXTRA_VIDEO = 2;
@@ -57,6 +58,7 @@ export async function createVideo(db: Db, providers: Provider[], input: { orgId:
   const id = newId("vid");
   const timeline = { ...result.data, aspect: input.aspect } as VideoTimeline;
   await db.insert(videoProject).values({ id, orgId: input.orgId, draftId: input.draftId ?? null, contextItemId: input.contextItemId ?? null, timeline, model: result.model });
+  await recordAiUsage(db, [{ orgId: input.orgId, feature: "video_plan", model: result.model, costMicroUsd: result.costMicroUsd, refId: id }]);
   const { overage } = await addUsage(db, input.orgId, "videosRendered", 1, limits.videos);
   if (overage > 0) {
     await postCreditTxn(db, { orgId: input.orgId, kind: "spend", amount: -CREDITS_PER_EXTRA_VIDEO, idempotencyKey: `video:${id}`, description: "Extra video" }).catch(() => undefined);
@@ -77,6 +79,7 @@ export async function reviseVideo(db: Db, providers: Provider[], input: { orgId:
   }
   const timeline = { ...result.data, aspect: row.timeline.aspect } as VideoTimeline;
   await db.update(videoProject).set({ timeline, revisions: row.revisions + 1, updatedAt: new Date() }).where(eq(videoProject.id, row.id));
+  await recordAiUsage(db, [{ orgId: row.orgId, feature: "video_plan", model: result.model, costMicroUsd: result.costMicroUsd }]);
   return { id: row.id, timeline };
 }
 

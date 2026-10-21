@@ -10,6 +10,7 @@ const PATHS = {
   video: "M4 6h11a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zM16 10l5-3v10l-5-3",
   insights: "M4 20V10M10 20V4M16 20v-7M22 20H2",
   sources: "M5 12a7 7 0 0 1 7 7M5 5a14 14 0 0 1 14 14M6 19h.01",
+  heart: "M12 20s-7-4.4-9-8.6C1.7 8.5 3.5 5 7 5c2 0 3.3 1.1 5 3 1.7-1.9 3-3 5-3 3.5 0 5.3 3.5 4 6.4C19 15.6 12 20 12 20z",
   accounts: "M16 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM4 21a8 8 0 0 1 16 0",
   voice: "M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3",
   automation: "M13 2 4 14h7l-1 8 9-12h-7z",
@@ -261,7 +262,9 @@ export function Info({ children, label = "More information" }: { children: React
         aria-expanded={open}
         onFocus={show}
         onBlur={() => setOpen(false)}
-        onClick={() => (open ? setOpen(false) : show())}
+        // A tap fires hover, focus and click in a row, so toggling here would close it at once: a click
+        // only opens. Moving away, tapping elsewhere (blur) or Escape closes it.
+        onClick={show}
         onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
         className="inline-flex h-[18px] w-[18px] cursor-help items-center justify-center rounded-full border border-line-strong text-[11px] font-semibold text-muted hover:text-ink"
       >

@@ -14,9 +14,16 @@ export type Draft = {
   publishedAt: string | null;
   externalUrl: string | null;
   lastError: string | null;
+  /** Approved by automation; its time picked by automation. */
+  autoApproved?: boolean;
+  autoScheduled?: boolean;
+  /** Time-sensitive: best posted before this (automation couldn't fit it in time). */
+  urgentUntil?: string | null;
   createdAt: string;
   parts?: string[] | null;
   partsPosted?: number;
+  /** LinkedIn: the source link, posted as the first comment. */
+  linkComment?: string | null;
   images: DraftImage[];
   ownImages: boolean;
   source?: DraftSource | null;

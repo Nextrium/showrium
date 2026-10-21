@@ -162,6 +162,76 @@
       "when": 1792260857200,
       "tag": "0022_lean_firestar",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1792272069977,
+      "tag": "0023_perfect_meggan",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1792278812563,
+      "tag": "0024_lean_vulture",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1792280954818,
+      "tag": "0025_brief_angel",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1792363566653,
+      "tag": "0026_thick_maginty",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1792375444743,
+      "tag": "0027_nice_wendigo",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1792378284459,
+      "tag": "0028_unique_aaron_stack",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1792504939505,
+      "tag": "0029_luxuriant_lenny_balinger",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1792546171572,
+      "tag": "0030_polite_nightcrawler",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1792546612933,
+      "tag": "0031_careful_paladin",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1792546934891,
+      "tag": "0032_overconfident_justice",
+      "breakpoints": true
     }
   ]
 }

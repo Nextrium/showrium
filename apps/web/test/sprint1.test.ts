@@ -1,5 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { createDb } from "@nextrium/db";
+import { listFullAccess, setFullAccess } from "@nextrium/core";
 
 const BASE = "http://localhost:5173";
 let n = 0;
@@ -23,25 +25,29 @@ async function user(email: string) {
 }
 
 describe("full access grants", () => {
-  it("only platform admins grant it; it lifts plan limits; removing it restores them; all audited", async () => {
+  // Staff grant it in the admin app (apps/admin, behind Access); the web API can't, for anyone.
+  it("can't be self-granted from the web app; it lifts plan limits; removing it restores them; all audited", async () => {
     const tester = await user("s1tester@example.com");
     expect(tester.fullAccess).toBe(false);
     await tester.call("PUT", "/persona", { displayName: "T", platforms: ["bluesky"] });
     const autopilot = { level: "autopilot", mode: "teach", platforms: ["bluesky"], postsPerWeek: 3, publishHourUtc: 14 };
     expect((await tester.call("PUT", "/autopilot", autopilot)).status).toBe(402); // free plan
 
-    expect((await tester.call("PUT", `/admin/orgs/${tester.orgId}/access`, { full: true, note: "self-grant" })).status).toBe(403);
-    const admin = await user("admin@example.com");
-    expect((await admin.call("PUT", `/admin/orgs/${tester.orgId}/access`, { full: true, note: "beta tester" })).status).toBe(204);
+    expect((await tester.call("PUT", `/admin/orgs/${tester.orgId}/access`, { full: true, note: "self-grant" })).status).toBe(404);
+    expect(((await (await tester.call("GET", "/billing")).json()) as { fullAccess: boolean }).fullAccess).toBe(false);
+    const db = createDb(env.DB);
+    const staff = "staff:owner@example.com"; // how the admin app records who did it
+    expect(await setFullAccess(db, tester.orgId, { full: true, note: "beta tester", actorUserId: staff })).toBe(true);
+    expect(await setFullAccess(db, "org_missing", { full: true, note: "nobody", actorUserId: staff })).toBe(false);
 
     const billing = (await (await tester.call("GET", "/billing")).json()) as { plan: string; fullAccess: boolean; features: { seats: number } };
     expect(billing).toMatchObject({ plan: "staff", fullAccess: true, features: { seats: 50 } });
     expect((await tester.call("PUT", "/autopilot", autopilot)).status).toBe(200);
-    const granted = (await (await admin.call("GET", "/admin/access")).json()) as { data: { id: string }[] };
-    expect(granted.data.map((g) => g.id)).toContain(tester.orgId);
-    expect((await tester.call("GET", "/admin/access")).status).toBe(403);
+    expect((await listFullAccess(db)).map((g) => g.id)).toContain(tester.orgId);
+    expect((await tester.call("GET", "/admin/access")).status).toBe(404);
 
-    expect((await admin.call("PUT", `/admin/orgs/${tester.orgId}/access`, { full: false, note: "beta over" })).status).toBe(204);
+    expect(await setFullAccess(db, tester.orgId, { full: false, note: "beta over", actorUserId: staff })).toBe(true);
+    expect((await listFullAccess(db)).map((g) => g.id)).not.toContain(tester.orgId);
     expect(((await (await tester.call("GET", "/billing")).json()) as { plan: string }).plan).toBe("free");
     const audit = (await (await tester.call("GET", "/audit")).json()) as { data: { action: string }[] };
     expect(audit.data.map((a) => a.action)).toEqual(expect.arrayContaining(["access.granted", "access.removed"]));

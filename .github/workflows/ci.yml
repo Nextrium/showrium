@@ -42,13 +42,31 @@ jobs:
       - name: Browser tests
         working-directory: apps/web
         run: pnpm e2e
+  # Data can't be lost: migrations may only add, and merged migrations are frozen (scripts/migration-guard.mjs).
+  # Compared with the pull request's base, or with the commit before a push.
+  migration-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - run: node --test scripts/migration-guard.test.mjs
+      - run: node scripts/migration-guard.mjs "$BASE"
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
   # Deploys after checks pass: main -> production (app.showrium.com),
   # develop -> preview (preview.showrium.com, its own Worker, database and secrets).
   # Database migrations run first; they are additive-only (ADR-0002), so the running Worker keeps working.
+  # The Cloudflare key lives in the GitHub environment ("preview" or "production"), which only releases
+  # it to runs from its own branch; production also waits for an approver.
   deploy:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
-    needs: [build, e2e, secret-scan]
+    needs: [build, e2e, secret-scan, migration-guard]
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
     concurrency:
       group: deploy-${{ github.ref_name }}
       cancel-in-progress: false

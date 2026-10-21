@@ -1,6 +1,6 @@
 // Persona, context items, drafts and the compose pipeline. Every function takes orgId and
 // filters by it: tenant isolation lives here, never in the caller.
-import { and, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNull } from "drizzle-orm";
 import {
   brief,
   connection,
@@ -15,6 +15,7 @@ import {
   type Stance,
   type DraftStatus,
   type Platform,
+  type SOURCE_KINDS,
 } from "@nextrium/db";
 import {
   checkVariants,
@@ -35,7 +36,9 @@ import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
 import { recordAudit } from "./orgs.js";
 import type { IngestedItem } from "./ingest.js";
-import { openingOf, recentPosts, repeats } from "./repetition.js";
+import { openingOf, recentPosts, repeatedSentences, repeats } from "./repetition.js";
+import { passionForContext } from "./passions.js";
+import { recordAiUsage } from "./ai-usage.js";
 import { addUsage, CREDITS_PER_EXTRA_POST, CREDITS_PER_EXTRA_RESEARCH, getUsage, limitsFor, seatsFor, type Limits, type Plan } from "./plans.js";
 
 // --- Persona ----------------------------------------------------------------
@@ -65,13 +68,20 @@ export async function addContextItems(
   sourceId: string | null = null,
 ) {
   if (!items.length) return [];
-  const rows = items.map((i) => ({ id: newId("ctx"), orgId, sourceId, kind, title: i.title, body: i.body, url: i.url, externalId: i.externalId }));
+  const rows = items.map((i) => ({ id: newId("ctx"), orgId, sourceId, kind, title: i.title, body: i.body, url: i.url, externalId: i.externalId, publishedAt: i.publishedAt ?? null }));
   // Items already seen from a source (same externalId) are skipped, not duplicated.
-  const added: { id: string; title: string }[] = [];
-  for (const part of chunkRows(rows, 8)) {
-    added.push(...(await db.insert(contextItem).values(part).onConflictDoNothing({ target: [contextItem.orgId, contextItem.externalId] }).returning({ id: contextItem.id, title: contextItem.title })));
+  const added: { id: string; title: string; body: string; publishedAt: Date | null }[] = [];
+  for (const part of chunkRows(rows, 9)) {
+    added.push(...(await db.insert(contextItem).values(part).onConflictDoNothing({ target: [contextItem.orgId, contextItem.externalId] }).returning({ id: contextItem.id, title: contextItem.title, body: contextItem.body, publishedAt: contextItem.publishedAt })));
   }
   return added;
+}
+
+/** Items stored before publish dates were kept get theirs from the next check, so their ideas can fade with age. */
+export async function backfillPublishedAt(db: Db, orgId: string, items: IngestedItem[]) {
+  for (const i of items.filter((x) => x.publishedAt && x.externalId).slice(0, 25)) {
+    await db.update(contextItem).set({ publishedAt: i.publishedAt! }).where(and(eq(contextItem.orgId, orgId), eq(contextItem.externalId, i.externalId!), isNull(contextItem.publishedAt)));
+  }
 }
 
 export async function listContextItems(db: Db, orgId: string, limit = 50) {
@@ -92,8 +102,9 @@ export class SourceLimitError extends Error {
   }
 }
 
-export async function addSource(db: Db, orgId: string, _plan: Plan, kind: "github_repo" | "rss" | "page", key: string) {
-  const existing = await db.select({ id: source.id }).from(source).where(eq(source.orgId, orgId));
+export async function addSource(db: Db, orgId: string, _plan: Plan, kind: (typeof SOURCE_KINDS)[number], key: string) {
+  // Passions have their own sources and allowance; only the person's own sources count here.
+  const existing = await db.select({ id: source.id }).from(source).where(and(eq(source.orgId, orgId), isNull(source.passionId)));
   const { sources: limit } = (await getOrgLimits(db, orgId)).limits;
   if (existing.length >= limit) throw new SourceLimitError(limit);
   const [row] = await db
@@ -104,8 +115,9 @@ export async function addSource(db: Db, orgId: string, _plan: Plan, kind: "githu
   return row ?? null;
 }
 
+/** The person's own sources (a passion's sources are listed with the passion). */
 export async function listSources(db: Db, orgId: string) {
-  return db.select().from(source).where(eq(source.orgId, orgId)).orderBy(desc(source.createdAt));
+  return db.select().from(source).where(and(eq(source.orgId, orgId), isNull(source.passionId))).orderBy(desc(source.createdAt));
 }
 
 export async function getSource(db: Db, orgId: string, id: string) {
@@ -171,7 +183,8 @@ export async function xLongAllowed(db: Db, orgId: string): Promise<boolean> {
 
 /** Lint a post or a thread with the workspace's limits (X Premium raises the X limit). */
 export function lintDraft(platform: Platform, text: string, parts: string[] | null | undefined, xLong: boolean): LintIssue[] {
-  const opts = platform === "x" && xLong && !parts ? { maxLength: X_LONG_MAX } : {};
+  // X Premium: long posts, also as the first post of a thread (e.g. a post with its link as the reply).
+  const opts = platform === "x" && xLong ? { maxLength: X_LONG_MAX } : {};
   return parts ? lintThread(platform, parts, opts) : lintPost(platform, text, opts);
 }
 
@@ -191,6 +204,66 @@ export type ComposeInput = {
   research?: boolean | undefined;
 };
 
+// --- The source link -------------------------------------------------------------------------
+
+/**
+ * Where the source link goes (owner decision 2026-10-21): at the end of the post here (X shows a good
+ * preview, and X posts with a link are always posted by the person); on LinkedIn as the first comment,
+ * because a link in the post hides its image; nowhere else (Instagram captions don't link, video
+ * scripts are spoken).
+ */
+export const LINK_AT_END: Platform[] = ["x", "facebook", "threads", "bluesky", "mastodon"];
+export const LINK_IN_COMMENT: Platform[] = ["linkedin"];
+const POINTER_RE = /\b(comment|comments|below)\b|👇|⬇/i;
+const POINTERS = ["Link in the comments 👇", "The link is in the comments.", "More in the first comment 👇"];
+
+/** The link a post should carry: the item's own page; for a day of GitHub work, the repository's main page. */
+export function sourceLink(ctx: { kind: string; url: string | null }): string | null {
+  if (!ctx.url || !/^https:\/\/[^\s]+$/i.test(ctx.url) || ctx.kind === "request") return null;
+  if (ctx.kind === "github_activity") return ctx.url.replace(/\/commits\/?$/, "");
+  return ctx.url;
+}
+
+/** Spaces and tabs removed from line ends, one line at a time (linear time on any input, unlike a regex). */
+const trimLineEnds = (text: string) => text.split("\n").map((line) => line.trimEnd()).join("\n");
+
+/** The post with its link placed: at the end where links work; on LinkedIn, without the link but with a line pointing to the comment. */
+export function placeLink(platform: Platform, text: string, link: string | null): string {
+  if (!link) return text;
+  if (LINK_IN_COMMENT.includes(platform)) {
+    const without = trimLineEnds(text.split(link).join("")).replace(/\n{3,}/g, "\n\n").trim();
+    return POINTER_RE.test(without) ? without : `${without}\n\n${POINTERS[without.length % POINTERS.length]}`;
+  }
+  if (!LINK_AT_END.includes(platform) || text.includes(link)) return text;
+  return `${text.trimEnd()}\n\n${link}`;
+}
+
+/**
+ * Words that sound as if the author is part of a team they've said they only follow ("we built",
+ * "the tools we build", "our team"). Flagged for the person to check; automation won't approve it.
+ */
+const TEAM_CLAIM_RE = /\bwe(?:'ve|'re|'ll)?\s+(?:(?:can|could|will|just|also|now|have|are|recently|finally)\s+)?(?:built|build|building|created|create|launched|launch|shipped|ship|designed|developed|develop|made|released|release|maintain|wrote)\b|\bour\s+(?:team|repo|repository|codebase|product|tool|tools|project|release|roadmap)\b/i;
+export function soundsLikeTeam(text: string): boolean {
+  return TEAM_CLAIM_RE.test(text);
+}
+
+/**
+ * A passion's disclosure, exactly as the person wrote it (house-style cleanup never touches it, so "#ad"
+ * survives). Added at the end unless the post already contains it.
+ */
+/** The text without the disclosure the writer may have added itself (so the code can put it last, after the link). */
+export function withoutDisclosure(text: string, disclosure: string): string {
+  const d = disclosure.trim();
+  if (!d) return text;
+  const at = text.toLowerCase().lastIndexOf(d.toLowerCase());
+  return at < 0 ? text : trimLineEnds(`${text.slice(0, at)}${text.slice(at + d.length)}`).replace(/\n{3,}/g, "\n\n").trim();
+}
+
+export function withDisclosure(text: string, disclosure: string): string {
+  const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " ").trim();
+  return norm(text).includes(norm(disclosure)) ? text : `${text.trimEnd()}\n\n${disclosure.trim()}`;
+}
+
 export async function compose(db: Db, providers: Provider[], input: ComposeInput, opts: { research?: ResearchProvider[] } = {}) {
   const platforms = [...new Set(input.platforms)];
   const threadFor = input.thread ? platforms.filter((p) => THREAD_PLATFORMS.includes(p)) : [];
@@ -206,7 +279,12 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   const isRequest = ctx.kind === "request";
   const instructions = [isRequest ? ctx.body : "", input.instructions?.trim() ?? ""].filter(Boolean).join("\n\n").slice(0, 6000) || null;
   const material = isRequest ? { title: "", body: "" } : { title: ctx.title, body: ctx.body };
-  const stance: Stance = input.stance ?? "own";
+  // Material from a passion's sources is someone else's work: written as the person's view of it.
+  const passion = isRequest ? null : await passionForContext(db, input.orgId, ctx.id);
+  // "It's ours": the person's own team, written as their own work. Otherwise their view of someone else's.
+  const stance: Stance = input.stance ?? (passion && passion.relation !== "ours" ? "other" : "own");
+  // The source's link (the person can switch it off per passion). Added by the code, never by the writer.
+  const link = (passion ? passion.linkSource : true) ? sourceLink(ctx) : null;
 
   // Quota pre-check: posts left this month plus credits must cover the request.
   const { limits } = await getOrgLimits(db, input.orgId);
@@ -238,6 +316,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
     if (!research.facts.length && !research.criticism.length && !research.support.length) {
       // Nothing reliable found: don't write a post that pretends otherwise. The search still counts (it cost money).
       await chargeResearch(db, input.orgId, limits, `research:${newId("txn")}`);
+      await recordAiUsage(db, [{ orgId: input.orgId, feature: "research", model: research.model, costMicroUsd: researchCost }]);
       throw new ComposeError("research_empty", "The web search found nothing reliable about this. Add the facts you know (with links if you have them), or write without research.");
     }
   }
@@ -246,12 +325,13 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   // Recent posts on these platforms: their openings go to the writer to avoid, and new posts are checked against them.
   const recent = await recentPosts(db, input.orgId, platforms);
   const recentOpenings = [...new Set(recent.map((r) => openingOf(r.text)).filter((o) => o.length >= 12))].slice(0, 8);
+  const recentPhrases = repeatedSentences(recent.map((r) => r.text));
   const xLong = platforms.includes("x") && (await xLongAllowed(db, input.orgId));
   let result;
   try {
     result = await generateStructured(
       providers,
-      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research, recentOpenings }), maxTokens: 8000 },
+      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research, recentOpenings, recentPhrases, passion, link: link ? { length: link.length, atEnd: LINK_AT_END, inComment: LINK_IN_COMMENT } : null }), maxTokens: 8000 },
       ComposeSchema,
       (out) => checkVariants(out, platforms),
     );
@@ -263,17 +343,25 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   // Why a fallback model wrote this (kept in the logs, so a failing provider is noticed).
   if (result.attempts.length) console.warn("compose fell back", { model: result.model, attempts: result.attempts });
   let cost = result.costMicroUsd + researchCost;
-  const variants: { platform: Platform; text: string; parts: string[] | null; issues: LintIssue[] }[] = [];
+  const variants: { platform: Platform; text: string; parts: string[] | null; issues: LintIssue[]; linkComment?: string | null }[] = [];
   // What a post may state: the material, the person's own request, and what research found (with its links).
   const source = [
     ctx.title,
     ctx.body,
     instructions ?? "",
+    ...(passion ? [passion.name, passion.about, passion.disclosure] : []),
+    ...(link ? [link, ctx.url ?? ""] : []),
     ...(research ? [research.summary, ...research.facts.map((f) => `${f.claim} ${f.source}`), ...research.criticism.map((f) => `${f.point} ${f.source}`), ...research.support.map((f) => `${f.point} ${f.source}`)] : []),
   ].join("\n");
+  // "I follow it": words that claim the team's work are flagged (the writer is told not to, but check).
+  const teamIssue = (text: string): LintIssue[] =>
+    passion?.relation === "follow" && soundsLikeTeam(text)
+      ? [{ code: "sounds_like_team", severity: "warn", message: `This sounds as if you're part of ${passion.name}'s team. Reword it as your view, or change how you're connected to it in Passions.` }]
+      : [];
   for (const v of result.data.variants.filter((x) => platforms.includes(x.platform))) {
     // Threads: each part cleaned and checked; one repair attempt for up to 3 parts that are too long.
     const wanted = threadFor.includes(v.platform) ? (v.parts ?? []).map(cleanPost).filter(Boolean) : [];
+    if (wanted.length && passion?.disclosure) wanted[wanted.length - 1] = withDisclosure(wanted[wanted.length - 1]!, passion.disclosure);
     if (wanted.length > 1) {
       const parts = wanted.slice(0, 20);
       let repairs = 0;
@@ -284,17 +372,25 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
         try {
           const fixed = await generateStructured(providers, { system, user: repairUserPrompt(v.platform, parts[i]!, partIssues.filter((x) => x.severity === "error").map((x) => x.message).join(" ")), maxTokens: 1000 }, RepairSchema);
           cost += fixed.costMicroUsd;
-          const t = cleanPost(fixed.data.text);
+          const t = i === parts.length - 1 && passion?.disclosure ? withDisclosure(cleanPost(fixed.data.text), passion.disclosure) : cleanPost(fixed.data.text);
           if (!hasErrors(lintPost(v.platform, t))) parts[i] = t;
         } catch {
           // The issue stays visible on that part.
         }
       }
+      // The link goes at the end of the last part (and it's never a part of its own).
+      if (link && LINK_AT_END.includes(v.platform)) parts[parts.length - 1] = placeLink(v.platform, parts[parts.length - 1]!, link);
       const text = joinParts(parts);
-      variants.push({ platform: v.platform, text, parts, issues: [...lintThread(v.platform, parts), ...checkFacts(text, source)] });
+      variants.push({ platform: v.platform, text, parts, issues: [...lintDraft(v.platform, text, parts, xLong), ...checkFacts(text, source), ...teamIssue(text)] });
       continue;
     }
-    let text = cleanPost(v.text);
+    // Link placed first (LinkedIn: a line pointing to the comment), then the disclosure at the very end.
+    const finish = (raw: string) => {
+      const cleaned = cleanPost(raw);
+      const placed = placeLink(v.platform, link && passion?.disclosure ? withoutDisclosure(cleaned, passion.disclosure) : cleaned, link);
+      return passion?.disclosure ? withDisclosure(placed, passion.disclosure) : placed;
+    };
+    let text = finish(v.text);
     let issues = lintDraft(v.platform, text, null, xLong);
     // One repair attempt for hard errors (too long, placeholders); otherwise keep and show the issue.
     if (hasErrors(issues)) {
@@ -305,7 +401,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
           RepairSchema,
         );
         cost += fixed.costMicroUsd;
-        const fixedText = cleanPost(fixed.data.text);
+        const fixedText = finish(fixed.data.text);
         const fixedIssues = lintDraft(v.platform, fixedText, null, xLong);
         if (!hasErrors(fixedIssues)) {
           text = fixedText;
@@ -315,7 +411,8 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
         // Keep the original; the error stays visible to the user.
       }
     }
-    variants.push({ platform: v.platform, text, parts: null, issues: [...issues, ...checkFacts(text, source)] });
+    // LinkedIn: the link is posted as the first comment, after the post.
+    variants.push({ platform: v.platform, text, parts: null, issues: [...issues, ...checkFacts(text, source), ...teamIssue(text)], linkComment: link && LINK_IN_COMMENT.includes(v.platform) ? link : null });
   }
 
   // Hints research couldn't confirm: the person checks they're written as their own knowledge.
@@ -327,7 +424,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   const rows = variants.map((v) => {
     const same = repeats(v.text, recent.filter((r) => r.platform === v.platform).map((r) => r.text));
     const repeatIssue: LintIssue[] = same.repeated ? [{ code: "too_similar", severity: "warn", message: `${same.reason} Rewrite it before posting.` }] : [];
-    return { id: newId("drf"), orgId: input.orgId, briefId, platform: v.platform, text: v.text, parts: v.parts, issues: [...v.issues, ...researchIssue, ...repeatIssue] };
+    return { id: newId("drf"), orgId: input.orgId, briefId, platform: v.platform, text: v.text, parts: v.parts, linkComment: v.linkComment ?? null, issues: [...v.issues, ...researchIssue, ...repeatIssue] };
   });
   await db.batch([
     db.insert(brief).values({
@@ -346,6 +443,11 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
     db.insert(draft).values(rows),
   ]);
 
+  // What it cost us: writing (with any fixes), and the web research.
+  await recordAiUsage(db, [
+    { orgId: input.orgId, feature: "write", model: result.model, costMicroUsd: cost - researchCost, refId: briefId },
+    ...(research ? [{ orgId: input.orgId, feature: "research" as const, model: research.model, costMicroUsd: researchCost, refId: briefId }] : []),
+  ]);
   // Charge usage after success. A concurrent request can push slightly past the limit;
   // the extra is billed in credits when available (cost per post is ~$0.00003).
   const { overage } = await addUsage(db, input.orgId, "postsGenerated", rows.length, limits.posts);
@@ -377,10 +479,12 @@ async function chargeResearch(db: Db, orgId: string, limits: Limits, idempotency
 
 // --- Drafts -----------------------------------------------------------------
 
-export async function listDrafts(db: Db, orgId: string, filter: { status?: DraftStatus; briefId?: string } = {}) {
+export async function listDrafts(db: Db, orgId: string, filter: { status?: DraftStatus; briefId?: string; needsYou?: boolean } = {}) {
   const conditions = [eq(draft.orgId, orgId)];
   if (filter.status) conditions.push(eq(draft.status, filter.status));
   if (filter.briefId) conditions.push(eq(draft.briefId, filter.briefId));
+  // Time-sensitive posts automation couldn't fit in time, still worth posting.
+  if (filter.needsYou) conditions.push(gt(draft.urgentUntil, new Date()), inArray(draft.status, ["draft", "approved"]));
   return db.select().from(draft).where(and(...conditions)).orderBy(desc(draft.createdAt)).limit(200);
 }
 
@@ -443,7 +547,7 @@ export class DraftStateError extends Error {
   }
 }
 
-export async function updateDraft(db: Db, orgId: string, id: string, patch: { text?: string; parts?: string[] | null; status?: DraftStatus }) {
+export async function updateDraft(db: Db, orgId: string, id: string, patch: { text?: string; parts?: string[] | null; status?: DraftStatus; needsYou?: false }) {
   const current = await getDraft(db, orgId, id);
   if (!current) return null;
   if (current.status === "published" || current.status === "publishing") throw new DraftStateError("Published posts can't be edited here.");
@@ -468,8 +572,14 @@ export async function updateDraft(db: Db, orgId: string, id: string, patch: { te
       throw new DraftStateError("Fix the errors on this post before approving it.");
     }
     set.status = patch.status;
-    if (patch.status !== "scheduled") set.scheduledAt = null;
+    if (patch.status !== "scheduled") {
+      set.scheduledAt = null;
+      set.autoScheduled = false;
+    }
+    if (patch.status === "discarded" || patch.status === "published") set.urgentUntil = null;
   }
+  // "Skip": the person saw it and doesn't want to post it urgently (the post itself stays).
+  if (patch.needsYou === false) set.urgentUntil = null;
   // Guard against concurrent edits changing a post that just started publishing.
   await db
     .update(draft)

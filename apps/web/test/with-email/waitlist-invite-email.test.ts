@@ -1,7 +1,10 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDb } from "@nextrium/db";
+import { inviteFromWaitlist, listWaitlist, sendEmail, waitlistInviteEmail } from "@nextrium/core";
 
 // Email is on in this project; Brevo calls are intercepted here: nothing leaves the test.
+// Staff send these from the admin app (apps/admin); here, the same core functions it uses.
 const BASE = "http://localhost:5173";
 let n = 0;
 const ip = () => `10.45.${Math.floor(++n / 250)}.${n % 250}`;
@@ -24,27 +27,22 @@ afterEach(() => vi.restoreAllMocks());
 
 const post = (path: string, body: unknown, cookie = "") =>
   SELF.fetch(`${BASE}${path}`, { method: "POST", headers: { "Content-Type": "application/json", Origin: BASE, "CF-Connecting-IP": ip(), ...(cookie ? { Cookie: cookie } : {}) }, body: JSON.stringify(body) });
-const cookieOf = (res: Response) => res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
-
-async function adminSession() {
-  await post("/api/auth/sign-up/email", { email: "admin@example.com", name: "Admin", password: "correct-horse-battery" });
-  await env.DB.prepare("UPDATE user SET email_verified = 1 WHERE email = 'admin@example.com'").run();
-  return cookieOf(await post("/api/auth/sign-in/email", { email: "admin@example.com", password: "correct-horse-battery" }));
-}
 
 describe("waitlist invite email", () => {
-  it("emails a personal link (not shown to staff), about their own Free workspace", async () => {
-    const admin = await adminSession();
+  it("emails a personal link, about their own Free workspace", async () => {
     await post("/api/v1/waitlist", { email: "kemi@wl-mail.test" });
-    const list = (await (await SELF.fetch(`${BASE}/api/v1/admin/waitlist`, { headers: { Cookie: admin, "CF-Connecting-IP": ip() } })).json()) as { data: { id: string; email: string }[] };
-    const entry = list.data.find((e) => e.email === "kemi@wl-mail.test")!;
-    const res = await post("/api/v1/admin/waitlist/invite", { ids: [entry.id] }, admin);
-    expect(res.status).toBe(200);
-    expect(((await res.json()) as { data: unknown[] }).data).toEqual([{ id: entry.id, email: "kemi@wl-mail.test", sent: true, link: null }]);
+    const db = createDb(env.DB);
+    const entry = (await listWaitlist(db)).find((e) => e.email === "kemi@wl-mail.test")!;
+    const [inv] = await inviteFromWaitlist(db, { entryIds: [entry.id], adminUserId: null });
+    expect(inv).toMatchObject({ entryId: entry.id, email: "kemi@wl-mail.test" });
+    const link = `${BASE}/invite?token=${encodeURIComponent(inv!.token)}`;
+    expect(await sendEmail(env as unknown as { BREVO_API_KEY: string }, waitlistInviteEmail(inv!.email, link))).toEqual({ sent: true });
     const mail = outbox.find((m) => m.to === "kemi@wl-mail.test")!;
     expect(mail.subject).toBe("Your Showrium invite is here");
     expect(mail.text).toMatch(/your own Showrium account and workspace on the Free plan/);
     expect(mail.text).toMatch(new RegExp(`${BASE}/invite\\?token=inv_`));
     expect(mail.html).not.toMatch(/<script/i);
+    // The link in the email works on the web app's invite page.
+    expect((await post("/api/v1/invites/accept", { token: inv!.token })).status).toBe(200);
   });
 });

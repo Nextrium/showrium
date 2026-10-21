@@ -199,15 +199,20 @@ describe("publishing", () => {
     expect(net.calls.filter((c) => c.endsWith("createRecord"))).toHaveLength(1);
   });
 
-  it("charges credits for X API posts (25 with a link), and refunds when X fails", async () => {
+  it("charges credits for X API posts, never sends X posts with a link (owner decision 2026-10-19), and refunds when X fails", async () => {
     const u = await readyDraft("pub3@example.com", "x", "Read the notes https://github.com/a/b");
     const d = await deps(fakeNet());
     const connId = await connect(d, u, "x");
     await env.DB.prepare("UPDATE draft SET connection_id = ? WHERE id = ?").bind(connId, u.draftId).run();
     await postCreditTxn(d.db, { orgId: u.orgId, kind: "purchase", amount: 100, idempotencyKey: "topup", description: "Pack" });
     const before = await getBalance(d.db, u.orgId);
+    // With a link: refused before anything is charged ("Post it myself" instead).
+    expect(((await publishDraft(d, { orgId: u.orgId, draftId: u.draftId }).catch((e: unknown) => e)) as PublishError).code).toBe("needs_tap_to_post");
+    expect(await getBalance(d.db, u.orgId)).toBe(before);
+    // Without a link: 2 credits beyond the plan's X posts.
+    await env.DB.prepare("UPDATE draft SET text = 'Read the notes.' WHERE id = ?").bind(u.draftId).run();
     await publishDraft(d, { orgId: u.orgId, draftId: u.draftId });
-    expect(before - (await getBalance(d.db, u.orgId))).toBe(25);
+    expect(before - (await getBalance(d.db, u.orgId))).toBe(2);
 
     const v = await readyDraft("pub4@example.com", "x", "No link here.");
     const failing = await deps(fakeNet({ fail: 503 }));
@@ -222,7 +227,7 @@ describe("publishing", () => {
   });
 
   it("refuses X posts through the API without enough credits", async () => {
-    const u = await readyDraft("pub5@example.com", "x", "See https://a.io");
+    const u = await readyDraft("pub5@example.com", "x", "See the notes.");
     const d = await deps(fakeNet());
     const connId = await connect(d, u, "x");
     await env.DB.prepare("UPDATE draft SET connection_id = ? WHERE id = ?").bind(connId, u.draftId).run();

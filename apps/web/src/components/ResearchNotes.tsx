@@ -1,6 +1,7 @@
 // What a post was written from, beyond the material: the person's own instructions, whether it's
 // their view on someone else's work, and what web research found (links to check before approving).
 import type { DraftSource } from "../pages/workspace/shared";
+import { Info } from "../ui/kit";
 
 export function ResearchNotes({ source }: { source: DraftSource | null | undefined }) {
   if (!source) return null;
@@ -34,7 +35,10 @@ export function ResearchNotes({ source }: { source: DraftSource | null | undefin
             </div>
           )}
           <div className="flex flex-col gap-1">
-            <span className="font-medium text-ink">Sources found on the web ({research.sources.length})</span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-medium text-ink">Sources found on the web ({research.sources.length})</span>
+              <Info label="About these sources">Only facts from these links, and your own hints, were used.</Info>
+            </div>
             <ul className="m-0 flex list-none flex-col gap-1 p-0">
               {research.sources.map((s) => (
                 <li key={s.url} className="min-w-0">
@@ -44,7 +48,7 @@ export function ResearchNotes({ source }: { source: DraftSource | null | undefin
                 </li>
               ))}
             </ul>
-            <span className="text-[12.5px] text-muted">Check these before approving. Only facts from these links (and your own hints) were used.</span>
+            <span className="text-[12.5px] text-muted">Check these before approving.</span>
           </div>
         </>
       )}

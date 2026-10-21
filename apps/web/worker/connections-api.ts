@@ -18,6 +18,9 @@ import {
   resolveMembership,
   saveConnection,
   scheduleDraft,
+  findScheduleClashes,
+  getAutopilot,
+  moveAutoScheduled,
   setDraftConnection,
   UnsafeUrlError,
   type PublishDeps,
@@ -294,16 +297,51 @@ connectionsApi.openapi(
     method: "post",
     path: "/drafts/{id}/schedule",
     tags: ["Publishing"],
-    request: { params: z.object({ id: z.string() }), body: { required: true, content: { "application/json": { schema: z.object({ connectionId: z.string(), at: z.iso.datetime({ offset: true }) }) } } } },
-    responses: { 200: json(z.object({ scheduled: z.literal(true) })), 402: json(Err, "Needs credits"), 409: json(Err, "Not ready"), 502: json(Err, "Platform error"), ...errs },
+    request: {
+      params: z.object({ id: z.string() }),
+      body: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: z.object({
+              connectionId: z.string(),
+              at: z.iso.datetime({ offset: true }),
+              /** When another post on the account is near this time: "move" automatically scheduled ones to their next free slot, or "keep" both. */
+              onClash: z.enum(["move", "keep"]).optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: json(z.object({ scheduled: z.literal(true), moved: z.array(z.object({ id: z.string(), at: z.string().nullable() })) })),
+      402: json(Err, "Needs credits"),
+      409: json(Err, "Not ready, or another post is near this time (schedule_clash_auto: one was scheduled by automation and can be moved; schedule_clash: your own)"),
+      502: json(Err, "Platform error"),
+      ...errs,
+    },
   }),
   async (c) => {
     const p = c.get("principal");
     if (!can(p.role, "publish")) return c.json(apiError("forbidden", "Your role can't schedule posts in this workspace."), 403);
     const body = c.req.valid("json");
+    const db = c.get("db");
+    const id = c.req.valid("param").id;
+    const at = new Date(body.at);
     try {
-      await scheduleDraft(c.get("db"), p.orgId, c.req.valid("param").id, { at: new Date(body.at), connectionId: body.connectionId });
-      return c.json({ scheduled: true as const }, 200);
+      // Another post on this account within 4 hours (or in the same time of day): ask first.
+      const clashes = await findScheduleClashes(db, p.orgId, body.connectionId, at, id);
+      if (clashes.length && !body.onClash) {
+        const { timezone } = await getAutopilot(db, p.orgId);
+        const fmt = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+        const list = clashes.map((x) => `${fmt.format(x.at)}${x.auto ? " (picked by automation)" : ""}`).join(", ");
+        const auto = clashes.some((x) => x.auto);
+        return c.json(apiError(auto ? "schedule_clash_auto" : "schedule_clash", `${clashes.length === 1 ? "Another post on this account is" : `${clashes.length} posts on this account are`} scheduled near this time: ${list}.`), 409);
+      }
+      await scheduleDraft(db, p.orgId, id, { at, connectionId: body.connectionId });
+      // Your post keeps its time; automatically scheduled ones move to their next free slot.
+      const moved = body.onClash === "move" ? await moveAutoScheduled(db, p.orgId, clashes.filter((x) => x.auto).map((x) => x.id)) : [];
+      return c.json({ scheduled: true as const, moved: moved.map((m) => ({ id: m.id, at: m.at?.toISOString() ?? null })) }, 200);
     } catch (error) {
       if (error instanceof PublishError) return c.json(apiError(error.code, error.message), publishErrorStatus(error));
       throw error;

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { api, authClient, orgHeaders } from "../lib";
-import { Alert, Button, Panel } from "../ui/kit";
+import { Alert, Button, Info, Panel } from "../ui/kit";
 
 /** Settings → Your data: download a copy, or delete the account (privacy rights). */
 export function YourData({ canExport, email }: { canExport: boolean; email: string }) {
@@ -43,8 +43,7 @@ export function YourData({ canExport, email }: { canExport: boolean; email: stri
   };
 
   return (
-    <Panel title="Your data" id="your-data">
-      <p className="m-0 text-sm text-muted">Your posts, material and settings belong to you. Download a copy any time, or delete your account.</p>
+    <Panel title={<span className="flex items-center gap-1.5">Your data <Info label="About your data">Your posts, material and settings belong to you. Download a copy any time, or delete your account.</Info></span>} id="your-data">
       {canExport && (
         <Button variant="secondary" className="self-start" disabled={Boolean(busy)} onClick={download}>
           {busy === "export" ? "Preparing…" : "Download this workspace's data"}

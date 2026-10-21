@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { api, formatDate, navigate, timeAgo, useApi } from "../../lib";
 import { MODES, usePlatforms, type Draft, type Persona, type Platform } from "./shared";
 import { PLATFORM_LABELS, SOURCE_KINDS, THREAD_PLATFORMS } from "./Drafts";
-import { Alert, Button, Chip, Empty, Icon, LinkButton, Loading, PageHeader, Switch } from "../../ui/kit";
+import { Alert, Button, Chip, Empty, Icon, Info, LinkButton, Loading, PageHeader, Switch } from "../../ui/kit";
 import { DetailPanel, ListItem, SectionLabel, Split, StatStrip, Tag, useQueryParams } from "../../ui/split";
 
 type IdeaStatus = "new" | "drafted" | "dismissed";
-type Idea = { id: string; reason: string; score: number; status: IdeaStatus; title: string; kind: string; body: string; url: string | null; createdAt: string };
-type Counts = Record<IdeaStatus, number>;
+type Idea = { id: string; reason: string; score: number; status: IdeaStatus; dismissedReason?: "person" | "low_score" | null; title: string; kind: string; body: string; url: string | null; publishedAt: string | null; createdAt: string };
+type Counts = Record<IdeaStatus, number> & { hidden?: number };
 
 const TABS = [
   { id: "new", label: "New", tone: "accent" },
@@ -76,7 +76,7 @@ function IdeaDetail({ id, persona }: { id: string; persona: Persona | null }) {
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <h2 className="font-display text-[22px] font-semibold leading-tight [overflow-wrap:anywhere]">{idea.title || idea.reason}</h2>
-          <span className="font-mono text-[12.5px] text-muted">{kind.label} · found {formatDate(idea.createdAt)}</span>
+          <span className="font-mono text-[12.5px] text-muted">{kind.label} · {idea.publishedAt ? `published ${formatDate(idea.publishedAt)}` : `found ${formatDate(idea.createdAt)}`}</span>
         </div>
         <Tag tone={fitTone(idea.score)}>Fit {idea.score}%</Tag>
       </div>
@@ -140,6 +140,12 @@ function IdeaDetail({ id, persona }: { id: string; persona: Persona | null }) {
         </section>
       )}
 
+      {idea.status === "dismissed" && idea.dismissedReason === "low_score" && (
+        <p className="m-0 flex items-center gap-1.5 text-sm text-muted">
+          Set aside: score under 55
+          <Info label="About ideas set aside">A passion's ideas scoring under 55 are set aside, so only the ones worth posting are written. Bring one back to write from it; it won't be set aside again.</Info>
+        </p>
+      )}
       {idea.status === "dismissed" && (
         <Button variant="secondary" className="self-start" disabled={Boolean(busy)} onClick={() => act("restore", () => api(`/ideas/${idea.id}/restore`, { method: "POST" }))}>
           Bring it back
@@ -181,7 +187,9 @@ export function IdeasPage() {
   const selected = params.get("id");
   const wide = useWide();
   const { data: personaData } = useApi<{ persona: Persona | null }>("/persona");
-  const { data, error } = useApi<{ data: Idea[]; counts: Counts }>(`/ideas?status=${status}`);
+  const [showAll, setShowAll] = useState(false);
+  const { data, error } = useApi<{ data: Idea[]; counts: Counts }>(`/ideas?status=${status}${showAll && status === "new" ? "&all=true" : ""}`);
+  const hidden = status === "new" && !showAll ? (data?.counts.hidden ?? 0) : 0;
   const [query, setQuery] = useState("");
 
   const all = data?.data ?? [];
@@ -206,7 +214,7 @@ export function IdeasPage() {
         <Empty
           icon="ideas"
           title={all.length ? "Nothing matches" : status === "new" ? "No new ideas yet" : status === "drafted" ? "Nothing written yet" : "Nothing set aside"}
-          body={all.length ? "Try another word." : status === "new" ? "Connect a source, upload a photo, or answer today’s question on Home, and ideas appear here." : "Ideas move here as you use them."}
+          body={all.length ? "Try another word." : status === "new" ? "Add a source to get ideas." : "Ideas move here as you use them."}
           action={!all.length && status === "new" ? <LinkButton to="/app/sources" size="sm">Add a source</LinkButton> : undefined}
         />
       )}
@@ -223,18 +231,34 @@ export function IdeasPage() {
               <span className="flex items-center gap-1.5 text-[12.5px] text-muted">
                 <Icon name={kind.icon} size={13} className="shrink-0" />
                 <span>{kind.label}</span>
-                <span className="ml-auto font-mono">{timeAgo(i.createdAt)}</span>
+                <span className="ml-auto font-mono">{timeAgo(i.publishedAt ?? i.createdAt)}</span>
               </span>
             </ListItem>
           );
         })}
       </ul>
+      {hidden > 0 && (
+        <div className="flex items-center gap-1.5 border-t border-line p-3 text-[13px] text-muted">
+          <button type="button" className="cursor-pointer bg-transparent p-0 text-[13px] font-medium text-accent-ink underline-offset-2 hover:underline" onClick={() => setShowAll(true)}>
+            Show {hidden} more
+          </button>
+          <Info label="About hidden ideas">Weak or old ideas are tucked away: under 40% fit, or older than 14 days for news (30 for your own work). Automation only writes from fresh ideas with 60% fit or more.</Info>
+        </div>
+      )}
     </div>
   );
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Ideas" subtitle="Post-worthy moments from your sources, uploads and answers. Pick one to see it and write from it." actions={<LinkButton to="/app/sources" variant="secondary" icon="sources">Sources</LinkButton>} />
+      <PageHeader
+        title="Ideas"
+        actions={
+          <>
+            <Info label="About ideas">Post-worthy moments from your sources, uploads and answers to today’s question. Pick one to see it and write from it.</Info>
+            <LinkButton to="/app/sources" variant="secondary" icon="sources">Sources</LinkButton>
+          </>
+        }
+      />
       <div className="max-w-xl">
         <StatStrip
           label="Idea status"
@@ -253,7 +277,7 @@ export function IdeasPage() {
             <IdeaDetail key={detailId} id={detailId} persona={personaData?.persona ?? null} />
           ) : (
             <DetailPanel>
-              <Empty icon="ideas" title="Pick an idea" body="See the material behind it and turn it into posts in one step." />
+              <Empty icon="ideas" title="Pick an idea" body="Its material shows here." />
             </DetailPanel>
           )
         }

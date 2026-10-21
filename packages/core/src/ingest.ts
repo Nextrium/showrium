@@ -9,6 +9,14 @@ export interface IngestedItem {
   title: string;
   body: string;
   url: string | null;
+  /** When the source published it, if it says (feeds, GitHub). */
+  publishedAt?: Date | null;
+}
+
+/** A feed or Atom date, if it's a real one and not in the future (a day of clock skew allowed). */
+export function parseDate(raw: string, now = Date.now()): Date | null {
+  const t = Date.parse(raw.trim());
+  return Number.isFinite(t) && t > 0 && t < now + 86_400_000 ? new Date(Math.min(t, now)) : null;
 }
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
@@ -111,7 +119,8 @@ export function parseFeed(xml: string): IngestedItem[] {
     );
     const guid = pick(block, "guid") || pick(block, "id") || link || title;
     if (!title && !body) continue;
-    items.push({ externalId: guid ? `rss:${guid.slice(0, 300)}` : null, title: title.slice(0, 300), body: clip(body || title), url: link || null });
+    const publishedAt = parseDate(pick(block, "pubDate") || pick(block, "published") || pick(block, "dc:date") || pick(block, "updated"));
+    items.push({ externalId: guid ? `rss:${guid.slice(0, 300)}` : null, title: title.slice(0, 300), body: clip(body || title), url: link || null, publishedAt });
   }
   return items;
 }
@@ -120,6 +129,49 @@ export async function ingestFeed(url: string, doFetch?: FetchLike): Promise<Inge
   const feed = await safeFetchText(url, { fetch: doFetch, accept: "application/rss+xml,application/atom+xml,application/xml,text/xml", allowedTypes: /xml|rss|atom|text\/plain/ });
   return parseFeed(feed.text);
 }
+
+// --- Social sites: only through their official API or feed (owner decision 2026-10-21) --------------
+
+/**
+ * Sites whose terms forbid reading their pages automatically (scraping). X accounts are read through
+ * X's API instead; Bluesky through its official RSS; the others aren't read at all.
+ */
+const NO_SCRAPING: { name: string; hosts: RegExp }[] = [
+  { name: "X", hosts: /(^|\.)(x\.com|twitter\.com)$/i },
+  { name: "LinkedIn", hosts: /(^|\.)(linkedin\.com|lnkd\.in)$/i },
+  { name: "Instagram", hosts: /(^|\.)instagram\.com$/i },
+  { name: "Facebook", hosts: /(^|\.)(facebook\.com|fb\.com|fb\.watch)$/i },
+  { name: "TikTok", hosts: /(^|\.)tiktok\.com$/i },
+  { name: "Threads", hosts: /(^|\.)threads\.(net|com)$/i },
+];
+
+export type SocialSource = { kind: "x_account"; handle: string } | { kind: "rss"; key: string } | { blocked: string };
+
+const RESERVED_X_PATHS = new Set(["home", "explore", "search", "i", "intent", "share", "settings", "notifications", "messages", "hashtag", "login", "signup", "tos", "privacy"]);
+
+/** A social site's address: what Showrium may read from it (or why not). Null for any other site. */
+export function socialSource(raw: string): SocialSource | null {
+  let url: URL;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw.trim()) ? raw.trim() : `https://${raw.trim()}`);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  const path = url.pathname.split("/").filter(Boolean);
+  if (/(^|\.)bsky\.app$/.test(host) && path[0] === "profile" && path[1]) return { kind: "rss", key: `https://bsky.app/profile/${path[1]}/rss` };
+  const site = NO_SCRAPING.find((s) => s.hosts.test(host));
+  if (!site) return null;
+  if (site.name === "X") {
+    const handle = path[0]?.replace(/^@/, "") ?? "";
+    if (/^[A-Za-z0-9_]{1,15}$/.test(handle) && !RESERVED_X_PATHS.has(handle.toLowerCase())) return { kind: "x_account", handle: handle.toLowerCase() };
+    return { blocked: "X" };
+  }
+  return { blocked: site.name };
+}
+
+export const blockedSocialMessage = (name: string) =>
+  `Showrium can't read ${name} pages: ${name}'s terms don't allow it.${name === "X" ? " Paste an X account's address (x.com/name) to follow it through X's API." : " Use the site's newsletter, blog or RSS feed instead, if it has one."}`;
 
 // --- Any blog or site: find its feed, or watch the page itself -------------------------------------
 
@@ -134,8 +186,16 @@ export type ResolvedSource = { kind: "rss" | "page"; key: string; how: "feed" | 
  * otherwise the page itself is watched for new article links.
  */
 export async function resolveBlogSource(raw: string, doFetch?: FetchLike): Promise<ResolvedSource> {
+  const social = socialSource(raw);
+  if (social && "blocked" in social) throw new Error(blockedSocialMessage(social.blocked));
+  if (social?.kind === "x_account") throw new Error(blockedSocialMessage("X"));
+  if (social?.kind === "rss") return { kind: "rss", key: social.key, how: "feed" };
   // Big server-rendered pages can be slow to finish streaming; give the page itself more time.
   const page = await safeFetchText(raw, { fetch: doFetch, timeoutMs: 15_000, maxBytes: 2_000_000 });
+  // An address that redirects to one of those sites is refused too.
+  const landed = socialSource(page.url);
+  if (landed && "blocked" in landed) throw new Error(blockedSocialMessage(landed.blocked));
+  if (landed?.kind === "x_account") throw new Error(blockedSocialMessage("X"));
   if (FEED_TYPES.test(page.contentType) && parseFeed(page.text).length) return { kind: "rss", key: page.url, how: "feed" };
   if (!/html/.test(page.contentType)) throw new Error("That address isn't a web page or a feed.");
   const advertised = [...page.text.matchAll(/<link\b[^<>]*>/gi)]
@@ -199,6 +259,8 @@ export function extractArticleLinks(html: string, pageUrl: string): string[] {
  * only the newest few are read and everything else is remembered, so old posts don't flood ideas.
  */
 export async function ingestWatchedPage(pageUrl: string, seen: string[], opts: { fetch?: FetchLike | undefined; perCheck?: number } = {}) {
+  const social = socialSource(pageUrl);
+  if (social && !("kind" in social && social.kind === "rss")) throw new Error(blockedSocialMessage("blocked" in social ? social.blocked : "X"));
   const page = await safeFetchText(pageUrl, { fetch: opts.fetch, allowedTypes: /html/, timeoutMs: 15_000, maxBytes: 2_000_000 });
   const links = extractArticleLinks(page.text, page.url);
   const fresh = links.filter((l) => !seen.includes(l)).slice(0, opts.perCheck ?? 3);
@@ -270,7 +332,7 @@ export async function ingestGithubActivity(repo: string, opts: { fetch?: FetchLi
   const [releases, commits] = await Promise.all([githubFeed(`${repo}/releases.atom`, opts.fetch), githubFeed(`${repo}/commits.atom`, opts.fetch)]);
   const releaseItems: IngestedItem[] = releases.slice(0, 5).map((r) => {
     const tagName = r.link?.split("/").pop() ?? r.title;
-    return { externalId: `gh-release:${repo}:${tagName}`.slice(0, 300), title: `${repo} ${r.title}`.slice(0, 300), body: clip(`Release ${r.title} of ${repo}.\n\n${r.content}`.trim()), url: r.link };
+    return { externalId: `gh-release:${repo}:${tagName}`.slice(0, 300), title: `${repo} ${r.title}`.slice(0, 300), body: clip(`Release ${r.title} of ${repo}.\n\n${r.content}`.trim()), url: r.link, publishedAt: parseDate(r.updated) };
   });
 
   const today = (opts.now ?? new Date()).toISOString().slice(0, 10);
@@ -296,6 +358,7 @@ export async function ingestGithubActivity(repo: string, opts: { fetch?: FetchLi
           .join("\n")}`,
       ),
       url: `https://github.com/${repo}/commits`,
+      publishedAt: new Date(`${day}T23:59:59Z`),
     };
   });
   return { releases: releaseItems, activity: activityItems };

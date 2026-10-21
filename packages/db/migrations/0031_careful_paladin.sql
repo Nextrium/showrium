@@ -1,0 +1,1 @@
+ALTER TABLE `draft` ADD `link_comment` text;

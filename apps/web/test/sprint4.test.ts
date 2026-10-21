@@ -133,6 +133,8 @@ describe("threads: publishing", () => {
     // Free plan: no X allowance, 2 credits per part. 3 charged, 1 part failed → 1 refunded.
     expect(before - (await getBalance(d.db, u.orgId))).toBe(4);
     expect((await getUsage(d.db, u.orgId)).xApiPosts).toBe(2);
+    // X charged us for the 2 parts that went out, not the one that failed.
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM platform_usage WHERE org_id = ? AND kind = 'post'").bind(u.orgId).first<{ n: number }>())!.n).toBe(2);
     expect(fake.sent.map((s) => s.body.reply)).toEqual([undefined, { in_reply_to_tweet_id: "t1" }]);
   });
 

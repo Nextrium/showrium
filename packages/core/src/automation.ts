@@ -3,14 +3,17 @@
 // windows to post in, in the person's timezone (v2, 2026-10-17). Posting times are learned from
 // engagement (timing.ts); repeats are flagged (repetition.ts). Every function filters by orgId.
 // Replies, likes, follows and messages are never automated.
-import { and, asc, eq, gte, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import {
   autopilot,
   CONTENT_MODES,
   connection,
   contextItem,
   draft,
+  brief,
   idea,
+  passion,
+  source,
   persona,
   type AutomationRule,
   type AutopilotLevel,
@@ -23,9 +26,12 @@ import type { Provider } from "@nextrium/llm";
 import { composeIdea } from "./autonomy.js";
 import { getOrgLimits, getOrgPlan } from "./content.js";
 import { recordAudit } from "./orgs.js";
+import { sourceIsLive, utcDay } from "./passions.js";
+import { isPaused } from "./admin-reports.js";
+import { ageOf, effectiveScore, goodUntil, isApprovable, isUrgent, isWritable, URGENT_EXTRA_PER_DAY, type IdeaOrigin } from "./idea-score.js";
 import { getUsage, PLAN_FEATURES, type Plan } from "./plans.js";
-import { API_PUBLISH_PLATFORMS, scheduleDraft } from "./publishing.js";
-import { isTimezone, learnWindows, localDay, localParts, pickSlot, PLATFORM_DAILY_MAX, takenTimes, WINDOW_NAMES, type PostingWindow } from "./timing.js";
+import { API_PUBLISH_PLATFORMS, scheduleDraft, xNeedsTapToPost } from "./publishing.js";
+import { isTimezone, learnWindows, localDay, localParts, pickSlot, PLATFORM_DAILY_MAX, takenTimes, windowOf, WINDOW_NAMES, type PostingWindow } from "./timing.js";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -33,8 +39,11 @@ const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 /** The style balance: each style's share, 0 to 10. */
 const MAX_WEIGHT = 10;
 
-/** Never approved automatically: X's automation rules. (Scheduling a post you approved is fine.) */
-export const AUTOPILOT_EXCLUDED: Platform[] = ["x"];
+/**
+ * Platforms automation never approves. Empty since 2026-10-18: X's automation rules allow automated
+ * original posts with the user's express consent (asked once, see saveAutopilot) and an instant opt-out.
+ */
+export const AUTOPILOT_EXCLUDED: Platform[] = [];
 /** Only material the person produced may be approved without them: not ideas shaped by strangers' comments. */
 const TRUSTED_KINDS = ["github_release", "github_activity", "rss_item", "photo", "document", "prompt", "voice", "manual"];
 
@@ -47,6 +56,10 @@ export type Automation = {
   timezone: string;
   windows: PostingWindow[];
   perDay: Partial<Record<Platform, number>>;
+  /** Email the owners when automation approves and schedules posts. Kept as saved when left out. */
+  notifyEmail?: boolean | undefined;
+  /** The person agrees that automation may approve X posts (asked once; switching X off clears it). */
+  xConsent?: boolean | undefined;
 };
 /** The earlier single-level settings; still accepted by the API. */
 export type LegacyAutopilot = { level: AutopilotLevel; mode: ContentMode; platforms: Platform[]; postsPerWeek: number; publishHourUtc: number };
@@ -54,7 +67,7 @@ export type LegacyAutopilot = { level: AutopilotLevel; mode: ContentMode; platfo
 export class AutopilotError extends Error {
   constructor(
     message: string,
-    readonly code: "invalid" | "plan_required" = "invalid",
+    readonly code: "invalid" | "plan_required" | "x_consent_required" = "invalid",
   ) {
     super(message);
     this.name = "AutopilotError";
@@ -82,7 +95,8 @@ export function fromLegacy(l: LegacyAutopilot): Omit<Automation, "findIdeas" | "
   const full = l.level === "autopilot";
   const write = l.level !== "coach";
   // The old full autopilot never posted to X, so X keeps only "write drafts".
-  const rules = Object.fromEntries(l.platforms.map((p) => [p, { write, schedule: full && !AUTOPILOT_EXCLUDED.includes(p), approve: full && !AUTOPILOT_EXCLUDED.includes(p) }]));
+  // The old single level never covered X (its approval now needs explicit consent): X stays hands-on.
+  const rules = Object.fromEntries(l.platforms.map((p) => [p, { write, schedule: full && p !== "x", approve: full && p !== "x" }]));
   return { rules, mix: { [l.mode]: l.postsPerWeek }, publishHourUtc: l.publishHourUtc };
 }
 
@@ -119,6 +133,8 @@ export async function getAutopilot(db: Db, orgId: string) {
       timezone: "UTC",
       windows: [...WINDOW_NAMES],
       perDay: {} as Partial<Record<Platform, number>>,
+      notifyEmail: true,
+      xConsentAt: null as Date | null,
       level: "coach" as AutopilotLevel,
       mode: "build_in_public" as ContentMode,
       platforms: [] as Platform[],
@@ -140,6 +156,8 @@ export async function getAutopilot(db: Db, orgId: string) {
     timezone: isTimezone(row.timezone) ? row.timezone : "UTC",
     windows: (row.windows.length ? row.windows : WINDOW_NAMES) as PostingWindow[],
     perDay: perDayFor(rules, row.perDay),
+    notifyEmail: row.notifyEmail,
+    xConsentAt: row.xConsentAt,
     level: levelOf(rules),
     mode: row.mode,
     platforms: (Object.keys(rules) as Platform[]).filter((p) => rules[p]?.write),
@@ -163,7 +181,12 @@ export async function saveAutopilot(db: Db, orgId: string, input: Automation) {
     if (outside.length) throw new AutopilotError(`Add ${outside.join(", ")} to your platforms in Brand voice first.`);
   }
   if (used.some((x) => AUTOPILOT_EXCLUDED.includes(x) && rules[x]!.approve)) {
-    throw new AutopilotError("X doesn't allow automated posting without your approval. You can still schedule X posts you approve.");
+    throw new AutopilotError("Automation can't approve posts on this platform. You can still schedule posts you approve.");
+  }
+  // X: automated posting needs the person's express consent (X's automation rules), asked once.
+  const [current] = await db.select({ xConsentAt: autopilot.xConsentAt, notifyEmail: autopilot.notifyEmail }).from(autopilot).where(eq(autopilot.orgId, orgId));
+  if (rules.x?.approve && !current?.xConsentAt && !input.xConsent) {
+    throw new AutopilotError("Agree first: automation will approve X posts and schedule them on your X account (never replies, mentions or messages). You'll be told before each goes out, and switching this off stops it at once.", "x_consent_required");
   }
   if (p?.safe && used.some((x) => rules[x]!.approve)) {
     throw new AutopilotError("Monetization-safe mode needs your approval on every post, so \"approve for me\" is off. Use \"schedule when approved\" instead.");
@@ -206,6 +229,9 @@ export async function saveAutopilot(db: Db, orgId: string, input: Automation) {
     timezone: input.timezone,
     windows,
     perDay,
+    notifyEmail: input.notifyEmail ?? current?.notifyEmail ?? true,
+    // Consent is kept while X approval stays on, and cleared when it's switched off (asked again next time).
+    xConsentAt: rules.x?.approve ? (current?.xConsentAt ?? new Date()) : null,
     level: levelOf(rules),
     // Legacy columns, kept in step for older clients.
     mode: top,
@@ -229,9 +255,31 @@ export function nextSlot(now: Date, hourUtc: number, days: number[] = ALL_DAYS):
 }
 
 /** The next posting time on an account: in a free window, learned from engagement (see timing.ts). */
-async function nextWindowSlot(db: Db, orgId: string, conn: { id: string; platform: Platform }, now: Date, s: Awaited<ReturnType<typeof getAutopilot>>, rand?: () => number) {
+async function nextWindowSlot(db: Db, orgId: string, conn: { id: string; platform: Platform }, now: Date, s: Awaited<ReturnType<typeof getAutopilot>>, notAfter?: Date | null) {
   const [taken, stats] = await Promise.all([takenTimes(db, orgId, conn.id, now), learnWindows(db, orgId, conn.platform, s.timezone, now)]);
-  return pickSlot({ now, tz: s.timezone, days: s.days, windows: s.windows, perDay: s.perDay[conn.platform] ?? 1, taken, stats, ...(rand ? { rand } : {}) });
+  return pickSlot({ now, tz: s.timezone, days: s.days, windows: s.windows, perDay: s.perDay[conn.platform] ?? 1, taken, stats, notAfter: notAfter ?? null });
+}
+
+/** Each post's "good until" (from the material it was written from), or none for posts without material. */
+async function deadlinesFor(db: Db, orgId: string, draftIds: string[]): Promise<Map<string, Date>> {
+  if (!draftIds.length) return new Map();
+  const rows = await db
+    .select({ id: draft.id, kind: contextItem.kind, publishedAt: contextItem.publishedAt, foundAt: contextItem.createdAt, passionId: source.passionId, relation: passion.relation })
+    .from(draft)
+    .innerJoin(brief, eq(brief.id, draft.briefId))
+    .innerJoin(contextItem, eq(contextItem.id, brief.contextItemId))
+    .leftJoin(source, eq(source.id, contextItem.sourceId))
+    .leftJoin(passion, eq(passion.id, source.passionId))
+    .where(and(eq(draft.orgId, orgId), inArray(draft.id, draftIds.slice(0, 50))));
+  return new Map(rows.map((r) => [r.id, goodUntil(r.kind, r.passionId && r.relation !== "ours" ? "outside" : "own", r.publishedAt, r.foundAt)]));
+}
+
+/** "Needs you": a post worth posting soon that automation couldn't fit in time. Only for deadlines within a week. */
+const NEEDS_YOU_HORIZON = 7 * DAY;
+async function markNeedsYou(db: Db, orgId: string, draftId: string, until: Date | undefined, now: Date) {
+  if (!until || until.getTime() <= now.getTime() || until.getTime() > now.getTime() + NEEDS_YOU_HORIZON) return false;
+  await db.update(draft).set({ urgentUntil: until, updatedAt: new Date() }).where(and(eq(draft.orgId, orgId), eq(draft.id, draftId)));
+  return true;
 }
 
 /**
@@ -240,30 +288,137 @@ async function nextWindowSlot(db: Db, orgId: string, conn: { id: string; platfor
  * Posts that can't be scheduled (no connection, not an API platform, errors) stay approved.
  */
 export async function autoScheduleApproved(db: Db, orgId: string, draftIds: string[], now = new Date()) {
-  if (!draftIds.length) return 0;
+  return (await autoScheduleApprovedIds(db, orgId, draftIds, now)).length;
+}
+
+/** autoScheduleApproved, returning the ids that were scheduled (for notifications). */
+export async function autoScheduleApprovedIds(db: Db, orgId: string, draftIds: string[], now = new Date()): Promise<string[]> {
+  if (!draftIds.length) return [];
   const s = await getAutopilot(db, orgId);
   const plan = await getOrgPlan(db, orgId);
-  if (!allowedSwitches(plan).schedule) return 0;
+  if (!allowedSwitches(plan).schedule) return [];
   const rows = await db
     .select({ id: draft.id, platform: draft.platform, status: draft.status, issues: draft.issues, connectionId: draft.connectionId })
     .from(draft)
     .where(and(eq(draft.orgId, orgId), inArray(draft.id, draftIds.slice(0, 50)), eq(draft.status, "approved")));
   const conns = await db.select({ id: connection.id, platform: connection.platform }).from(connection).where(and(eq(connection.orgId, orgId), eq(connection.status, "active")));
-  let scheduled = 0;
+  const deadlines = await deadlinesFor(db, orgId, rows.map((r) => r.id));
+  const scheduled: string[] = [];
   for (const d of rows) {
     if (!s.rules[d.platform]?.schedule || hasErrors(d.issues)) continue;
     const conn = conns.find((c) => c.id === d.connectionId) ?? conns.find((c) => c.platform === d.platform && API_PUBLISH_PLATFORMS.includes(c.platform));
     if (!conn || !API_PUBLISH_PLATFORMS.includes(conn.platform)) continue;
     try {
-      const at = await nextWindowSlot(db, orgId, conn, now, s);
-      if (!at) continue; // nothing free in the next two weeks: stays approved
-      await scheduleDraft(db, orgId, d.id, { at, connectionId: conn.id });
-      scheduled++;
+      // Never later than the post's "good until": news isn't posted three days late.
+      const at = await nextWindowSlot(db, orgId, conn, now, s, deadlines.get(d.id));
+      if (!at) {
+        // No time before it goes stale: stays approved, and the person is told it needs them.
+        await markNeedsYou(db, orgId, d.id, deadlines.get(d.id), now);
+        continue;
+      }
+      await scheduleDraft(db, orgId, d.id, { at, connectionId: conn.id, auto: true });
+      scheduled.push(d.id);
     } catch {
       // Left approved; the person can schedule it by hand.
     }
   }
   return scheduled;
+}
+
+// --- A failed post frees its slot ---------------------------------------------------------------
+
+/**
+ * Scheduled posts that failed leave their time free (failed posts never hold a slot). The same
+ * accounts' later automatically scheduled posts move up into free time, one at a time and in order,
+ * so each move frees the next one's way: never before 2 hours from now (time to cancel), never past a
+ * post's "good until", within the platform's posts a day. Posts the person scheduled never move. Returns what moved.
+ */
+export async function fillFreedSlots(db: Db, orgId: string, failedDraftIds: string[], now = new Date()): Promise<{ id: string; platform: Platform; from: Date; to: Date }[]> {
+  if (!failedDraftIds.length) return [];
+  const failed = await db
+    .select({ connectionId: draft.connectionId })
+    .from(draft)
+    .where(and(eq(draft.orgId, orgId), inArray(draft.id, failedDraftIds.slice(0, 50)), eq(draft.status, "failed")));
+  const connectionIds = [...new Set(failed.map((f) => f.connectionId).filter((c): c is string => Boolean(c)))];
+  if (!connectionIds.length) return [];
+  const s = await getAutopilot(db, orgId);
+  const moved: { id: string; platform: Platform; from: Date; to: Date }[] = [];
+  for (const connectionId of connectionIds) {
+    const later = await db
+      .select({ id: draft.id, platform: draft.platform, scheduledAt: draft.scheduledAt })
+      .from(draft)
+      .where(and(eq(draft.orgId, orgId), eq(draft.connectionId, connectionId), eq(draft.status, "scheduled"), eq(draft.autoScheduled, true), gte(draft.scheduledAt, now)))
+      .orderBy(asc(draft.scheduledAt))
+      .limit(10);
+    if (!later.length) continue;
+    const deadlines = await deadlinesFor(db, orgId, later.map((d) => d.id));
+    const stats = await learnWindows(db, orgId, later[0]!.platform, s.timezone, now);
+    for (const d of later) {
+      if (!d.scheduledAt) continue;
+      const taken = await takenTimes(db, orgId, connectionId, now, d.id);
+      const at = pickSlot({ now, tz: s.timezone, days: s.days, windows: s.windows, perDay: s.perDay[d.platform] ?? 1, taken, stats, notAfter: deadlines.get(d.id) ?? null });
+      // Only a real move up (at least an hour earlier); otherwise it keeps its time.
+      if (!at || at.getTime() > d.scheduledAt.getTime() - HOUR) continue;
+      const [row] = await db
+        .update(draft)
+        .set({ scheduledAt: at, updatedAt: new Date() })
+        .where(and(eq(draft.orgId, orgId), eq(draft.id, d.id), eq(draft.status, "scheduled"), eq(draft.autoScheduled, true)))
+        .returning({ id: draft.id });
+      if (row) moved.push({ id: d.id, platform: d.platform, from: d.scheduledAt, to: at });
+    }
+  }
+  if (moved.length) await recordAudit(db, { orgId, actorUserId: null, action: "autopilot.moved_up", target: moved[0]!.id, meta: { moved: moved.map((m) => ({ id: m.id, from: m.from.toISOString(), to: m.to.toISOString() })) } });
+  return moved;
+}
+
+// --- Clashes: a post you schedule yourself near another one on the same account ------------------
+
+const CLASH_GAP_MS = 4 * HOUR;
+
+/**
+ * Other posts scheduled on this account within 4 hours of `at`, or in the same time of day on the
+ * same local day. Automation already keeps clear of everything; this is for times people pick.
+ */
+export async function findScheduleClashes(db: Db, orgId: string, connectionId: string, at: Date, excludeDraftId?: string) {
+  const s = await getAutopilot(db, orgId);
+  const rows = await db
+    .select({ id: draft.id, scheduledAt: draft.scheduledAt, autoScheduled: draft.autoScheduled, autoApproved: draft.autoApproved, text: draft.text })
+    .from(draft)
+    .where(and(eq(draft.orgId, orgId), eq(draft.connectionId, connectionId), eq(draft.status, "scheduled"), gte(draft.scheduledAt, new Date(at.getTime() - DAY)), lt(draft.scheduledAt, new Date(at.getTime() + DAY))));
+  const local = localParts(at, s.timezone);
+  const win = windowOf(local.hour);
+  return rows
+    .filter((r): r is typeof r & { scheduledAt: Date } => Boolean(r.scheduledAt) && r.id !== excludeDraftId)
+    .filter((r) => {
+      if (Math.abs(r.scheduledAt.getTime() - at.getTime()) < CLASH_GAP_MS) return true;
+      const p = localParts(r.scheduledAt, s.timezone);
+      return Boolean(win) && p.year === local.year && p.month === local.month && p.day === local.day && windowOf(p.hour) === win;
+    })
+    .map((r) => ({ id: r.id, at: r.scheduledAt, auto: r.autoScheduled, text: r.text.slice(0, 140) }));
+}
+
+/**
+ * Moves automatically scheduled posts to their next free slot (your own post keeps its time). A post
+ * with no free slot in the next two weeks goes back to approved, so nothing is posted unexpectedly.
+ */
+export async function moveAutoScheduled(db: Db, orgId: string, draftIds: string[], now = new Date()) {
+  const s = await getAutopilot(db, orgId);
+  const moved: { id: string; at: Date | null }[] = [];
+  for (const id of draftIds.slice(0, 20)) {
+    const [d] = await db
+      .update(draft)
+      .set({ status: "approved", scheduledAt: null, updatedAt: new Date() })
+      .where(and(eq(draft.orgId, orgId), eq(draft.id, id), eq(draft.status, "scheduled"), eq(draft.autoScheduled, true)))
+      .returning({ id: draft.id, platform: draft.platform, connectionId: draft.connectionId });
+    if (!d?.connectionId) continue;
+    const until = (await deadlinesFor(db, orgId, [d.id])).get(d.id);
+    const at = await nextWindowSlot(db, orgId, { id: d.connectionId, platform: d.platform }, now, s, until);
+    if (!at) await markNeedsYou(db, orgId, d.id, until, now);
+    if (at) await scheduleDraft(db, orgId, d.id, { at, connectionId: d.connectionId, auto: true });
+    else await db.update(draft).set({ autoScheduled: false }).where(eq(draft.id, d.id));
+    moved.push({ id: d.id, at });
+  }
+  return moved;
 }
 
 // --- The weekly run -------------------------------------------------------------------------------
@@ -296,8 +451,73 @@ const SUITS: Record<ContentMode, string[]> = {
 
 /** Called with each new brief (the worker uses it to find the posts' image). */
 export type AfterCompose = (orgId: string, briefId: string) => Promise<unknown>;
+/** Called after automation approved and scheduled posts in a run (to tell the person before they go out). */
+export type OnAutoScheduled = (orgId: string, draftIds: string[]) => Promise<unknown>;
 
-export async function runAutopilotFor(db: Db, providers: Provider[], orgId: string, now = new Date(), afterCompose?: AfterCompose) {
+/** X posts left this month for automation: the plan's allowance minus what's used and what's already scheduled by automation. */
+async function xAllowanceLeft(db: Db, orgId: string) {
+  const [{ limits }, usage, [pending]] = await Promise.all([
+    getOrgLimits(db, orgId),
+    getUsage(db, orgId),
+    db.select({ n: sql<number>`count(*)` }).from(draft).where(and(eq(draft.orgId, orgId), eq(draft.platform, "x"), eq(draft.autoApproved, true), eq(draft.status, "scheduled"))),
+  ]);
+  return Math.max(0, limits.xApiPosts - usage.xApiPosts - Number(pending?.n ?? 0));
+}
+
+/** Good, fresh ideas automation may write from (score 60+; outside news at most 3 days old, own material 14), best first. */
+async function candidateIdeas(db: Db, orgId: string, now: Date) {
+  const rows = await db
+    .select({ id: idea.id, kind: contextItem.kind, title: contextItem.title, base: idea.score, createdAt: idea.createdAt, publishedAt: contextItem.publishedAt, externalId: contextItem.externalId, passionId: source.passionId, relation: passion.relation })
+    .from(idea)
+    .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
+    .leftJoin(source, eq(source.id, contextItem.sourceId))
+    .leftJoin(passion, eq(passion.id, source.passionId))
+    // Ideas from a passion that's off or outside its dates wait until it's live again.
+    .where(and(eq(idea.orgId, orgId), eq(idea.status, "new"), gte(idea.createdAt, new Date(now.getTime() - 30 * DAY)), sourceIsLive(source.passionId, utcDay(now))))
+    .orderBy(desc(idea.score), desc(idea.createdAt))
+    .limit(100);
+  return rows
+    .map((c) => {
+      const age = ageOf(c.publishedAt, c.createdAt, now);
+      const origin: IdeaOrigin = c.passionId && c.relation !== "ours" ? "outside" : "own";
+      return { ...c, age, origin, score: effectiveScore(c.base, age) };
+    })
+    .filter((c) => isWritable(c.score, c.age, c.origin))
+    .sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Urgent news when the day's automated posts are already used: writes it (at most 2 a day, within
+ * the plan's allowance) and marks it "needs you" so the person posts it now or picks a time today.
+ * Never approved or scheduled by automation, and never beyond the daily numbers on the accounts.
+ */
+async function urgentExtra(
+  db: Db,
+  providers: Provider[],
+  orgId: string,
+  now: Date,
+  s: Awaited<ReturnType<typeof getAutopilot>>,
+  writing: Platform[],
+  log: { at: number; mode: ContentMode; platforms?: Platform[]; briefId?: string; urgent?: boolean }[],
+  afterCompose?: AfterCompose,
+) {
+  const today = localDay(now, s.timezone);
+  if (log.filter((l) => l.urgent && localDay(new Date(l.at), s.timezone) === today).length >= URGENT_EXTRA_PER_DAY) return null;
+  if ((await getUsage(db, orgId)).postsGenerated + writing.length > (await getOrgLimits(db, orgId)).limits.posts) return null;
+  const best = (await candidateIdeas(db, orgId, now)).find((c) => isUrgent({ score: c.score, age: c.age, origin: c.origin, kind: c.kind, title: c.title }));
+  if (!best) return null;
+  const mode = pickMode(s.mix, log, now) ?? "teach";
+  const out = await composeIdea(db, providers, { orgId, ideaId: best.id, mode, platforms: writing });
+  await afterCompose?.(orgId, out.briefId).catch(() => undefined);
+  const until = goodUntil(best.kind, best.origin, best.publishedAt, best.createdAt);
+  for (const d of out.drafts) await markNeedsYou(db, orgId, d.id, until, now);
+  await db.update(autopilot).set({ weekLog: [...log, { at: now.getTime(), mode, platforms: writing, briefId: out.briefId, urgent: true }] }).where(eq(autopilot.orgId, orgId));
+  await recordAudit(db, { orgId, actorUserId: null, action: "autopilot.urgent", target: best.id, meta: { mode, drafts: out.drafts.length, until: until.toISOString() } });
+  return { ideaId: best.id, mode, drafts: out.drafts.length, approved: 0, scheduled: 0, urgent: true as const };
+}
+
+export async function runAutopilotFor(db: Db, providers: Provider[], orgId: string, now = new Date(), afterCompose?: AfterCompose, onScheduled?: OnAutoScheduled) {
+  if (await isPaused(db, orgId)) return { skipped: "paused" as const };
   const s = await getAutopilot(db, orgId);
   const plan = await getOrgPlan(db, orgId);
   const allowed = allowedSwitches(plan); // a downgraded plan caps what runs, without changing the saved settings
@@ -321,18 +541,18 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
   const platforms = dayOff
     ? []
     : writing.filter((x) => writtenToday(x) < (s.perDay[x] ?? 1) && waiting.filter((w) => w.platform === x).length < 2 * (s.perDay[x] ?? 1));
-  if (!platforms.length) return { skipped: dayOff ? ("day_off" as const) : ("daily_limit" as const) };
+  if (!platforms.length) {
+    if (dayOff) return { skipped: "day_off" as const };
+    // The day's automated posts are used, but urgent news shouldn't wait days: write it for the person.
+    const urgent = await urgentExtra(db, providers, orgId, now, s, writing, log, afterCompose);
+    return urgent ?? { skipped: "daily_limit" as const };
+  }
   // Automation spends only the plan's monthly allowance, never credits.
   if ((await getUsage(db, orgId)).postsGenerated + platforms.length > (await getOrgLimits(db, orgId)).limits.posts) return { skipped: "plan_allowance" as const };
   const mode = pickMode(s.mix, log, now);
   if (!mode) return { skipped: "no_styles" as const };
 
-  const candidates = await db
-    .select({ id: idea.id, kind: contextItem.kind, score: idea.score, externalId: contextItem.externalId })
-    .from(idea)
-    .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
-    .where(and(eq(idea.orgId, orgId), eq(idea.status, "new"), gte(idea.createdAt, new Date(now.getTime() - 30 * DAY))))
-    .limit(50);
+  const candidates = await candidateIdeas(db, orgId, now);
   if (!candidates.length) return { skipped: "no_ideas" as const };
   // Best score, with a nudge towards material that suits this week's style.
   const best = candidates.map((c) => ({ ...c, rank: c.score + (SUITS[mode].includes(c.kind) ? 15 : 0) })).sort((a, b) => b.rank - a.rank)[0]!;
@@ -343,16 +563,29 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
 
   // "Approve for me": only clean posts (no errors or warnings), from the person's own material
   // (never ideas shaped by audience comments), never X, and never in monetization-safe mode.
-  const trusted = TRUSTED_KINDS.includes(best.kind) && !best.externalId?.startsWith("insight:");
+  // Only strong, fresh ideas (75+, at most 48 hours old), never ones shaped by strangers' comments.
+  // Passions too (owner decision 2026-10-18): approved posts are always scheduled, with a notification to cancel.
+  const trusted = TRUSTED_KINDS.includes(best.kind) && !best.externalId?.startsWith("insight:") && isApprovable(best.score, best.age);
   const approved: string[] = [];
   if (allowed.approve && !p.safe && trusted) {
     for (const d of out.drafts) {
       if (!s.rules[d.platform]?.approve || d.issues.length || AUTOPILOT_EXCLUDED.includes(d.platform)) continue;
-      await db.update(draft).set({ status: "approved", updatedAt: new Date() }).where(and(eq(draft.orgId, orgId), eq(draft.id, d.id), eq(draft.status, "draft")));
+      // X: only with consent, and only within the plan's monthly X posts (automation never spends credits).
+      if (d.platform === "x" && (!s.xConsentAt || !(await xAllowanceLeft(db, orgId)))) continue;
+      // An X post with a link is always posted by the person (it never goes through the API).
+      if (xNeedsTapToPost(d.platform, d.text)) continue;
+      await db.update(draft).set({ status: "approved", autoApproved: true, updatedAt: new Date() }).where(and(eq(draft.orgId, orgId), eq(draft.id, d.id), eq(draft.status, "draft")));
       approved.push(d.id);
     }
   }
-  const scheduled = await autoScheduleApproved(db, orgId, approved, now);
+  const scheduledIds = await autoScheduleApprovedIds(db, orgId, approved, now);
+  if (scheduledIds.length) await onScheduled?.(orgId, scheduledIds).catch((error) => console.warn("autopilot notification failed", error instanceof Error ? error.message : error));
+  // Written from urgent news but not on its way out (waiting for review, or no time left): it needs the person.
+  if (isUrgent({ score: best.score, age: best.age, origin: best.origin, kind: best.kind, title: best.title })) {
+    const until = goodUntil(best.kind, best.origin, best.publishedAt, best.createdAt);
+    for (const d of out.drafts) if (!scheduledIds.includes(d.id)) await markNeedsYou(db, orgId, d.id, until, now);
+  }
+  const scheduled = scheduledIds.length;
   await recordAudit(db, { orgId, actorUserId: null, action: "autopilot.run", target: best.id, meta: { mode, drafts: out.drafts.length, approved: approved.length, scheduled } });
   return { ideaId: best.id, mode, drafts: out.drafts.length, approved: approved.length, scheduled };
 }
@@ -361,13 +594,20 @@ export async function runAutopilotFor(db: Db, providers: Provider[], orgId: stri
  * Cron: runs workspaces with writing switched on, oldest first, at most every 3 hours each (enough
  * for 5 posts a day; each run writes only for platforms still under their daily number).
  */
-export async function runAutopilot(db: Db, providers: Provider[], now = new Date(), limit = 1, afterCompose?: AfterCompose) {
+export async function runAutopilot(db: Db, providers: Provider[], now = new Date(), limit = 1, afterCompose?: AfterCompose, onScheduled?: OnAutoScheduled) {
   if (!providers.length) return { ran: 0 };
   const cutoff = new Date(now.getTime() - 3 * HOUR);
   const due = await db
     .select({ orgId: autopilot.orgId })
     .from(autopilot)
-    .where(and(ne(autopilot.level, "coach"), or(isNull(autopilot.lastRunAt), lt(autopilot.lastRunAt, cutoff))))
+    .where(
+      and(
+        ne(autopilot.level, "coach"),
+        or(isNull(autopilot.lastRunAt), lt(autopilot.lastRunAt, cutoff)),
+        // Paused by Showrium staff: automation stops until resumed.
+        sql`NOT EXISTS (SELECT 1 FROM org o WHERE o.id = ${autopilot.orgId} AND o.paused_at IS NOT NULL)`,
+      ),
+    )
     .orderBy(asc(autopilot.lastRunAt))
     .limit(limit);
   let ran = 0;
@@ -380,7 +620,7 @@ export async function runAutopilot(db: Db, providers: Provider[], now = new Date
       .returning({ orgId: autopilot.orgId });
     if (!claimed) continue;
     try {
-      await runAutopilotFor(db, providers, orgId, now, afterCompose);
+      await runAutopilotFor(db, providers, orgId, now, afterCompose, onScheduled);
       ran++;
     } catch (error) {
       console.warn("autopilot run failed", { orgId, error: error instanceof Error ? error.message : String(error) });

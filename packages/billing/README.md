@@ -1,5 +1,3 @@
 # packages/billing
 
-Plans, double-entry credit ledger, Paddle/Lemon Squeezy/Paystack adapters.
-
-Design docs are internal (Nextrium/internal-docs, `projects/showrium/`).
+Reserved; there is no code here yet. Plans, credits and the Paystack and Lemon Squeezy integrations live in `packages/core` (billing.ts, credits.ts, plans.ts).

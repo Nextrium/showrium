@@ -1,5 +1,5 @@
 # apps/renderer
 
-Remotion video compositions and Satori image/carousel templates.
+Reserved for later work; there is no code here yet.
 
-Design docs are internal (Nextrium/internal-docs, `projects/showrium/`).
+Planned: remotion video compositions and Satori image/carousel templates.

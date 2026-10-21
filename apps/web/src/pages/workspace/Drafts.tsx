@@ -3,8 +3,9 @@ import { ResearchNotes } from "../../components/ResearchNotes";
 import { api, formatDate, setUnsaved, timeAgo, useApi } from "../../lib";
 import { PublishControls } from "./Publish";
 import { IssueList, MODES, usePlatforms, type Draft } from "./shared";
-import { Alert, Button, Empty, Icon, LinkButton, Loading, PageHeader, type IconName } from "../../ui/kit";
+import { Alert, Button, Empty, Icon, Info, LinkButton, Loading, PageHeader, type IconName } from "../../ui/kit";
 import { PostImagePanel } from "../../components/PostImage";
+import { NeedsYouBanner } from "../../components/NeedsYou";
 import { DetailPanel, ListItem, SectionLabel, Split, StatStrip, Tag, useQueryParams } from "../../ui/split";
 
 export const PLATFORM_LABELS: Record<string, string> = {
@@ -113,7 +114,7 @@ function PostEditor({ draft, onChange }: { draft: Draft; onChange?: (d: Draft) =
     return () => setUnsaved(`post:${draft.id}`, false);
   }, [dirty, draft.id]);
 
-  const patch = async (body: { text?: string; parts?: string[]; status?: string }) => {
+  const patch = async (body: { text?: string; parts?: string[]; status?: string; needsYou?: false }) => {
     setBusy(true);
     setError(null);
     try {
@@ -218,6 +219,24 @@ function PostEditor({ draft, onChange }: { draft: Draft; onChange?: (d: Draft) =
         </div>
       )}
       <IssueList issues={draft.issues} />
+      {draft.urgentUntil && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-warn/50 bg-warn-soft p-3" role="status">
+          <span className="min-w-0 flex-1 text-[13.5px] text-ink">
+            Time-sensitive: best posted before {new Date(draft.urgentUntil).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}.{" "}
+            <Info label="About time-sensitive posts">Post it now, post it yourself, or pick a time today. Skip it if it no longer matters.</Info>
+          </span>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => patch({ needsYou: false })}>Skip</Button>
+        </div>
+      )}
+      {draft.status === "scheduled" && draft.scheduledAt && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-sunken p-3">
+          <span className="min-w-0 flex-1 text-[13.5px] text-ink-2">
+            Goes out {new Date(draft.scheduledAt).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+            {draft.autoApproved ? " · approved by automation" : draft.autoScheduled ? " · time picked by automation" : ""}
+          </span>
+          <Button size="sm" variant="secondary" disabled={busy} onClick={() => patch({ status: "approved" })}>Cancel schedule</Button>
+        </div>
+      )}
       {error && <Alert>{error}</Alert>}
       {!locked && (
         <div className="flex flex-wrap gap-2">
@@ -330,9 +349,10 @@ function PostDetail({ id, onSelect }: { id: string; onSelect: (id: string) => vo
 export function DraftsPage() {
   const [params, setParams] = useQueryParams();
   const status = params.get("status") ?? "draft";
+  const needs = params.get("needs") === "1";
   const selected = params.get("id");
   const wide = useWide();
-  const { data, error } = useApi<{ data: Draft[] }>(`/drafts?status=${status}`);
+  const { data, error } = useApi<{ data: Draft[] }>(needs ? "/drafts?needsYou=true" : `/drafts?status=${status}`);
   const { data: counts } = useApi<{ statuses: Record<string, number> }>("/analytics");
   const [query, setQuery] = useState("");
   const [platform, setPlatform] = useState("");
@@ -340,7 +360,7 @@ export function DraftsPage() {
   const [busy, setBusy] = useState(false);
 
   // Opened from a link to one post (?id=): show the tab that post is in.
-  const { data: linked } = useApi<{ draft: Draft }>(selected && !params.get("status") ? `/drafts/${selected}` : null, { live: false });
+  const { data: linked } = useApi<{ draft: Draft }>(selected && !params.get("status") && !needs ? `/drafts/${selected}` : null, { live: false });
   useEffect(() => {
     if (linked && linked.draft.status !== status) setParams({ status: linked.draft.status });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -352,7 +372,9 @@ export function DraftsPage() {
     return all.filter((d) => (!platform || d.platform === platform) && (!q || d.text.toLowerCase().includes(q) || sourceTitle(d).toLowerCase().includes(q)));
   }, [all, query, platform]);
   const usedPlatforms = [...new Set(all.map((d) => d.platform))];
-  const ready = status === "draft" ? all.filter((d) => d.issues.length === 0) : [];
+  // The "needs you" list mixes drafts and approved posts: no tab or bulk approve for it.
+  const draftsTab = status === "draft" && !needs;
+  const ready = draftsTab ? all.filter((d) => d.issues.length === 0) : [];
   const detailId = selected ?? (wide ? shown[0]?.id ?? null : null);
 
   // Posts written from the same material sit together under one heading.
@@ -379,7 +401,7 @@ export function DraftsPage() {
 
   const list = (
     <div className="flex flex-col gap-3">
-      {status === "draft" && all.length > 0 && (
+      {draftsTab && all.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 rounded-[18px] border border-line bg-panel px-4 py-3">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-ok-soft text-ok"><Icon name="check" size={16} strokeWidth={2.2} /></span>
           <div className="flex min-w-0 flex-1 flex-col">
@@ -413,7 +435,7 @@ export function DraftsPage() {
           <Empty
             icon="posts"
             title={all.length ? "Nothing matches" : `No ${STATUSES.find((s) => s.id === status)?.label.toLowerCase() ?? ""} posts`}
-            body={all.length ? "Try another word or platform." : status === "draft" ? "Write something new, or turn an idea into posts." : "Posts move here as you approve, schedule and publish them."}
+            body={all.length ? "Try another word or platform." : status === "draft" ? "Write one, or start from an idea." : "Nothing here yet."}
             action={!all.length && status === "draft" ? <LinkButton to="/app/new" size="sm">New post</LinkButton> : undefined}
           />
         )}
@@ -430,6 +452,7 @@ export function DraftsPage() {
                     <span className="font-semibold text-ink">{PLATFORM_LABELS[d.platform] ?? d.platform}</span>
                     <span className="flex flex-wrap justify-end gap-1.5">
                       {d.issues.length > 0 && <Tag tone={d.issues.some((i) => i.severity === "error") ? "danger" : "warn"}>{d.issues.length} to check</Tag>}
+                      {d.status === "scheduled" && (d.autoApproved || d.autoScheduled) && <Tag tone="info">Auto</Tag>}
                       <Tag tone={statusTone(d.status)}>{d.status}</Tag>
                     </span>
                   </span>
@@ -446,10 +469,26 @@ export function DraftsPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Posts" subtitle="Everything you’ve written: waiting, scheduled, or out in the world." actions={<LinkButton to="/app/new" variant="inverse" icon="plus">New post</LinkButton>} />
+      <PageHeader
+        title="Posts"
+        actions={
+          <>
+            <Info label="About posts">Everything you’ve written: waiting, scheduled, or published.</Info>
+            <LinkButton to="/app/new" variant="inverse" icon="plus">New post</LinkButton>
+          </>
+        }
+      />
+      {needs ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-[18px] border border-warn/50 bg-warn-soft px-4 py-3">
+          <span className="min-w-0 flex-1 text-[14.5px] text-ink">Time-sensitive posts that need you</span>
+          <LinkButton to="/app/posts" size="sm" variant="secondary">All posts</LinkButton>
+        </div>
+      ) : (
+        <NeedsYouBanner />
+      )}
       <StatStrip
         label="Post status"
-        active={status}
+        active={needs ? "" : status}
         onPick={(id) => setParams({ status: id, id: null })}
         items={STATUSES.map((s) => ({ id: s.id, label: s.label, value: counts?.statuses[s.id] ?? 0, tone: s.tone }))}
       />
@@ -463,7 +502,7 @@ export function DraftsPage() {
             <PostDetail key={detailId} id={detailId} onSelect={(id) => setParams({ id }, true)} />
           ) : (
             <DetailPanel>
-              <Empty icon="posts" title="Pick a post" body="Its details, where it came from and what to do next appear here." />
+              <Empty icon="posts" title="Pick a post" body="Its details show here." />
             </DetailPanel>
           )
         }

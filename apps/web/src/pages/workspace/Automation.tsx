@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, timeAgo, useApi, useEditable } from "../../lib";
 import { Alert, Badge, Chip, Icon, Info, LinkButton, Loading, PageHeader, Panel, SaveBar, Switch } from "../../ui/kit";
 import { MODES, usePlatforms, type Persona, type Platform } from "./shared";
+import { Link } from "../../ui/Link";
 
 type Rule = { write: boolean; schedule: boolean; approve: boolean };
 type Mode = (typeof MODES)[number]["id"];
@@ -15,6 +16,7 @@ type Settings = {
   timezone: string;
   windows: Window[];
   perDay: Partial<Record<Platform, number>>;
+  notifyEmail: boolean;
 };
 type Billing = { plan: string; fullAccess: boolean; features: { autopilot: "coach" | "batch" | "autopilot" } };
 type Connection = { platform: string; status: string };
@@ -64,7 +66,7 @@ function Stepper({ value, min, max, label, onChange }: { value: number; min: num
 }
 
 export function AutomationPage() {
-  const settings = useApi<Settings & { lastRunAt: string | null }>("/autopilot");
+  const settings = useApi<Settings & { lastRunAt: string | null; xConsentAt: string | null }>("/autopilot");
   const { data: billing } = useApi<Billing>("/billing");
   const { data: personaData } = useApi<{ persona: Persona | null }>("/persona");
   const { data: conns } = useApi<{ data: Connection[] }>("/connections");
@@ -84,12 +86,15 @@ export function AutomationPage() {
           timezone: settings.data.timezone,
           windows: settings.data.windows,
           perDay: Object.fromEntries(persona.platforms.map((p) => [p, settings.data!.perDay[p] ?? 1])),
+          notifyEmail: settings.data.notifyEmail,
         }
       : null;
   const { draft, setDraft, dirty, reset } = useEditable<Settings>("automation", saved);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  // X: agreed in this visit (sent with the next save); asked once, as X's automation rules require.
+  const [xConsent, setXConsent] = useState(false);
   // A workspace still on the default "UTC" is offered the browser's timezone, as an unsaved change.
   const offeredTz = useRef(false);
   useEffect(() => {
@@ -126,13 +131,18 @@ export function AutomationPage() {
   const learned = new Map((timing?.data ?? []).map((t) => [t.platform, t]));
   const total = Object.values(draft.mix).reduce<number>((a, b) => a + (b ?? 0), 0);
 
-  const setRule = (p: Platform, key: keyof Rule, value: boolean) =>
+  const setRule = (p: Platform, key: keyof Rule, value: boolean) => {
+    if (p === "x" && key === "approve" && value && !settings.data?.xConsentAt && !xConsent) {
+      if (!window.confirm("Let automation approve your X posts?\n\nShowrium will post to your X account at the times it picks, without asking each time: original posts written from your sources and passions. Never replies, mentions or messages.\n\nEach post is scheduled at least 2 hours ahead and you get an email to check it, so you can edit or cancel it. Switching this off stops it at once. It only uses your plan's X posts, never credits.")) return;
+      setXConsent(true);
+    }
     setDraft((d) => {
       if (!d) return d;
       const cur = { ...OFF, ...d.rules[p], [key]: value };
       if (key === "write" && !value) cur.approve = false; // approving needs writing
       return { ...d, rules: { ...d.rules, [p]: cur } };
     });
+  };
   const setMix = (m: Mode, n: number) => setDraft((d) => (d ? { ...d, mix: { ...d.mix, [m]: Math.max(0, Math.min(MAX_WEIGHT, n)) } } : d));
   const setPerDay = (p: Platform, n: number) => setDraft((d) => (d ? { ...d, perDay: { ...d.perDay, [p]: n } } : d));
   const toggleWindow = (w: Window) =>
@@ -142,7 +152,6 @@ export function AutomationPage() {
   /** Why a switch can't be turned on, if it can't. */
   const lockReason = (p: Platform, key: keyof Rule): string | null => {
     if (!allowed[key]) return `Needs ${needs[key]} plan`;
-    if (key === "approve" && p === "x") return "X needs your approval";
     if (key === "approve" && safe) return "Off in monetization-safe mode";
     if (key === "approve" && !draft.rules[p]?.write) return "Turn on writing first";
     if (key === "schedule" && !API_PLATFORMS.includes(p)) return "You post these yourself";
@@ -157,7 +166,7 @@ export function AutomationPage() {
     try {
       // Only platforms with something switched on keep a number of posts a day.
       const perDay = Object.fromEntries(active.map((p) => [p, draft.perDay[p] ?? 1]));
-      await api("/autopilot", { method: "PUT", body: JSON.stringify({ ...draft, perDay }) });
+      await api("/autopilot", { method: "PUT", body: JSON.stringify({ ...draft, perDay, ...(xConsent ? { xConsent: true } : {}) }) });
       setSavedAt(new Date().toISOString());
       settings.reload();
     } catch (err) {
@@ -198,6 +207,15 @@ export function AutomationPage() {
             </div>
           </Panel>
 
+          <Panel title="Before posts go out" id="notify">
+            <div className="flex items-center justify-between gap-4">
+              <span className="flex items-center gap-1.5 text-sm text-ink-2">
+                Email me what automation schedules <Info>Posts approved by automation are always scheduled at least 2 hours ahead, never sent at once. This email lists them so you can edit or cancel any of them in Posts. They're also marked "Auto" there.</Info>
+              </span>
+              <Switch label="Email me what automation schedules" on={draft.notifyEmail} onChange={(v) => setDraft((d) => (d ? { ...d, notifyEmail: v } : d))} />
+            </div>
+          </Panel>
+
           <Panel title="Platforms" id="platforms">
             <ul className="m-0 flex list-none flex-col gap-3 p-0">
               {persona.platforms.map((p) => {
@@ -224,7 +242,7 @@ export function AutomationPage() {
                               <span className="flex items-center gap-1.5 text-[13.5px] font-medium text-ink">
                                 {s.label} <Info label={`About ${s.label}`}>{s.hint}</Info>
                               </span>
-                              {reason && !isOn && <span className="text-[12px] text-muted">{reason}</span>}
+                              {reason && !isOn && (reason === "Off in monetization-safe mode" ? <Link to="/app/voice" className="text-[12px]">{reason} →</Link> : <span className="text-[12px] text-muted">{reason}</span>)}
                             </span>
                             <Switch label={`${s.label} on ${label(p)}`} on={isOn} disabled={Boolean(reason) && !isOn} onChange={(v) => setRule(p, s.key, v)} />
                           </div>

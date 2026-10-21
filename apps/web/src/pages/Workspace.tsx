@@ -12,6 +12,7 @@ import { InsightsPage } from "./workspace/Insights";
 import { IdeasPage } from "./workspace/Ideas";
 import { SettingsPage } from "./workspace/Settings";
 import { SourcesPage } from "./workspace/Sources";
+import { PassionsPage } from "./workspace/Passions";
 import { StudioPage } from "./workspace/Studio";
 import { TeamPage } from "./workspace/Team";
 import { VoicePage } from "./workspace/Voice";
@@ -27,6 +28,7 @@ const PAGES: Record<string, () => React.ReactNode> = {
   "/app/studio": () => <StudioPage />,
   "/app/insights": () => <InsightsPage />,
   "/app/sources": () => <SourcesPage />,
+  "/app/passions": () => <PassionsPage />,
   "/app/accounts": () => <ConnectionsPage />,
   "/app/voice": () => <VoicePage />,
   "/app/automation": () => <AutomationPage />,

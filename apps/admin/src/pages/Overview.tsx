@@ -68,7 +68,7 @@ export function Overview() {
         <Stat label="Users" value={data.users.total} sub={`+${data.users.last30Days} in 30 days`} />
         <Stat label="Posts written" value={data.posts.written30Days} sub="last 30 days" />
         <Stat label="Published" value={data.posts.published30Days} sub={`${data.posts.failed30Days} failed`} info="Posts published through the platforms' APIs or marked as posted by hand, in the last 30 days." />
-        <Stat label="AI cost" value={`$${data.aiCostThisMonthUsd.toFixed(2)}`} sub="this month" info="What writing posts cost in AI and research this month, from each post's recorded cost." />
+        <Stat label="AI cost" value={`$${data.aiCostThisMonthUsd.toFixed(2)}`} sub="this month" info="Every AI call this month: posts, research, insights, images, video and voice (some are estimates; see AI costs)." />
         <Stat label="Waiting" value={data.waitlist.waiting} sub={`${data.waitlist.invited} invited · ${data.waitlist.joined} joined`} />
         <Stat label="Paying" value={active} sub="active subscriptions" />
       </div>

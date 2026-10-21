@@ -3,7 +3,7 @@ import { Link } from "../../App";
 import { api, useApi } from "../../lib";
 import { DraftCard, THREAD_PLATFORMS } from "./Drafts";
 import { MODES, usePlatforms, type Draft, type Persona, type Platform } from "./shared";
-import { PageHeader } from "../../ui/kit";
+import { Info, PageHeader } from "../../ui/kit";
 import { QUICK_KEY } from "./Home";
 import { UploadForm } from "../../components/UploadForm";
 import { ResearchNotes } from "../../components/ResearchNotes";
@@ -69,8 +69,7 @@ export function CreatePage() {
   if (personaData && !persona) {
     return (
       <section className="card max-w-xl">
-        <h2 className="h3">First, your voice</h2>
-        <p className="note">Tell Showrium a little about you, so posts sound like you and only go where you already are.</p>
+        <h2 className="h3 flex items-center gap-1.5">First, your voice <Info label="About your voice">Tell Showrium a little about you. Posts then sound like you and only go where you already are.</Info></h2>
         <Link to="/app/voice" className="button">Set up my voice</Link>
       </section>
     );
@@ -184,7 +183,7 @@ export function CreatePage() {
 
   return (
     <div className="dash">
-      <PageHeader title="New post" subtitle="One input becomes a post for each platform you choose, in your voice." />
+      <PageHeader title="New post" actions={<Info label="About new posts">One input becomes a post for each platform you choose, in your voice.</Info>} />
       <section className="card">
         <h2 className="h3">1. What do you want to share?</h2>
         <div className="tabs small" role="tablist">
@@ -237,8 +236,8 @@ export function CreatePage() {
         )}
         {input === "ask" && (
           <div className="form">
-            <label>
-              What should the post be about?
+            <label htmlFor="ask-request">
+              <span className="flex items-center gap-1.5">What should the post be about? <Info label="About asking the AI">The AI follows this. Add the facts you know. Switch on web research below to find more, with sources.</Info></span>
               <textarea
                 id="ask-request"
                 maxLength={4000}
@@ -248,7 +247,6 @@ export function CreatePage() {
                 placeholder={"e.g. Write an expert view on the Lagos Life game by Shalom, a UK-based Nigerian developer: the criticism and the support.\nFacts I know: she has 10 years in software, and turned down a $100K offer."}
               />
             </label>
-            <p className="note">The AI follows this. Add the facts you know; switch on web research below to find more, with sources.</p>
           </div>
         )}
         {input === "link" && (
@@ -258,11 +256,10 @@ export function CreatePage() {
         )}
         {input === "voice" && (
           <div className="form">
-            <label>
-              Names or words in your note (optional)
+            <label htmlFor="voice-hint">
+              <span className="flex items-center gap-1.5">Names or words in your note (optional) <Info label="About names and words">Helps us spell them right. You'll see the transcript and can edit it before anything is written.</Info></span>
               <input id="voice-hint" maxLength={300} placeholder="e.g. LagosLife, Shalom, Supabase" value={voiceHint} onChange={(e) => setVoiceHint(e.target.value)} />
             </label>
-            <p className="note">Helps us spell them right. You'll see the transcript and can edit it before anything is written.</p>
             <button className="button secondary" onClick={toggleRecording} disabled={Boolean(busy) && !recording}>
               {recording ? "Stop recording" : "Record a voice note (up to 2 min)"}
             </button>

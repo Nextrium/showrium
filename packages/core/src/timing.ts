@@ -147,6 +147,8 @@ export type SlotInput = {
   taken: Date[];
   stats: WindowStats;
   rand?: () => number;
+  /** Never later than this (a post's "good until"): past it, no slot is found and the person is asked instead. */
+  notAfter?: Date | null | undefined;
 };
 
 /**
@@ -159,6 +161,7 @@ export function pickSlot(input: SlotInput): Date | null {
   const today = localParts(input.now, input.tz);
   for (let d = 0; d < 14; d++) {
     const base = zonedTime(today.year, today.month, today.day + d, 12, 0, input.tz); // noon avoids DST edges
+    if (input.notAfter && base.getTime() - 12 * 3_600_000 > input.notAfter.getTime()) break; // the whole day is too late
     const day = localParts(base, input.tz);
     if (!input.days.includes(day.weekday)) continue;
     const dayKey = `${day.year}-${day.month}-${day.day}`;
@@ -177,6 +180,7 @@ export function pickSlot(input: SlotInput): Date | null {
       const at = zonedTime(day.year, day.month, day.day, start, 0, input.tz);
       const when = new Date(at.getTime() + offset * MINUTE);
       if (when.getTime() < input.now.getTime() + LEAD_MS) continue;
+      if (input.notAfter && when.getTime() > input.notAfter.getTime()) continue;
       if (input.taken.some((t) => Math.abs(t.getTime() - when.getTime()) < MIN_GAP_MS)) continue;
       options.push({ at: when, score: sample(input.stats, w, rand) });
     }
@@ -186,10 +190,11 @@ export function pickSlot(input: SlotInput): Date | null {
 }
 
 /** Scheduled and published times on an account (last day to two weeks ahead), for pickSlot. */
-export async function takenTimes(db: Db, orgId: string, connectionId: string, now: Date): Promise<Date[]> {
+export async function takenTimes(db: Db, orgId: string, connectionId: string, now: Date, exceptDraftId?: string): Promise<Date[]> {
   const rows = await db
-    .select({ scheduledAt: draft.scheduledAt, publishedAt: draft.publishedAt })
+    .select({ id: draft.id, scheduledAt: draft.scheduledAt, publishedAt: draft.publishedAt })
     .from(draft)
     .where(and(eq(draft.orgId, orgId), eq(draft.connectionId, connectionId), inArray(draft.status, ["scheduled", "publishing", "published"]), or(gte(draft.scheduledAt, new Date(now.getTime() - 86_400_000)), gte(draft.publishedAt, new Date(now.getTime() - 86_400_000)))));
-  return rows.flatMap((r) => [r.scheduledAt, r.publishedAt].filter((d): d is Date => Boolean(d)));
+  // A post being moved doesn't block its own new time.
+  return rows.filter((r) => r.id !== exceptDraftId).flatMap((r) => [r.scheduledAt, r.publishedAt].filter((d): d is Date => Boolean(d)));
 }

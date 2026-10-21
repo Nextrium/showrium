@@ -1,0 +1,58 @@
+name: Finding
+description: "Something found that isn't on the roadmap (a bug, a gap or a problem). Planned work lives in the contributors portal."
+title: "[Finding] "
+labels: ["finding"]
+body:
+  - type: markdown
+    attributes:
+      value: "Planned work is tracked as tasks in the [Nextrium contributors portal](https://contribute.nextrium.org/). Security problems go to SECURITY.md, never in a public issue. Don't paste tokens, passwords or personal data."
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Bug (something doesn't work as it should)
+        - Gap (something missing that people need)
+        - Risk (something that could cause harm or lose data)
+        - Docs (something wrong or missing in the docs)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What was found
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen instead
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to see it
+      placeholder: "1. Go to …\n2. Click …"
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - app.showrium.com (production)
+        - preview.showrium.com
+        - Local development
+        - API or SDK
+        - The code (no running app needed)
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: How serious
+      options:
+        - Blocks people or loses data
+        - Gets in the way, with a workaround
+        - Minor
+    validations:
+      required: true

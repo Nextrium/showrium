@@ -1,6 +1,6 @@
 // Connected accounts and publishing. Tokens are decrypted only here, just before use.
-import { and, asc, eq, gt, inArray, lte } from "drizzle-orm";
-import { connection, draft, mastodonApp, oauthState, persona, type ConnectionPlatform, type Db } from "@nextrium/db";
+import { and, asc, eq, gt, inArray, lte, sql } from "drizzle-orm";
+import { connection, draft, mastodonApp, oauthState, org, persona, platformUsage, type ConnectionPlatform, type Db } from "@nextrium/db";
 import { bluesky, linkedin, mastodon, PlatformError, tiktok, x, type Account, type FetchLike, type OAuthConfig, type ImageUpload, type ReplyTo, type TokenSet } from "@nextrium/platforms";
 import { hasErrors, X_LONG_SUBSCRIPTIONS, xWeightedLength } from "@nextrium/policy";
 import { postCreditTxn, InsufficientCreditsError } from "./credits.js";
@@ -9,7 +9,7 @@ import { newId } from "./ids.js";
 import { imagesForPublishing, type ImageStore } from "./images.js";
 import { recordAudit } from "./orgs.js";
 import { getOrgLimits, getOrgPlan } from "./content.js";
-import { addUsage, CREDITS_PER_X_API_POST, CREDITS_PER_X_API_POST_WITH_LINK, PLAN_LIMITS } from "./plans.js";
+import { addUsage, CREDITS_PER_EXTRA_X_IMAGE, CREDITS_PER_X_API_POST, CREDITS_PER_X_API_POST_WITH_LINK, PLAN_LIMITS, X_API_COST_MICRO } from "./plans.js";
 
 export interface PlatformConfigs {
   x?: OAuthConfig | undefined;
@@ -66,8 +66,42 @@ export async function saveConnection(
     .values({ id: newId("cn"), orgId: input.orgId, platform: input.platform, accountId: input.account.accountId, createdByUserId: input.userId, ...values })
     .onConflictDoUpdate({ target: [connection.orgId, connection.platform, connection.accountId], set: values })
     .returning({ id: connection.id });
-  await recordAudit(deps.db, { orgId: input.orgId, actorUserId: input.userId, action: "connection.saved", target: row!.id, meta: { platform: input.platform } });
+  // Posts waiting on an account that was removed (e.g. disconnected, then connected again) move to this one.
+  const relinked = await relinkOrphanedPosts(deps.db, input.orgId, input.platform, row!.id);
+  await recordAudit(deps.db, { orgId: input.orgId, actorUserId: input.userId, action: "connection.saved", target: row!.id, meta: { platform: input.platform, ...(relinked ? { postsMoved: relinked } : {}) } });
   return row!.id;
+}
+
+/** Posts still waiting to go out whose account no longer exists, moved to `connectionId` (same workspace and platform). */
+async function relinkOrphanedPosts(db: PublishDeps["db"], orgId: string, platform: ConnectionPlatform, connectionId: string) {
+  const moved = await db
+    .update(draft)
+    .set({ connectionId, updatedAt: new Date() })
+    .where(
+      and(
+        eq(draft.orgId, orgId),
+        eq(draft.platform, platform),
+        inArray(draft.status, ["scheduled", "approved", "failed"]),
+        sql`${draft.connectionId} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM connection c WHERE c.id = ${draft.connectionId})`,
+      ),
+    )
+    .returning({ id: draft.id });
+  return moved.length;
+}
+
+/**
+ * The account to post from: the post's own, or, when that account was removed, the workspace's one
+ * active account on the same platform (if there's exactly one). The post is moved to it.
+ */
+async function connectionFor(deps: PublishDeps, orgId: string, d: { id: string; platform: string; connectionId: string | null }) {
+  if (d.connectionId) {
+    const own = await loadConnection(deps, orgId, d.connectionId);
+    if (own) return own;
+  }
+  const active = await deps.db.select().from(connection).where(and(eq(connection.orgId, orgId), eq(connection.platform, d.platform as ConnectionPlatform), eq(connection.status, "active")));
+  if (active.length !== 1) return null; // none, or more than one: the person chooses
+  await deps.db.update(draft).set({ connectionId: active[0]!.id }).where(and(eq(draft.orgId, orgId), eq(draft.id, d.id)));
+  return active[0]!;
 }
 
 export async function listConnections(db: Db, orgId: string) {
@@ -98,9 +132,23 @@ export async function mastodonClient(deps: PublishDeps, instance: string): Promi
 
 // --- Publishing ---------------------------------------------------------------------------
 
+/**
+ * X posts with a link (in the post or its reply) never go through the API: X charges about 13 times
+ * more for them, so they're always posted with "Post it myself" (owner decision 2026-10-19).
+ */
+export const xNeedsTapToPost = (platform: string, text: string) => platform === "x" && (/https?:\/\//i.test(text) || X_MENTION_RE.test(text));
+/** An @mention of an X account (not an email address). X's automation rules limit automated mentions. */
+const X_MENTION_RE = /(^|[^\w@.])@[A-Za-z0-9_]{1,15}(?![\w@])/;
+const PAUSED_MESSAGE = "Posting from this workspace is paused by Showrium. Contact support@showrium.com.";
+async function assertNotPaused(db: Db, orgId: string) {
+  const [row] = await db.select({ at: org.pausedAt }).from(org).where(eq(org.id, orgId));
+  if (row?.at) throw new PublishError("paused", PAUSED_MESSAGE);
+}
+const TAP_TO_POST_MESSAGE = "X posts with a link, a quote or a mention go through \"Post it myself\" (free): X charges a lot more for links sent through the app, and limits automated mentions.";
+
 export class PublishError extends Error {
   constructor(
-    readonly code: "not_found" | "not_ready" | "has_errors" | "no_connection" | "not_supported" | "monetization_safe" | "insufficient_credits" | "platform_error" | "conflict",
+    readonly code: "not_found" | "not_ready" | "has_errors" | "no_connection" | "not_supported" | "monetization_safe" | "insufficient_credits" | "platform_error" | "conflict" | "needs_tap_to_post" | "paused",
     message: string,
   ) {
     super(message);
@@ -116,21 +164,44 @@ async function loadConnection(deps: PublishDeps, orgId: string, id: string) {
   return row ?? null;
 }
 
+/**
+ * A usable access token, renewed when it's about to expire. X (and TikTok) replace the refresh token
+ * on every renewal and refuse the old one, so:
+ * - the renewed secret is written back to `conn` too, so later steps of the same publish (checking
+ *   Premium, then posting; each part of a thread) use it instead of renewing again with a used token;
+ * - if a renewal is refused because another request renewed first (the scheduler and a click at the
+ *   same moment), the stored tokens are reloaded and used.
+ */
 async function freshTokens(deps: PublishDeps, conn: typeof connection.$inferSelect, secret: OAuthSecret): Promise<TokenSet> {
   const soon = Date.now() + 60_000;
-  if (!secret.tokens.expiresAt || secret.tokens.expiresAt > soon || !secret.tokens.refreshToken) return secret.tokens;
+  const usable = (t: TokenSet) => !t.expiresAt || t.expiresAt > soon || !t.refreshToken;
+  if (usable(secret.tokens)) return secret.tokens;
   const cfg = conn.platform === "x" ? deps.configs.x : conn.platform === "tiktok" ? deps.configs.tiktok : undefined;
   const refresher = conn.platform === "x" ? x.refresh : conn.platform === "tiktok" ? tiktok.refresh : undefined;
   if (!cfg || !refresher) return secret.tokens;
-  const tokens = await refresher(cfg, secret.tokens.refreshToken, deps.fetch);
-  await deps.db
-    .update(connection)
-    .set({ secret: await encryptJson(deps.key, { tokens }, aad(conn.orgId, conn.platform, conn.accountId)), expiresAt: tokens.expiresAt ? new Date(tokens.expiresAt) : null, updatedAt: new Date() })
-    .where(eq(connection.id, conn.id));
+  const key = aad(conn.orgId, conn.platform, conn.accountId);
+  let tokens: TokenSet;
+  try {
+    tokens = await refresher(cfg, secret.tokens.refreshToken!, deps.fetch);
+  } catch (error) {
+    if (!(error instanceof PlatformError) || error.kind === "unavailable" || error.kind === "rate_limited") throw error;
+    const [latest] = await deps.db.select().from(connection).where(eq(connection.id, conn.id));
+    const stored = latest && latest.secret !== conn.secret ? (await decryptJson<OAuthSecret>(deps.key, latest.secret, key)).tokens : null;
+    if (stored && usable(stored)) {
+      Object.assign(conn, { secret: latest!.secret, expiresAt: latest!.expiresAt });
+      return stored;
+    }
+    // The renewal itself was refused: the account's sign-in is no longer valid.
+    throw new PlatformError(error.platform, "auth", `${error.platform} needs you to sign in again. Reconnect the account in Accounts, then try again.`);
+  }
+  const encrypted = await encryptJson(deps.key, { tokens }, key);
+  const expiresAt = tokens.expiresAt ? new Date(tokens.expiresAt) : null;
+  await deps.db.update(connection).set({ secret: encrypted, expiresAt, updatedAt: new Date() }).where(eq(connection.id, conn.id));
+  Object.assign(conn, { secret: encrypted, expiresAt });
   return tokens;
 }
 
-type SendCache = { bluesky?: { service: string; accessJwt: string; account: Account }; imageNotes?: string[] };
+type SendCache = { bluesky?: { service: string; accessJwt: string; account: Account }; imageNotes?: string[]; linkComment?: string | null; commentNote?: string };
 
 async function sendToPlatform(deps: PublishDeps, conn: typeof connection.$inferSelect, text: string, idempotencyKey: string, replyTo?: ReplyTo, cache: SendCache = {}, images: ImageUpload[] = []) {
   const account = { accountId: conn.accountId, handle: conn.handle };
@@ -163,7 +234,16 @@ async function sendToPlatform(deps: PublishDeps, conn: typeof connection.$inferS
     case "linkedin": {
       const tokens = await freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, key));
       const media = await attachAll((image) => linkedin.uploadImage(tokens, account, image, deps.fetch));
-      return linkedin.publish(tokens, account, text, deps.fetch, media.map((m) => ({ urn: m.value, alt: m.image.alt })));
+      const posted = await linkedin.publish(tokens, account, text, deps.fetch, media.map((m) => ({ urn: m.value, alt: m.image.alt })));
+      // The source link as the first comment. The post is already out, so a refused comment never fails it.
+      if (cache.linkComment && posted.externalId) {
+        try {
+          await linkedin.comment(tokens, account, posted.externalId, cache.linkComment, deps.fetch);
+        } catch (error) {
+          cache.commentNote = `The link comment didn't go out${error instanceof PlatformError && error.kind !== "auth" ? ` (${error.message})` : ""}. Add it as a comment yourself: ${cache.linkComment}`;
+        }
+      }
+      return posted;
     }
     case "mastodon": {
       const { tokens } = await decryptJson<OAuthSecret>(deps.key, conn.secret, key);
@@ -212,12 +292,14 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   if (!READY.includes(d.status as (typeof READY)[number])) throw new PublishError("not_ready", "Approve the post before publishing it.");
   if (hasErrors(d.issues)) throw new PublishError("has_errors", "Fix the errors on this post first.");
   if (!d.connectionId) throw new PublishError("no_connection", "Choose which connected account to post from.");
-  const conn = await loadConnection(deps, input.orgId, d.connectionId);
-  if (!conn || conn.platform !== d.platform) throw new PublishError("no_connection", "That account isn't connected any more.");
+  const conn = await connectionFor(deps, input.orgId, d);
+  if (!conn || conn.platform !== d.platform) throw new PublishError("no_connection", "That account isn't connected any more. Connect it again in Accounts, then post or schedule it again.");
   if (!API_PUBLISH_PLATFORMS.includes(conn.platform)) throw new PublishError("not_supported", "This platform can't be posted to automatically yet.");
 
   const [p] = await db.select({ safe: persona.monetizationSafe }).from(persona).where(eq(persona.orgId, input.orgId));
   if (p?.safe && conn.platform === "x") throw new PublishError("monetization_safe", "Monetization-safe mode posts to X through your own X app (tap-to-post).");
+  if (xNeedsTapToPost(conn.platform, d.text)) throw new PublishError("needs_tap_to_post", TAP_TO_POST_MESSAGE);
+  await assertNotPaused(db, input.orgId);
 
   const [claimed] = await db
     .update(draft)
@@ -233,12 +315,26 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   const startAt = posted.length;
   const remaining = parts.slice(startAt);
 
-  // X charges per API post: plan allowance first, then credits (links cost more). Each part is a post.
+  const images = deps.media ? await imagesForPublishing(db, deps.media, input.orgId, d).catch(() => []) : [];
+  // Images go on the first part only; X charges for each image's description.
+  const imagesOnFirst = startAt === 0 ? images.length : 0;
+  const describedOnFirst = startAt === 0 ? images.filter((i) => i.alt).length : 0;
+
+  // X charges per API post: plan allowance first, then credits (links cost more, and each image after
+  // the first adds a credit). Each part is a post.
   const partCharge: number[] = remaining.map(() => 0);
   if (conn.platform === "x") {
     const xLimit = (await getOrgLimits(db, input.orgId)).limits.xApiPosts;
     const { overage } = await addUsage(db, input.orgId, "xApiPosts", remaining.length, xLimit);
-    for (let i = remaining.length - overage; i < remaining.length; i++) partCharge[i] = /https?:\/\//i.test(remaining[i]!) ? CREDITS_PER_X_API_POST_WITH_LINK : CREDITS_PER_X_API_POST;
+    // A post automation approved never spends credits: past the plan's X posts it waits for the person.
+    if (overage > 0 && d.autoApproved) {
+      await addUsage(db, input.orgId, "xApiPosts", -remaining.length, xLimit);
+      await db.update(draft).set({ status: "approved", scheduledAt: null, autoScheduled: false, lastError: "This month's X posts in your plan are used up. Approve it yourself to post with credits, or post it yourself (free).", updatedAt: new Date() }).where(eq(draft.id, d.id));
+      throw new PublishError("insufficient_credits", "This month's X posts are used up; automation doesn't spend credits.");
+    }
+    for (let i = remaining.length - overage; i < remaining.length; i++) {
+      partCharge[i] = (/https?:\/\//i.test(remaining[i]!) ? CREDITS_PER_X_API_POST_WITH_LINK : CREDITS_PER_X_API_POST) + (i === 0 ? Math.max(0, imagesOnFirst - 1) * CREDITS_PER_EXTRA_X_IMAGE : 0);
+    }
     const charged = partCharge.reduce((a, b) => a + b, 0);
     if (charged > 0) {
       try {
@@ -252,10 +348,9 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     }
   }
 
-  const cache: SendCache = {};
-  const images = deps.media ? await imagesForPublishing(db, deps.media, input.orgId, d).catch(() => []) : [];
+  const cache: SendCache = { linkComment: conn.platform === "linkedin" ? d.linkComment : null };
   try {
-    if (conn.platform === "x" && !isThread && xWeightedLength(d.text) > 280) await confirmXLong(deps, conn);
+    if (conn.platform === "x" && parts.some((p) => xWeightedLength(p) > 280)) await confirmXLong(deps, conn);
     let result: { externalId: string; url: string | null };
     if (!isThread) {
       result = await sendToPlatform(deps, conn, d.text, d.id, undefined, cache, images);
@@ -273,14 +368,16 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     }
     await db
       .update(draft)
-      .set({ status: "published", publishedAt: new Date(), externalPostId: result.externalId, externalUrl: result.url, publishMethod: "api", lastError: cache.imageNotes?.length ? `Posted, but not every image went with it. ${cache.imageNotes.join(" ")}` : null, updatedAt: new Date() })
+      .set({ status: "published", publishedAt: new Date(), externalPostId: result.externalId, externalUrl: result.url, publishMethod: "api", urgentUntil: null, lastError: [cache.imageNotes?.length ? `Posted, but not every image went with it. ${cache.imageNotes.join(" ")}` : null, cache.commentNote ?? null].filter(Boolean).join(" ") || null, updatedAt: new Date() })
       .where(eq(draft.id, d.id));
+    if (conn.platform === "x") await recordXCosts(db, input.orgId, d.id, remaining.slice(0, parts.length - startAt), describedOnFirst);
     await recordAudit(db, { orgId: input.orgId, actorUserId: input.actorUserId ?? null, action: "draft.published", target: d.id, meta: { platform: conn.platform, parts: parts.length, images: images.length, imagesLeftOut: cache.imageNotes?.length ?? 0 } });
     return { status: "published" as const, url: result.url };
   } catch (error) {
     const base = error instanceof PlatformError || error instanceof PublishError ? error.message : "Publishing failed unexpectedly.";
     const message = isThread && posted.length > 0 ? `Posted ${posted.length} of ${parts.length} parts. ${base} Try again to post the rest.` : base;
     if (!(error instanceof PlatformError) && !(error instanceof PublishError)) console.error("publish failed", error);
+    else if (error instanceof PlatformError) console.warn("publish refused", { platform: conn.platform, draftId: d.id, kind: error.kind, chars: d.text.length, images: images.length, reason: error.message });
     await db.update(draft).set({ status: "failed", lastError: message, updatedAt: new Date() }).where(eq(draft.id, d.id));
     if (error instanceof PlatformError && error.kind === "auth") {
       await db.update(connection).set({ status: "needs_reconnect", updatedAt: new Date() }).where(eq(connection.id, conn.id));
@@ -288,6 +385,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     // Give back the allowance and credits for the parts that didn't go out.
     if (conn.platform === "x") {
       const sentNow = posted.length - startAt;
+      if (sentNow > 0) await recordXCosts(db, input.orgId, d.id, remaining.slice(0, sentNow), describedOnFirst);
       const unsent = remaining.length - sentNow;
       const refund = partCharge.slice(sentNow).reduce((a, b) => a + b, 0);
       if (unsent > 0) await addUsage(db, input.orgId, "xApiPosts", -unsent, (await getOrgLimits(db, input.orgId)).limits.xApiPosts).catch(() => undefined);
@@ -299,17 +397,63 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
   }
 }
 
+/** What X charged us for the parts that went out (one row per paid call). Never fails the post. */
+async function recordXCosts(db: Db, orgId: string, draftId: string, sentParts: string[], images: number) {
+  const rows = [
+    ...sentParts.map((p) => ({ kind: /https?:\/\//i.test(p) ? ("post_with_link" as const) : ("post" as const) })),
+    ...Array.from({ length: sentParts.length ? Math.max(0, images) : 0 }, () => ({ kind: "image_description" as const })),
+  ].map((r) => ({ id: newId("pfu"), orgId, platform: "x", kind: r.kind, costMicroUsd: X_API_COST_MICRO[r.kind], draftId }));
+  if (!rows.length) return;
+  try {
+    await db.insert(platformUsage).values(rows);
+  } catch (error) {
+    console.warn("platform usage not recorded", error instanceof Error ? error.message : error);
+  }
+}
+
+/** Whether the workspace has a working account connected on this platform. */
+export async function hasActiveConnection(db: Db, orgId: string, platform: ConnectionPlatform) {
+  const [row] = await db.select({ id: connection.id }).from(connection).where(and(eq(connection.orgId, orgId), eq(connection.platform, platform), eq(connection.status, "active"))).limit(1);
+  return Boolean(row);
+}
+
+/** A signed-in X account's tokens for reading X through the API (following X accounts as sources). */
+export type XReader = (orgId: string) => Promise<TokenSet | null>;
+
+/** Reads with the workspace's active X account (renewing its sign-in if needed); null without one. */
+export function xReader(deps: PublishDeps): XReader {
+  return async (orgId) => {
+    const [conn] = await deps.db.select().from(connection).where(and(eq(connection.orgId, orgId), eq(connection.platform, "x"), eq(connection.status, "active"))).limit(1);
+    if (!conn) return null;
+    return freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, aad(conn.orgId, conn.platform, conn.accountId)));
+  };
+}
+
+/** What X charged us for reading (a source's account lookup and the posts read). Never fails the read. */
+export async function recordXReads(db: Db, orgId: string, reads: { users: number; posts: number }) {
+  const rows = [
+    ...Array.from({ length: reads.users }, () => "user_read" as const),
+    ...Array.from({ length: reads.posts }, () => "post_read" as const),
+  ].map((kind) => ({ id: newId("pfu"), orgId, platform: "x", kind, costMicroUsd: X_API_COST_MICRO[kind], draftId: null }));
+  if (!rows.length) return;
+  try {
+    for (let i = 0; i < rows.length; i += 10) await db.insert(platformUsage).values(rows.slice(i, i + 10));
+  } catch (error) {
+    console.warn("platform usage not recorded", error instanceof Error ? error.message : error);
+  }
+}
+
 /** The user posted it themselves via tap-to-post (or copy and paste). */
 export async function markPublishedManually(db: Db, orgId: string, draftId: string, url: string | null) {
   const [row] = await db
     .update(draft)
-    .set({ status: "published", publishedAt: new Date(), publishMethod: "tap_to_post", externalUrl: url, updatedAt: new Date() })
+    .set({ status: "published", publishedAt: new Date(), publishMethod: "tap_to_post", externalUrl: url, urgentUntil: null, updatedAt: new Date() })
     .where(and(eq(draft.orgId, orgId), eq(draft.id, draftId), inArray(draft.status, ["approved", "failed", "scheduled"])))
     .returning({ id: draft.id });
   return Boolean(row);
 }
 
-export async function scheduleDraft(db: Db, orgId: string, draftId: string, input: { at: Date; connectionId: string }) {
+export async function scheduleDraft(db: Db, orgId: string, draftId: string, input: { at: Date; connectionId: string; auto?: boolean }) {
   if (input.at.getTime() < Date.now() + 60_000) throw new PublishError("not_ready", "Pick a time at least a minute from now.");
   if (input.at.getTime() > Date.now() + 90 * 86_400_000) throw new PublishError("not_ready", "Schedule up to 90 days ahead.");
   const [d] = await db.select().from(draft).where(and(eq(draft.orgId, orgId), eq(draft.id, draftId)));
@@ -317,9 +461,11 @@ export async function scheduleDraft(db: Db, orgId: string, draftId: string, inpu
   if (hasErrors(d.issues)) throw new PublishError("has_errors", "Fix the errors on this post first.");
   const [conn] = await db.select().from(connection).where(and(eq(connection.orgId, orgId), eq(connection.id, input.connectionId)));
   if (!conn || conn.platform !== d.platform || !API_PUBLISH_PLATFORMS.includes(conn.platform)) throw new PublishError("no_connection", "Connect an account for this platform first.");
+  if (xNeedsTapToPost(conn.platform, d.text)) throw new PublishError("needs_tap_to_post", TAP_TO_POST_MESSAGE);
+  await assertNotPaused(db, orgId);
   const [row] = await db
     .update(draft)
-    .set({ status: "scheduled", scheduledAt: input.at, connectionId: conn.id, updatedAt: new Date() })
+    .set({ status: "scheduled", scheduledAt: input.at, connectionId: conn.id, autoScheduled: Boolean(input.auto), urgentUntil: null, updatedAt: new Date() })
     .where(and(eq(draft.orgId, orgId), eq(draft.id, draftId), inArray(draft.status, ["approved", "failed", "scheduled"])))
     .returning({ id: draft.id });
   if (!row) throw new PublishError("not_ready", "Approve the post before scheduling it.");
@@ -335,21 +481,27 @@ export async function setDraftConnection(db: Db, orgId: string, draftId: string,
 }
 
 /** Publishes scheduled drafts that are due. Called by the cron trigger every 5 minutes. */
-export async function runDuePublishing(deps: PublishDeps, now = new Date(), limit = 25) {
+/** Called with the scheduled posts that failed in a run, per workspace (to tell the person). */
+export type OnPublishFailed = (orgId: string, draftIds: string[]) => Promise<unknown>;
+
+export async function runDuePublishing(deps: PublishDeps, now = new Date(), limit = 25, onFailed?: OnPublishFailed) {
   const due = await deps.db
     .select({ id: draft.id, orgId: draft.orgId })
     .from(draft)
-    .where(and(eq(draft.status, "scheduled"), lte(draft.scheduledAt, now)))
+    // A paused workspace's posts wait (they go out once it's resumed, if still worth it).
+    .where(and(eq(draft.status, "scheduled"), lte(draft.scheduledAt, now), sql`NOT EXISTS (SELECT 1 FROM org o WHERE o.id = ${draft.orgId} AND o.paused_at IS NOT NULL)`))
     .orderBy(asc(draft.scheduledAt))
     .limit(limit);
   let published = 0;
   let failed = 0;
+  const failedIds = new Map<string, string[]>();
   for (const d of due) {
     try {
       await publishDraft(deps, { orgId: d.orgId, draftId: d.id });
       published++;
     } catch (error) {
       failed++;
+      if (!(error instanceof PublishError && error.code === "conflict")) failedIds.set(d.orgId, [...(failedIds.get(d.orgId) ?? []), d.id]);
       if (!(error instanceof PublishError)) console.error("scheduled publish error", error);
       // Checks that fail before the claim (account disconnected, errors, credits) leave the post
       // "scheduled"; it would be retried every run and, at the head of the queue, block others.
@@ -362,6 +514,7 @@ export async function runDuePublishing(deps: PublishDeps, now = new Date(), limi
       }
     }
   }
+  for (const [orgId, ids] of failedIds) await onFailed?.(orgId, ids).catch((error) => console.warn("failure notice failed", error instanceof Error ? error.message : error));
   return { due: due.length, published, failed };
 }
 

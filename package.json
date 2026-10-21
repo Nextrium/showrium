@@ -12,7 +12,8 @@
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test"
+    "test": "turbo run test",
+    "check": "turbo run typecheck test build"
   },
   "devDependencies": {
     "turbo": "^2.11.4",

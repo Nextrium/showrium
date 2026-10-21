@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, timeAgo, useApi } from "../../lib";
 import { Link } from "../../ui/Link";
-import { Alert, Badge, Button, Empty, Icon, PageHeader, Panel, type IconName } from "../../ui/kit";
+import { Alert, Badge, Button, Empty, Icon, Info, PageHeader, Panel, type IconName } from "../../ui/kit";
 import { UploadForm } from "../../components/UploadForm";
 
-type Source = { id: string; kind: "github_repo" | "rss" | "page"; key: string; lastCheckedAt: string | null; lastError: string | null };
+export type Source = { id: string; kind: "github_repo" | "rss" | "page" | "x_account"; key: string; lastCheckedAt: string | null; lastError: string | null };
 type ContextItem = { id: string; kind: string; title: string; body: string; url: string | null; createdAt: string };
 type Usage = { sources: { limit: number } };
 
@@ -13,30 +13,30 @@ const CATALOG: { group: string; items: CatalogItem[] }[] = [
   {
     group: "For builders",
     items: [
-      { id: "github", name: "GitHub repository", body: "Releases, plus each day’s commits and merged pull requests. Public repositories; no release needed.", icon: "git", kind: "github_repo", placeholder: "owner/repository", label: "Repository" },
-      { id: "devto", name: "Dev.to, Hashnode or Medium", body: "Your articles as soon as they go live. Paste your profile or blog address.", icon: "sources", kind: "rss", placeholder: "https://dev.to/yourname", label: "Address" },
-      { id: "mcp", name: "AI coding tools", body: "Claude Code or Cursor can tell Showrium what you shipped, through the MCP server.", icon: "code" },
+      { id: "github", name: "GitHub repository", body: "Releases, commits and merged pull requests. Public repositories.", icon: "git", kind: "github_repo", placeholder: "owner/repository", label: "Repository" },
+      { id: "devto", name: "Dev.to, Hashnode or Medium", body: "Your articles as they go live.", icon: "sources", kind: "rss", placeholder: "https://dev.to/yourname", label: "Address" },
+      { id: "mcp", name: "AI coding tools", body: "Claude Code or Cursor, through the MCP server.", icon: "code" },
     ],
   },
   {
     group: "For writers and creators",
     items: [
-      { id: "rss", name: "Blog, newsletter or website", body: "Paste the page that lists your posts. Showrium finds its feed, or watches the page for new articles.", icon: "globe", kind: "rss", placeholder: "https://example.com/blog", label: "Address" },
-      { id: "youtube", name: "YouTube channel", body: "Each new video becomes posts that point people to it.", icon: "play", kind: "rss", placeholder: "https://www.youtube.com/@yourchannel", label: "Channel address" },
-      { id: "podcast", name: "Podcast", body: "New episodes become posts. Paste your show’s RSS feed or website (from Spotify for Podcasters, Buzzsprout, Transistor…).", icon: "voice", kind: "rss", placeholder: "https://feeds.example.com/show.xml", label: "Feed or website" },
+      { id: "rss", name: "Blog, newsletter or website", body: "The page that lists your posts.", icon: "globe", kind: "rss", placeholder: "https://example.com/blog", label: "Address" },
+      { id: "youtube", name: "YouTube channel", body: "New videos become posts.", icon: "play", kind: "rss", placeholder: "https://www.youtube.com/@yourchannel", label: "Channel address" },
+      { id: "podcast", name: "Podcast", body: "New episodes become posts. Feed or website.", icon: "voice", kind: "rss", placeholder: "https://feeds.example.com/show.xml", label: "Feed or website" },
     ],
   },
   {
     group: "For everyday moments",
     items: [
-      { id: "note", name: "Notes, links and voice", body: "Write a line, paste a link, or record a voice note from New post.", icon: "edit" },
-      { id: "prompt", name: "Daily prompt", body: "A short question each day on Home, matched to what you do. Answer in a sentence.", icon: "comment" },
-      { id: "photos", name: "Photos and documents", body: "A photo of your work, a whiteboard, slides or a PDF. Showrium reads it for you.", icon: "photo" },
+      { id: "note", name: "Notes, links and voice", body: "From New post.", icon: "edit" },
+      { id: "prompt", name: "Daily prompt", body: "A short question each day on Home.", icon: "comment" },
+      { id: "photos", name: "Photos and documents", body: "Your work, a whiteboard, slides or a PDF.", icon: "photo" },
     ],
   },
 ];
 
-function SourceRow({ s, onRemoved }: { s: Source; onRemoved: () => void }) {
+export function SourceRow({ s, onRemoved }: { s: Source; onRemoved: () => void }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const check = async () => {
@@ -61,13 +61,13 @@ function SourceRow({ s, onRemoved }: { s: Source; onRemoved: () => void }) {
     <li className="flex flex-wrap items-center gap-3 border-t border-line py-3.5 first:border-t-0">
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-raised text-ink-2"><Icon name={s.kind === "github_repo" ? "git" : s.kind === "page" ? "globe" : "sources"} /></span>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate font-semibold">{s.key}</span>
-        <span className="text-[13px] text-muted">{s.kind === "github_repo" ? "GitHub · releases, commits and merged pull requests" : s.kind === "page" ? "Web page · watched for new articles" : "Feed"}</span>
+        <span className="truncate font-semibold">{s.kind === "x_account" ? `@${s.key}` : s.key}</span>
+        <span className="text-[13px] text-muted">{s.kind === "github_repo" ? "GitHub · releases, commits and merged pull requests" : s.kind === "x_account" ? "X account · new posts, through X's API" : s.kind === "page" ? "Web page · watched for new articles" : "Feed"}</span>
       </div>
       <span role="status" className={`text-[13px] sm:max-w-[300px] ${status.tone === "ok" ? "text-ok" : "text-warn"}`}>{status.text}</span>
       <div className="flex gap-2">
         <Button variant="secondary" size="sm" icon="refresh" disabled={busy} onClick={check}>{busy ? "Checking…" : "Check now"}</Button>
-        <Button variant="ghost" size="sm" aria-label={`Remove ${s.key}`} onClick={remove}><Icon name="trash" size={16} /></Button>
+        <Button variant="ghost" size="sm" aria-label={`Remove ${s.kind === "x_account" ? `@${s.key}` : s.key}`} onClick={remove}><Icon name="trash" size={16} /></Button>
       </div>
     </li>
   );
@@ -130,12 +130,12 @@ export function SourcesPage() {
 
   return (
     <>
-      <PageHeader title="Sources" subtitle="Where Showrium looks for things worth sharing. Each one is checked every few hours." />
+      <PageHeader title="Sources" actions={<Info label="About sources">Where Showrium looks for things worth sharing. Each one is checked every few hours. New items show up in Ideas.</Info>} />
 
       <Panel title={`Connected${limit !== undefined ? ` (${count} of ${limit})` : ""}`} id="connected">
         {sources.error && <Alert>{sources.error}</Alert>}
         {sources.data?.data.length === 0 ? (
-          <Empty icon="sources" title="No sources yet" body="Add one below, and new ideas will appear in Ideas as things happen." />
+          <Empty icon="sources" title="No sources yet" body="Add one below." />
         ) : (
           <ul className="m-0 list-none p-0">{sources.data?.data.map((s) => <SourceRow key={s.id} s={s} onRemoved={() => sources.reload()} />)}</ul>
         )}
@@ -211,7 +211,7 @@ export function SourcesPage() {
       </div>
 
       <Panel title="Material you can post about" id="material">
-        {contexts.data?.data.length === 0 && <span className="text-sm text-muted">Nothing yet. Add a source above, or write a note in New post.</span>}
+        {contexts.data?.data.length === 0 && <span className="text-sm text-muted">Nothing yet.</span>}
         <ul className="m-0 flex list-none flex-col p-0">
           {contexts.data?.data.slice(0, 20).map((c) => (
             <li key={c.id} className="flex flex-wrap items-center gap-3 border-t border-line py-3 first:border-t-0">
