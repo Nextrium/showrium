@@ -126,6 +126,16 @@ Preview and production both hold real accounts and real posts, and Showrium can'
 | No database access for contributors | Contributors and their tools never get Cloudflare accounts, keys or access to the preview or production databases. |
 | Backups | Cloudflare D1 can restore a database to any minute of the past 30 days (Workers Paid). A scheduled export keeps a copy apart from the database. |
 
+**Who gets which access:**
+
+| Who | Access | How |
+|---|---|---|
+| Community contributors | None needed | Fork the repository and open a pull request from the fork. Sign the CLA once. |
+| Regular contributors | Write, through the `showrium-contributors` team | Push branches to the repository and open pull requests into `develop`. |
+| Code owners | Maintain, through the `showrium-code-owners` team | Approve merges into `develop` and `main`. |
+
+Write access can't push to `develop` or `main`, merge without a code owner's approval, or change settings, branch rules or deploy keys. Ask a code owner to be added to a team.
+
 **Contributors need no Cloudflare account.** Local development runs on a local copy of the database with fake AI, which is also how every test runs. Code reaches preview only by being merged.
 
 **Testing real posting** from a laptop needs a contributor's own developer app and test account on that platform, never Nextrium's keys or accounts. Most work doesn't need it: tests use fake platform responses.
