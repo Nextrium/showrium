@@ -307,3 +307,59 @@ describe("overview", () => {
     expect(o.daily).toHaveLength(14);
   });
 });
+
+describe("paying, granted plan, full access and free", () => {
+  it("labels every workspace by what it is, lists each group with who gave access and why, and counts them", async () => {
+    const D = 86_400_000;
+    const paying = await makeUser("kind-paying@example.com");
+    const cancelled = await makeUser("kind-cancelled@example.com");
+    const granted = await makeUser("kind-granted@example.com");
+    const full = await makeUser("kind-full@example.com");
+    const free = await makeUser("kind-free@example.com");
+    const sub = (orgId: string, plan: string, status: string, end: number) =>
+      env.DB.prepare("INSERT INTO subscription (id, org_id, provider, plan, interval, status, provider_subscription_id, current_period_end) VALUES (?, ?, 'paystack', ?, 'month', ?, ?, ?)").bind(`sub_${crypto.randomUUID()}`, orgId, plan, status, `ps_${crypto.randomUUID()}`, end).run();
+    await env.DB.prepare("UPDATE org SET plan = 'creator' WHERE id IN (?, ?)").bind(paying.orgId, cancelled.orgId).run();
+    await sub(paying.orgId, "creator", "active", Date.now() + 20 * D);
+    await sub(cancelled.orgId, "creator", "cancelled", Date.now() + 5 * D); // cancelled, still inside its paid month
+    expect((await call("owner@example.com", "PUT", `/workspaces/${granted.orgId}/plan`, { plan: "pro", note: "Community partner" })).status).toBe(204);
+    expect((await call("owner@example.com", "PUT", `/workspaces/${full.orgId}/access`, { full: true, note: "Founder workspace" })).status).toBe(204);
+
+    const kindOf = async (u: { id: string; orgId: string }) => ((await (await call("owner@example.com", "GET", `/users/${u.id}`)).json()) as { workspaces: { id: string; kind: string }[] }).workspaces.find((w) => w.id === u.orgId)!.kind;
+    expect(await kindOf(paying)).toBe("paying");
+    expect(await kindOf(cancelled)).toBe("paying");
+    expect(await kindOf(granted)).toBe("granted");
+    expect(await kindOf(full)).toBe("full_access");
+    expect(await kindOf(free)).toBe("free");
+
+    type Row = { id: string; kind: string; owner: string | null; given: { by: string | null; note: string | null } | null };
+    const list = async (kind: string) => ((await (await call("owner@example.com", "GET", `/workspaces?kind=${kind}`)).json()) as { data: Row[] }).data;
+    const g = (await list("granted")).find((r) => r.id === granted.orgId)!;
+    expect(g).toMatchObject({ kind: "granted", owner: "kind-granted@example.com" });
+    expect(g.given!.note).toContain("Community partner");
+    expect(g.given!.note).toContain("owner@example.com"); // who granted it
+    const f = (await list("full_access")).find((r) => r.id === full.orgId)!;
+    expect(f.given).toMatchObject({ by: "owner@example.com", note: "Founder workspace" });
+    const p = await list("paying");
+    expect(p.map((r) => r.id)).toEqual(expect.arrayContaining([paying.orgId, cancelled.orgId]));
+    expect(p.find((r) => r.id === paying.orgId)!.given).toBeNull(); // paid, not given
+    expect((await list("granted")).map((r) => r.id)).not.toContain(paying.orgId);
+
+    // When a subscription lapses the plan goes back to Free: it never counts as granted.
+    await env.DB.prepare("UPDATE subscription SET status = 'expired' WHERE org_id = ?").bind(cancelled.orgId).run();
+    await env.DB.prepare("UPDATE org SET plan = 'free' WHERE id = ?").bind(cancelled.orgId).run();
+    expect(await kindOf(cancelled)).toBe("free");
+
+    // The overview counts each kind; granted and full access are never counted as paying.
+    const ov = (await (await call("owner@example.com", "GET", "/overview")).json()) as { kinds: { paying: number; granted: number; full_access: number; free: number } };
+    expect(ov.kinds.paying).toBeGreaterThanOrEqual(1);
+    expect(ov.kinds.granted).toBeGreaterThanOrEqual(1);
+    expect(ov.kinds.full_access).toBeGreaterThanOrEqual(1);
+    expect(ov.kinds.paying + ov.kinds.granted + ov.kinds.full_access + ov.kinds.free).toBe(Number((await env.DB.prepare("SELECT count(*) AS n FROM org").first<{ n: number }>())!.n));
+
+    // Only staff who can see users; an unknown kind is refused.
+    expect((await call("owner@example.com", "GET", "/workspaces?kind=vip")).status).toBe(400);
+    expect((await call("owner@example.com", "POST", "/staff", { email: "kind-finance@example.com", role: "finance" })).status).toBe(201);
+    expect((await call("kind-finance@example.com", "GET", "/workspaces?kind=granted")).status).toBe(403);
+    expect((await call(null, "GET", "/workspaces?kind=granted")).status).not.toBe(200);
+  });
+});

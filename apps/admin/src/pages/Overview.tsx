@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Alert, Button, Info, Loading, Panel, PLAN_NAMES, useLoad } from "../ui";
+import { navigateTo } from "../App";
 
 type Day = { date: string; signups: number; written: number; published: number };
 type Data = {
@@ -7,6 +8,7 @@ type Data = {
   posts: { written30Days: number; published30Days: number; failed30Days: number };
   plans: { plan: string; workspaces: number }[];
   subscriptions: Record<string, number>;
+  kinds: { paying: number; granted: number; full_access: number; free: number };
   aiCostThisMonthUsd: number;
   waitlist: { waiting: number; invited: number; joined: number };
   daily: Day[];
@@ -61,7 +63,6 @@ export function Overview() {
   const [table, setTable] = useState(false);
   if (error) return <Alert>{error}</Alert>;
   if (!data) return <Loading />;
-  const active = (data.subscriptions.active ?? 0) + (data.subscriptions.past_due ?? 0);
   return (
     <>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -70,7 +71,7 @@ export function Overview() {
         <Stat label="Published" value={data.posts.published30Days} sub={`${data.posts.failed30Days} failed`} info="Posts published through the platforms' APIs or marked as posted by hand, in the last 30 days." />
         <Stat label="AI cost" value={`$${data.aiCostThisMonthUsd.toFixed(2)}`} sub="this month" info="Every AI call this month: posts, research, insights, images, video and voice (some are estimates; see AI costs)." />
         <Stat label="Waiting" value={data.waitlist.waiting} sub={`${data.waitlist.invited} invited · ${data.waitlist.joined} joined`} />
-        <Stat label="Paying" value={active} sub="active subscriptions" />
+        <Stat label="Paying" value={data.kinds.paying} sub={`${data.kinds.granted} granted · ${data.kinds.full_access} full access`} info="Paying: workspaces with a subscription still in force. Granted plans and full access are given by staff and bring no revenue." />
       </div>
       <Panel title="Last 14 days" actions={<Button variant="ghost" onClick={() => setTable((t) => !t)}>{table ? "Show charts" : "Show table"}</Button>}>
         {table ? (
@@ -103,6 +104,17 @@ export function Overview() {
             <Bars title="Published" days={data.daily} k="published" />
           </div>
         )}
+      </Panel>
+      <Panel title="Workspaces by access" info="Paying: a subscription still in force (active, late on a payment, or cancelled but inside its paid period). Granted plan: a plan above Free given by staff, with no paying subscription. Full access: given by staff. Open a group in Users.">
+        <ul className="m-0 flex list-none flex-wrap gap-2 p-0">
+          {([["paying", "Paying"], ["granted", "Granted plan"], ["full_access", "Full access"], ["free", "Free"]] as const).map(([k, label]) => (
+            <li key={k}>
+              <button type="button" onClick={() => navigateTo(`/users?kind=${k}`)} className="cursor-pointer rounded-lg border-0 bg-raised px-3 py-1.5 text-[13.5px] text-ink hover:bg-[var(--selected)]">
+                {label}: <strong>{data.kinds[k]}</strong>
+              </button>
+            </li>
+          ))}
+        </ul>
       </Panel>
       <Panel title="Workspaces by plan">
         <ul className="m-0 flex list-none flex-wrap gap-2 p-0">

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### For Showrium staff
+- **Paying, granted or free, at a glance:** every workspace in the admin app is labelled Paying (a subscription still in force), Granted plan (given by staff), Full access (given by staff) or Free. Overview counts each, so granted access is never mistaken for revenue, and Users lists each group with who gave the access, when and why.
+
 ### For contributors
 - **CI kept current:** GitHub Actions updated (checkout 7, setup-node 7, pnpm action 6), jobs pinned to Ubuntu 24.04 so a GitHub-side change can't break a release, and Dependabot proposes updates to `develop`.
 
