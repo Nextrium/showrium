@@ -21,7 +21,7 @@
     "@nextrium/policy": "workspace:*",
     "better-auth": "1.7.6",
     "heic-to": "1.5.2",
-    "hono": "4.13.9",
+    "hono": "4.13.11",
     "qrcode-generator": "^2.0.4",
     "react": "19.3.0",
     "react-dom": "19.3.0"
