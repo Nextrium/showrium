@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createDb } from "@nextrium/db";
-import { compose, importTokenKey, publishDraft, repeatedSentences, repeats, saveConnection, xNeedsTapToPost, type PublishDeps } from "@nextrium/core";
+import { compose, importTokenKey, placeLink, publishDraft, repeatedSentences, repeats, saveConnection, withoutDisclosure, xNeedsTapToPost, type PublishDeps } from "@nextrium/core";
 import { composeUserPrompt, fakeProvider } from "@nextrium/llm";
 
 // Owner feedback 2026-10-21: the same background line ("I've been in this ecosystem since 2021…") in
@@ -56,6 +56,24 @@ describe("the background line isn't repeated", () => {
     expect(prompt).toContain("- I've been in this ecosystem since 2021.");
     // If the writer still repeats it, the post is flagged (and automation won't approve it).
     expect(out.drafts[0]!.issues.find((i) => i.code === "too_similar")?.message).toContain("repeats a sentence");
+  });
+});
+
+describe("crafted input stays fast (CodeQL, 2026-10-21)", () => {
+  it("long runs of tabs or '#' never slow the clean-up", async () => {
+    const tabs = `Post.${"\t".repeat(200_000)}x`;
+    let t = Date.now();
+    expect(placeLink("linkedin", withoutDisclosure(tabs, "I'm an ambassador"), "https://example.com/a")).toContain("Post.");
+    expect(Date.now() - t).toBeLessThan(500);
+    const u = await user("pv-hashes@example.com", ["x"]);
+    const p = (await (await u.call("POST", "/passions", { name: "Hash" })).json()) as { id: string };
+    t = Date.now();
+    const res = await u.call("PATCH", `/passions/${p.id}`, { xHandle: `#${"#".repeat(70)}` });
+    expect(res.status).toBe(200); // cut at the first "#": nothing left, so no handle, and quickly
+    expect(Date.now() - t).toBeLessThan(2000);
+    // Real handles still come out right.
+    expect((await u.call("PATCH", `/passions/${p.id}`, { xHandle: "https://x.com/Cardano/status/1?s=20#top" })).status).toBe(200);
+    expect(((await (await u.call("GET", "/passions")).json()) as { data: { xHandle: string }[] }).data[0]!.xHandle).toBe("Cardano");
   });
 });
 

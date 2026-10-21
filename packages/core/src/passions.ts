@@ -71,7 +71,10 @@ function clean(input: { [K in keyof PassionInput]?: PassionInput[K] | undefined 
   }
   if (input.linkSource !== undefined) out.linkSource = input.linkSource;
   if (input.xHandle !== undefined) {
-    const handle = input.xHandle.trim().replace(/^https?:\/\/(www\.|mobile\.)?(x|twitter)\.com\//i, "").replace(/^@/, "").replace(/[/?#].*$/, "");
+    const bare = input.xHandle.trim().replace(/^https?:\/\/(www\.|mobile\.)?(x|twitter)\.com\//i, "").replace(/^@/, "");
+    // Cut at the first "/", "?" or "#" (a find, then a slice: linear time on any input).
+    const cut = bare.search(/[/?#]/);
+    const handle = cut < 0 ? bare : bare.slice(0, cut);
     if (handle && !/^[A-Za-z0-9_]{1,15}$/.test(handle)) throw new PassionError("invalid", "Use an X account like @cardano.");
     out.xHandle = handle;
   }
