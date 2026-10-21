@@ -53,7 +53,8 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
   };
   // The id of your post on X, from its link (x.com/<you>/status/<id>), so replies open already replying to it.
   const rootId = rootUrl.match(/^https:\/\/(?:x|twitter)\.com\/[^/]+\/status\/(\d{5,25})/i)?.[1] ?? null;
-  const replyUrl = (text: string) => `https://x.com/intent/post?text=${encodeURIComponent(text)}&in_reply_to=${rootId}`;
+  // rootId is digits only (from the pattern above); it's encoded anyway, so nothing typed can change the link.
+  const replyUrl = (text: string) => `https://x.com/intent/post?text=${encodeURIComponent(text)}&in_reply_to=${encodeURIComponent(rootId ?? "")}`;
   // A link (a quoted post is a link too) or a mention: always "Post it myself" on X.
   const xLink = draft.platform === "x" && (/https?:\/\//i.test(draft.text) || /(^|[^\w@.])@[A-Za-z0-9_]{1,15}(?![\w@])/.test(draft.text));
   const chosen = connectionId || accounts[0]?.id || "";

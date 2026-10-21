@@ -224,11 +224,14 @@ export function sourceLink(ctx: { kind: string; url: string | null }): string | 
   return ctx.url;
 }
 
+/** Spaces and tabs removed from line ends, one line at a time (linear time on any input, unlike a regex). */
+const trimLineEnds = (text: string) => text.split("\n").map((line) => line.trimEnd()).join("\n");
+
 /** The post with its link placed: at the end where links work; on LinkedIn, without the link but with a line pointing to the comment. */
 export function placeLink(platform: Platform, text: string, link: string | null): string {
   if (!link) return text;
   if (LINK_IN_COMMENT.includes(platform)) {
-    const without = text.split(link).join("").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    const without = trimLineEnds(text.split(link).join("")).replace(/\n{3,}/g, "\n\n").trim();
     return POINTER_RE.test(without) ? without : `${without}\n\n${POINTERS[without.length % POINTERS.length]}`;
   }
   if (!LINK_AT_END.includes(platform) || text.includes(link)) return text;
@@ -253,7 +256,7 @@ export function withoutDisclosure(text: string, disclosure: string): string {
   const d = disclosure.trim();
   if (!d) return text;
   const at = text.toLowerCase().lastIndexOf(d.toLowerCase());
-  return at < 0 ? text : `${text.slice(0, at)}${text.slice(at + d.length)}`.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return at < 0 ? text : trimLineEnds(`${text.slice(0, at)}${text.slice(at + d.length)}`).replace(/\n{3,}/g, "\n\n").trim();
 }
 
 export function withDisclosure(text: string, disclosure: string): string {
