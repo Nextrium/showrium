@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### For contributors
+- **CI kept current:** GitHub Actions updated (checkout 7, setup-node 7, pnpm action 6), jobs pinned to Ubuntu 24.04 so a GitHub-side change can't break a release, and Dependabot proposes updates to `develop`.
+
+### Security
+- Two older code-scanning findings fixed: the app's requests can only reach Showrium's own API, whatever is in the page address, and replies read from other servers have every HTML tag removed in one pass.
+
 ## v0.2.0: beta update (2026-10-21)
 
 Everything built and tested on preview since v0.1.0, for the invited testers.
