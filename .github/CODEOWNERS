@@ -1,2 +1,15 @@
-# Default owners for everything. Switch to a Nextrium team (e.g. @Nextrium/core) once one exists.
-* @Basrahtop
+# Code owners review every change. On develop and main, a merge needs a code owner's approval
+# (branch rules); the data, deploy and rule files below are what protects production data.
+* @Basrahtop @Lucifer-010
+
+# Database migrations and the guard that keeps them additive
+/packages/db/migrations/ @Basrahtop @Lucifer-010
+/scripts/migration-guard.mjs @Basrahtop @Lucifer-010
+/scripts/migration-guard.test.mjs @Basrahtop @Lucifer-010
+
+# CI, deploys, templates and this file
+/.github/ @Basrahtop @Lucifer-010
+
+# Cloudflare configuration (databases, routes, crons)
+/apps/web/wrangler.jsonc @Basrahtop @Lucifer-010
+/apps/admin/wrangler.jsonc @Basrahtop @Lucifer-010

@@ -8,8 +8,9 @@ Read the [contributor handbook](docs/HANDBOOK.md) first: what Showrium is, how w
 
 - **The licence and the CLA.** Showrium is licensed under AGPL-3.0, and Nextrium also sells it under a commercial licence ([LICENSING.md](LICENSING.md)). Every contributor signs the [Contributor License Agreement](CLA.md) once: a bot asks on your first pull request, and you reply with one sentence. You keep the copyright in your work.
 - **Security problems:** don't open a public issue. See [SECURITY.md](SECURITY.md).
-- **Tasks:** open an issue with the **Task** template (roadmap phase, team, what "done" means, how it will be tested). Bugs use the **Bug** template.
-- **Big changes:** agree the approach in the issue first. Small fixes can go straight to a pull request.
+- **Tasks** live in the [Nextrium contributors portal](https://contribute.nextrium.org/). Pick one up there.
+- **Findings** (a bug, gap or risk that isn't on the roadmap): open a GitHub issue with the **Finding** template.
+- **Big changes:** agree the approach with a code owner before starting.
 
 ## Set up
 
@@ -17,7 +18,7 @@ Follow "Run it locally" in the [README](README.md). You'll need Node 22 and pnpm
 
 ## Making a change
 
-1. **Branch:** fork the repo and create a branch from **`develop`**. `main` is the released version and only receives merges from `develop`.
+1. **Branch:** create a branch from **`develop`** (or fork the repo first). Direct pushes to `develop` and `main` are refused; every change arrives through a pull request, approved by a code owner.
 2. **Keep the change focused.** One fix or feature per pull request.
 3. **Follow the rules below.**
 4. **Run the checks:**

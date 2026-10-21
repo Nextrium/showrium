@@ -17,7 +17,7 @@ Showrium turns what people build, write, photograph or say into posts made for e
 - **Affordable:** plans from $1 to $10 a month, so every feature is designed to cost very little to run.
 - **Global, Africa included:** local payments and prices, and phones first.
 
-**Where it stands:** a private beta at [app.showrium.com](https://app.showrium.com). Work happens on `develop`, which runs at preview.showrium.com. The company roadmap tracks every phase to public launch; each task in this repository belongs to one of its items.
+**Where it stands:** a private beta at [app.showrium.com](https://app.showrium.com). Work happens on `develop`, which runs at preview.showrium.com. The company roadmap tracks every phase to public launch, and its tasks live in the [Nextrium contributors portal](https://contribute.nextrium.org/).
 
 ## 2. How the code is organised
 
@@ -38,14 +38,15 @@ Folders not listed here (`apps/docs`, `apps/gpu`, `apps/renderer`, `apps/worker`
 
 ## 3. How work flows
 
-1. **Roadmap item.** Every piece of work belongs to an item on the company roadmap, in one of its phases.
-2. **Task.** Open a GitHub issue with the **Task** template: the roadmap phase, the team, what "done" means, and how it will be tested. Big changes agree the approach in the issue first.
-3. **Branch.** Branch from `develop`. Never commit to `main`.
-4. **Build and check.** Write the change with its tests, then run the checks in section 5 until they all pass.
-5. **Pull request into `develop`.** Fill in the template. A maintainer reviews it.
-6. **Preview.** Merging into `develop` deploys to preview.showrium.com: migrations first, then the app, then a health check. Check the change there.
-7. **Release.** A release merges `develop` into `main` (a merge commit), which deploys to production. Releases need the roadmap gate for that phase to be met.
-8. **Close the loop.** Mark the roadmap item done, and add a line to `CHANGELOG.md` under "Unreleased" in plain words.
+1. **Task.** Pick up a task in the [contributors portal](https://contribute.nextrium.org/). Every task belongs to an item on the company roadmap. Big changes agree the approach with a code owner before work starts.
+2. **Branch.** Create a branch from `develop` (for example `feature/link-comment` or `fix/x-reads`). Nobody commits to `develop` or `main` directly: the branch rules refuse it.
+3. **Build and check.** Write the change with its tests, then run the checks in section 5 until they all pass.
+4. **Pull request into `develop`.** Fill in the template and link the task. A code owner must approve, and every required check must pass, before it can merge.
+5. **Preview.** Merging into `develop` deploys to preview.showrium.com: migrations first, then the app, then a health check. Check the change there.
+6. **Release.** A release is a pull request from `develop` into `main` (merged as a merge commit), which deploys to production after an approver confirms. Releases need the roadmap gate for that phase to be met.
+7. **Close the loop.** Mark the task done in the portal, and add a line to `CHANGELOG.md` under "Unreleased" in plain words.
+
+**Tasks and findings are different.** Planned work is a task in the contributors portal. Something found that isn't on the roadmap (a bug, a gap, a risk) is a **finding**: open a GitHub issue with the Finding template. A finding may become a task.
 
 ## 4. Standards
 
@@ -62,7 +63,7 @@ Folders not listed here (`apps/docs`, `apps/gpu`, `apps/renderer`, `apps/worker`
 
 ### Data
 
-- **Migrations only add.** Edit `packages/db/src/schema.ts`, run `pnpm --filter @nextrium/db generate`, and commit the generated migration. Never drop or rename a column that's in use: migrations run before the new version deploys.
+- **Migrations only add.** Edit `packages/db/src/schema.ts`, run `pnpm --filter @nextrium/db generate`, and commit the generated migration. CI enforces this (section 6): a migration that drops, deletes, renames or rebuilds anything, or an edit to a merged migration, can't merge.
 - **Inserts stay under D1's 100-variable limit.** Batch multi-row inserts with `chunkRows(rows, <values per row>)`, and update the number when you add columns.
 - **Nothing is deleted without the person asking.** Prefer reversible states (set aside, paused, discarded).
 
@@ -95,7 +96,7 @@ Run these from the repository root. All must pass. CI runs the same set and bloc
 | Build | `pnpm build` | The web and admin apps |
 | Browser tests | `pnpm --filter @nextrium/web e2e` | Sign-up, writing, publishing, billing and waitlist flows; no sideways scroll on phones |
 
-`pnpm check` runs the first three in one go. The browser tests start their own server on port 5174 with a separate database and fake AI. Install the test browser once with `pnpm --filter @nextrium/web exec playwright install chromium`.
+`pnpm check` runs the first three in one go. If you changed a migration, also run `node scripts/migration-guard.mjs origin/develop`. The browser tests start their own server on port 5174 with a separate database and fake AI. Install the test browser once with `pnpm --filter @nextrium/web exec playwright install chromium`.
 
 **What else each kind of change needs:**
 
@@ -108,14 +109,36 @@ Run these from the repository root. All must pass. CI runs the same set and bloc
 | Prompts or AI behaviour | Compare output on real examples before and after; note any change in cost |
 | Anything that costs money to run | Record the cost and state it in the pull request |
 | Anything security-related | A maintainer writes a security review before release |
+| A migration | The migration guard must pass. A backfill (`UPDATE`) needs the marker line `-- migration-guard: allow-backfill` and code-owner review |
 
-CI also runs a secret scan and CodeQL on every push. The `lint` step exists but no linter is configured yet.
+CI also runs the migration guard, a secret scan and CodeQL on every push. The `lint` step exists but no linter is configured yet.
 
-## 6. Definition of done
+## 6. How data is protected
+
+Preview and production both hold real accounts and real posts, and Showrium can't afford to lose data. These protections are enforced by GitHub and Cloudflare themselves, not by instructions, so they hold for people and AI agents alike.
+
+| Protection | What it enforces |
+|---|---|
+| Branch rules on `develop` and `main` | Changes arrive only through pull requests. No direct pushes, force-pushes or branch deletion. Each merge needs a code owner's approval and every required check passing. |
+| Code owners | Changes to migrations, the migration guard, CI and deploy files, and Cloudflare configuration need a code owner's approval. |
+| Migration guard (required check) | Fails on any destructive statement (`DROP`, `DELETE`, `TRUNCATE`, `RENAME`, `ALTER … DROP`, replace-inserts, table rebuilds) and on any edit to a merged migration. A data backfill (`UPDATE`) needs an explicit marker line and code-owner review. Deploys wait for it. |
+| Deploy keys in GitHub environments | Only the deploy pipeline holds a Cloudflare key. The `preview` environment releases it only to `develop`, and `production` only to `main`, after an approver confirms. No other branch, workflow or person gets it. |
+| No database access for contributors | Contributors and their tools never get Cloudflare accounts, keys or access to the preview or production databases. |
+| Backups | Cloudflare D1 can restore a database to any minute of the past 30 days (Workers Paid). A scheduled export keeps a copy apart from the database. |
+
+**Contributors need no Cloudflare account.** Local development runs on a local copy of the database with fake AI, which is also how every test runs. Code reaches preview only by being merged.
+
+**Testing real posting** from a laptop needs a contributor's own developer app and test account on that platform, never Nextrium's keys or accounts. Most work doesn't need it: tests use fake platform responses.
+
+**AI coding agents** follow the same rules as people, and the rules above don't depend on them reading this. An agent works only on a contributor's machine and branch, with no Cloudflare key, so it has nothing to damage on preview or production.
+
+**Emergencies.** Only the organisation admin can bypass the branch rules, and only through a pull request. GitHub records every bypass.
+
+## 7. Definition of done
 
 A task is done when:
 
-- [ ] It does what its issue says, and the roadmap item is updated.
+- [ ] It does what its task says, and the task is updated in the contributors portal.
 - [ ] All checks in section 5 pass, including the browser tests.
 - [ ] Tests cover what can go wrong, not only the happy path.
 - [ ] Any changed screen was checked in a browser.
@@ -123,12 +146,12 @@ A task is done when:
 - [ ] The changelog has a plain-words line under "Unreleased", and docs and the OpenAPI schemas are updated where they changed.
 - [ ] Nothing in it needs a secret to be shared, and it adds no cost that isn't recorded.
 
-## 7. Where things live
+## 8. Where things live
 
 | What | Where |
 |---|---|
-| Company roadmap and progress | The shared roadmap tracker (ask a maintainer for access) |
-| Tasks and bugs | GitHub issues in this repository |
+| Tasks and progress | The [Nextrium contributors portal](https://contribute.nextrium.org/) |
+| Findings (bugs, gaps, risks not on the roadmap) | GitHub issues in this repository, with the Finding template |
 | What changed | [CHANGELOG.md](../CHANGELOG.md) |
 | How to run the app | [README.md](../README.md) |
 | Pull-request basics | [CONTRIBUTING.md](../CONTRIBUTING.md) |
