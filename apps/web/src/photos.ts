@@ -62,7 +62,7 @@ export async function preparePhoto(file: File): Promise<File> {
     try {
       return new File([await drawToJpeg(await createImageBitmap(file))], jpegName(file.name), { type: "image/jpeg" });
     } catch {
-      return file; // The server still takes it if it's under 10 MB.
+      return file; // The server still takes it if it's 5 MB or less.
     }
   }
   return file;
