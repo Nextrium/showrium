@@ -274,7 +274,7 @@ function PostEditor({ draft, onChange }: { draft: Draft; onChange?: (d: Draft) =
 }
 
 function PostDetail({ id, onSelect }: { id: string; onSelect: (id: string) => void }) {
-  const { data, error } = useApi<{ draft: Draft }>(`/drafts/${id}`);
+  const { data, error } = useApi<{ draft: Draft }>(`/drafts/${encodeURIComponent(id)}`);
   const draft = data?.draft;
   const { data: siblings } = useApi<{ data: Draft[] }>(draft?.briefId ? `/drafts?briefId=${encodeURIComponent(draft.briefId)}` : null);
   if (error) return <DetailPanel><Alert>{error}</Alert></DetailPanel>;
@@ -352,7 +352,7 @@ export function DraftsPage() {
   const needs = params.get("needs") === "1";
   const selected = params.get("id");
   const wide = useWide();
-  const { data, error } = useApi<{ data: Draft[] }>(needs ? "/drafts?needsYou=true" : `/drafts?status=${status}`);
+  const { data, error } = useApi<{ data: Draft[] }>(needs ? "/drafts?needsYou=true" : `/drafts?status=${encodeURIComponent(status)}`);
   const { data: counts } = useApi<{ statuses: Record<string, number> }>("/analytics");
   const [query, setQuery] = useState("");
   const [platform, setPlatform] = useState("");
@@ -360,7 +360,7 @@ export function DraftsPage() {
   const [busy, setBusy] = useState(false);
 
   // Opened from a link to one post (?id=): show the tab that post is in.
-  const { data: linked } = useApi<{ draft: Draft }>(selected && !params.get("status") && !needs ? `/drafts/${selected}` : null, { live: false });
+  const { data: linked } = useApi<{ draft: Draft }>(selected && !params.get("status") && !needs ? `/drafts/${encodeURIComponent(selected)}` : null, { live: false });
   useEffect(() => {
     if (linked && linked.draft.status !== status) setParams({ status: linked.draft.status });
     // eslint-disable-next-line react-hooks/exhaustive-deps

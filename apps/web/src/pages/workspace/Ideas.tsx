@@ -30,7 +30,7 @@ function useWide() {
 }
 
 function IdeaDetail({ id, persona }: { id: string; persona: Persona | null }) {
-  const { data, error } = useApi<{ idea: Idea & { briefId: string | null } }>(`/ideas/${id}`);
+  const { data, error } = useApi<{ idea: Idea & { briefId: string | null } }>(`/ideas/${encodeURIComponent(id)}`);
   const idea = data?.idea;
   const { data: posts } = useApi<{ data: Draft[] }>(idea?.briefId ? `/drafts?briefId=${encodeURIComponent(idea.briefId)}` : null);
   const platforms = usePlatforms().filter((p) => persona?.platforms.includes(p.id));
@@ -188,7 +188,7 @@ export function IdeasPage() {
   const wide = useWide();
   const { data: personaData } = useApi<{ persona: Persona | null }>("/persona");
   const [showAll, setShowAll] = useState(false);
-  const { data, error } = useApi<{ data: Idea[]; counts: Counts }>(`/ideas?status=${status}${showAll && status === "new" ? "&all=true" : ""}`);
+  const { data, error } = useApi<{ data: Idea[]; counts: Counts }>(`/ideas?status=${encodeURIComponent(status)}${showAll && status === "new" ? "&all=true" : ""}`);
   const hidden = status === "new" && !showAll ? (data?.counts.hidden ?? 0) : 0;
   const [query, setQuery] = useState("");
 
