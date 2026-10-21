@@ -8,6 +8,9 @@ import { createDb, PAID_PLANS, STAFF_ROLES, type Db, type StaffRole } from "@nex
 import {
   abuseSignals,
   aiCostReport,
+  ACCESS_KINDS,
+  workspacesByKind,
+  type AccessKind,
   billingReport,
   PauseError,
   pauseWorkspace,
@@ -162,6 +165,14 @@ app.get("/api/users/:id", async (c) => {
   if (!u) return c.json(err("not_found", "No such account."), 404);
   await audit(c, "user.viewed", u.email);
   return c.json({ ...u, createdAt: u.createdAt.toISOString() });
+});
+
+// Workspaces of one kind: paying, granted a plan, full access or free (with who gave access, and why).
+app.get("/api/workspaces", async (c) => {
+  if (!allowed(c, "users")) return denied(c);
+  const kind = c.req.query("kind") ?? "granted";
+  if (!(ACCESS_KINDS as readonly string[]).includes(kind)) return c.json(err("invalid_request", "Choose paying, granted, full_access or free."), 400);
+  return c.json({ data: await workspacesByKind(c.get("db"), kind as AccessKind) });
 });
 
 app.put("/api/workspaces/:id/plan", async (c) => {

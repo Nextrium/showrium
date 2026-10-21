@@ -24,6 +24,12 @@ const PAGES: { path: string; label: string; permission: string; render: (me: Me)
   { path: "/activity", label: "Activity", permission: "audit", render: () => <Activity /> },
 ];
 
+/** Opens another admin page from a link inside a page (a ?query is kept for that page to read). */
+export function navigateTo(to: string) {
+  window.history.pushState(null, "", to);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 function usePath() {
   const [path, setPath] = useState(window.location.pathname);
   useEffect(() => {

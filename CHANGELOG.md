@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### For Showrium staff
+- **Paying, granted or free, at a glance:** every workspace in the admin app is labelled Paying (a subscription still in force), Granted plan (given by staff), Full access (given by staff) or Free. Overview counts each, so granted access is never mistaken for revenue, and Users lists each group with who gave the access, when and why.
+
 ## v0.2.0: beta update (2026-10-21)
 
 Everything built and tested on preview since v0.1.0, for the invited testers.

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { Me } from "../App";
-import { Alert, api, Button, date, Info, Panel, PLAN_NAMES, Tag, useLoad } from "../ui";
+import { Alert, api, Button, date, Info, KIND_NAMES, KIND_TONES, Panel, PLAN_NAMES, Tag, useLoad } from "../ui";
 
 type Found = { id: string; name: string; email: string; verified: boolean; createdAt: string };
 type Workspace = {
@@ -8,12 +8,69 @@ type Workspace = {
   name: string;
   plan: string;
   fullAccess: boolean;
+  kind: keyof typeof KIND_TONES;
   role: string;
   personal: boolean;
   usage: { postsGenerated: number; videosRendered: number; xApiPosts: number; researchRuns: number };
   subscription: { status: string; plan: string; provider: string } | null;
 };
 type Detail = Found & { twoFactor: boolean; workspaces: Workspace[] };
+type Kind = keyof typeof KIND_TONES;
+type KindRow = {
+  id: string;
+  name: string;
+  plan: string;
+  kind: Kind;
+  owner: string | null;
+  subscription: { status: string; provider: string } | null;
+  given: { by: string | null; note: string | null; at: string | null } | null;
+};
+const KINDS: Kind[] = ["paying", "granted", "full_access", "free"];
+const kindFromUrl = (): Kind => {
+  const k = new URLSearchParams(window.location.search).get("kind");
+  return (KINDS as string[]).includes(k ?? "") ? (k as Kind) : "granted";
+};
+
+/** One group of workspaces (paying, granted, full access or free), with who gave access and why. */
+function ByKind({ onOwner }: { onOwner: (email: string) => void }) {
+  const [kind, setKind] = useState<Kind>(kindFromUrl);
+  const list = useLoad<{ data: KindRow[] }>(`/workspaces?kind=${kind}`);
+  return (
+    <Panel title="Workspaces by access" info="Paying: a subscription still in force. Granted plan: a plan above Free given by staff, with no paying subscription. Full access: given by staff. Granted plans and full access bring no revenue.">
+      <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Kind of workspace">
+        {KINDS.map((k) => (
+          <button key={k} type="button" role="radio" aria-checked={kind === k} onClick={() => setKind(k)} className={`cursor-pointer rounded-lg border px-3 py-1.5 text-[13px] ${kind === k ? "border-transparent bg-[var(--selected)] font-semibold text-ink" : "border-line bg-transparent text-ink-2 hover:bg-raised"}`}>
+            {KIND_NAMES[k]}
+          </button>
+        ))}
+      </div>
+      {list.error && <Alert>{list.error}</Alert>}
+      {list.data && list.data.data.length === 0 && <p className="m-0 text-[13.5px] text-muted">None.</p>}
+      <ul className="m-0 flex list-none flex-col p-0" aria-label={KIND_NAMES[kind]}>
+        {list.data?.data.map((w) => (
+          <li key={w.id} className="flex flex-col gap-1 border-b border-line py-2 last:border-b-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <strong className="text-[14px] [overflow-wrap:anywhere]">{w.name}</strong>
+              <Tag tone={KIND_TONES[w.kind]}>{KIND_NAMES[w.kind]}</Tag>
+              {w.kind !== "full_access" && <Tag>{PLAN_NAMES[w.plan] ?? w.plan}</Tag>}
+              {w.subscription && <Tag tone={w.subscription.status === "active" ? "ok" : "warn"}>{`${w.subscription.provider}: ${w.subscription.status}`}</Tag>}
+            </div>
+            {w.owner && (
+              <button type="button" onClick={() => onOwner(w.owner!)} className="cursor-pointer self-start border-0 bg-transparent p-0 text-left text-[13px] text-[var(--accent-ink)] underline [overflow-wrap:anywhere]">
+                {w.owner}
+              </button>
+            )}
+            {w.given && (
+              <span className="text-[12.5px] text-muted [overflow-wrap:anywhere]">
+                {[w.given.by && `By ${w.given.by}`, w.given.at && date(w.given.at), w.given.note].filter(Boolean).join(" · ") || "No reason recorded"}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Panel>
+  );
+}
 
 const PLANS = ["free", "lite", "starter", "creator", "pro", "team", "team_seats"];
 
@@ -40,7 +97,8 @@ function WorkspaceRow({ w, canManage, onChanged }: { w: Workspace; canManage: bo
       <div className="flex flex-wrap items-center gap-2">
         <strong className="text-[14px]">{w.name}</strong>
         <Tag>{w.role}</Tag>
-        <Tag tone={w.fullAccess ? "info" : "neutral"}>{w.fullAccess ? "Full access" : PLAN_NAMES[w.plan] ?? w.plan}</Tag>
+        <Tag tone={KIND_TONES[w.kind]}>{KIND_NAMES[w.kind]}</Tag>
+        {!w.fullAccess && <Tag>{PLAN_NAMES[w.plan] ?? w.plan}</Tag>}
         {w.subscription && <Tag tone={w.subscription.status === "active" ? "ok" : "warn"}>{`${w.subscription.provider}: ${w.subscription.status}`}</Tag>}
       </div>
       <span className="text-[12.5px] text-muted">
@@ -82,8 +140,16 @@ export function Users({ me }: { me: Me }) {
     setOpenId(null);
     setQuery(q.trim());
   };
+  // From the list by access: look up the owner's account.
+  const findOwner = (email: string) => {
+    setQ(email);
+    setOpenId(null);
+    setQuery(email);
+  };
 
   return (
+    <div className="flex flex-col gap-4">
+    <ByKind onOwner={findOwner} />
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
       <Panel title="Find an account">
         <form onSubmit={search} className="flex gap-2" role="search">
@@ -136,6 +202,7 @@ export function Users({ me }: { me: Me }) {
           )}
         </Panel>
       )}
+    </div>
     </div>
   );
 }

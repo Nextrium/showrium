@@ -111,4 +111,7 @@ export const Loading = () => (
 );
 
 export const date = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "–");
+/** What a workspace is: paying, given a plan by staff, given full access by staff, or free. */
+export const KIND_NAMES: Record<string, string> = { paying: "Paying", granted: "Granted plan", full_access: "Full access", free: "Free" };
+export const KIND_TONES = { paying: "ok", granted: "warn", full_access: "info", free: "neutral" } as const;
 export const PLAN_NAMES: Record<string, string> = { free: "Free", lite: "Lite", starter: "Starter", creator: "Creator", pro: "Pro", team: "Team (shared)", team_seats: "Team (per member)", staff: "Full access" };

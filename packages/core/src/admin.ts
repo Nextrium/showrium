@@ -1,7 +1,7 @@
 // The admin app's data: totals for the overview, finding accounts, and the admin action log.
 // Totals only on the overview (no one's content); account details show settings and usage, not posts.
 import { and, desc, eq, gte, inArray, like, sql } from "drizzle-orm";
-import { adminAudit, aiUsage, brief, draft, org, staffMember, subscription, twoFactor, user, type Db, type StaffRole } from "@nextrium/db";
+import { adminAudit, aiUsage, auditEvent, brief, draft, membership, org, staffMember, subscription, twoFactor, user, type Db, type StaffRole } from "@nextrium/db";
 import { isPlatformAdmin } from "./access.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
@@ -29,6 +29,70 @@ export async function listAdminAudit(db: Db, limit = 200) {
 const DAY = 86_400_000;
 const day = (d: Date) => d.toISOString().slice(0, 10);
 
+// --- Who pays, and who was given access ----------------------------------------------------------
+
+export const ACCESS_KINDS = ["paying", "granted", "full_access", "free"] as const;
+export type AccessKind = (typeof ACCESS_KINDS)[number];
+
+/** A subscription still being paid for: active, late on a payment, or cancelled but inside its paid period. */
+const PAID_STATUSES = ["active", "past_due", "cancelled"];
+
+/**
+ * What a workspace is, for revenue and support: full access given by staff; paying (a subscription
+ * still in force); granted (a plan above Free with no paying subscription, given by staff); or free.
+ * A lapsed subscription puts the plan back to Free (billing.ts), so it never reads as granted.
+ */
+export function accessKindOf(w: { plan: string; fullAccess: boolean }, sub: { status: string } | null | undefined): AccessKind {
+  if (w.fullAccess) return "full_access";
+  if (sub && PAID_STATUSES.includes(sub.status)) return "paying";
+  return w.plan === "free" ? "free" : "granted";
+}
+
+/** Every workspace with its kind (the admin app's numbers stay small: one row per workspace). */
+async function workspaceKinds(db: Db) {
+  const rows = await db
+    .select({ id: org.id, name: org.name, plan: org.plan, fullAccess: org.fullAccess, fullAccessNote: org.fullAccessNote, fullAccessBy: org.fullAccessBy, fullAccessAt: org.fullAccessAt, status: subscription.status, provider: subscription.provider, createdAt: org.createdAt })
+    .from(org)
+    .leftJoin(subscription, eq(subscription.orgId, org.id));
+  return rows.map((r) => ({ ...r, kind: accessKindOf(r, r.status ? { status: r.status } : null) }));
+}
+
+/**
+ * The workspaces of one kind, newest first (at most 200), with their owner and, for access given by
+ * staff, who gave it, when and why. For revenue reviews and support; no content.
+ */
+export async function workspacesByKind(db: Db, kind: AccessKind) {
+  const rows = (await workspaceKinds(db)).filter((r) => r.kind === kind).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 200);
+  const ids = rows.map((r) => r.id);
+  const owners = new Map<string, string>();
+  const grants = new Map<string, { reason: string; at: Date }>();
+  for (const chunk of chunkRows(ids, 1)) {
+    for (const o of await db.select({ orgId: membership.orgId, email: user.email }).from(membership).innerJoin(user, eq(user.id, membership.userId)).where(and(inArray(membership.orgId, chunk), eq(membership.role, "owner")))) {
+      if (!owners.has(o.orgId)) owners.set(o.orgId, o.email);
+    }
+    if (kind === "granted") {
+      // The latest plan change says who granted it and why ("admin (email): note").
+      for (const e of await db.select({ orgId: auditEvent.orgId, meta: auditEvent.meta, at: auditEvent.createdAt }).from(auditEvent).where(and(inArray(auditEvent.orgId, chunk), eq(auditEvent.action, "plan.changed"))).orderBy(desc(auditEvent.createdAt))) {
+        if (e.orgId && !grants.has(e.orgId)) grants.set(e.orgId, { reason: String((e.meta as { reason?: unknown } | null)?.reason ?? ""), at: e.at });
+      }
+    }
+  }
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    plan: r.plan,
+    kind: r.kind,
+    owner: owners.get(r.id) ?? null,
+    subscription: r.status ? { status: r.status, provider: r.provider } : null,
+    given:
+      r.kind === "full_access"
+        ? { by: r.fullAccessBy?.replace(/^staff:/, "") ?? null, note: r.fullAccessNote, at: r.fullAccessAt?.toISOString() ?? null }
+        : r.kind === "granted"
+          ? { by: null, note: grants.get(r.id)?.reason ?? null, at: grants.get(r.id)?.at.toISOString() ?? null }
+          : null,
+  }));
+}
+
 /** The overview: totals and the last 14 days, from counts only. */
 export async function adminOverview(db: Db, now = new Date()) {
   const since30 = new Date(now.getTime() - 30 * DAY);
@@ -49,6 +113,8 @@ export async function adminOverview(db: Db, now = new Date()) {
   // Every AI call (posts, research, insights, images, video, voice), not just written posts.
   const [cost] = await db.select({ micro: sql<number>`coalesce(sum(${aiUsage.costMicroUsd}), 0)` }).from(aiUsage).where(gte(aiUsage.createdAt, monthStart));
   const subs = await db.select({ status: subscription.status, n }).from(subscription).groupBy(subscription.status);
+  const kinds = Object.fromEntries(ACCESS_KINDS.map((k) => [k, 0])) as Record<AccessKind, number>;
+  for (const w of await workspaceKinds(db)) kinds[w.kind]++;
   const waitlist = await listWaitlist(db, now.getTime());
 
   // Daily series (UTC days): sign-ups, posts written, posts published.
@@ -67,6 +133,8 @@ export async function adminOverview(db: Db, now = new Date()) {
     posts: { written30Days: posts30, published30Days: published30, failed30Days: failed30 },
     plans: plans.map((p) => ({ plan: p.fullAccess ? "staff" : p.plan, workspaces: Number(p.n) })),
     subscriptions: Object.fromEntries(subs.map((s) => [s.status, Number(s.n)])),
+    /** Workspaces by kind: paying, granted a plan, full access, free. Granted and full access are never revenue. */
+    kinds,
     aiCostThisMonthUsd: Math.round(Number(cost?.micro ?? 0)) / 1_000_000,
     waitlist: {
       waiting: waitlist.filter((w) => w.status === "waiting").length,
@@ -103,6 +171,6 @@ export async function userDetail(db: Db, userId: string) {
   return {
     ...u,
     twoFactor: Boolean(tf),
-    workspaces: workspaces.map((w, i) => ({ id: w.id, name: w.name, plan: w.plan, fullAccess: w.fullAccess, role: w.role, personal: Boolean(w.personal), usage: usage[i]!, subscription: subs.get(w.id) ?? null })),
+    workspaces: workspaces.map((w, i) => ({ id: w.id, name: w.name, plan: w.plan, fullAccess: w.fullAccess, kind: accessKindOf(w, subs.get(w.id)), role: w.role, personal: Boolean(w.personal), usage: usage[i]!, subscription: subs.get(w.id) ?? null })),
   };
 }
