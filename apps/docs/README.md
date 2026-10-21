@@ -1,5 +1,5 @@
 # apps/docs
 
-Public API and product documentation.
+Reserved for later work; there is no code here yet.
 
-Design docs are internal (Nextrium/internal-docs, `projects/showrium/`).
+Planned: public API and product documentation.

@@ -24,9 +24,10 @@ It writes in your voice, adds images and short videos, and publishes or schedule
 
 ## What it does
 
-- **Material in:** typed notes, links, voice notes, photos and documents, GitHub repositories, blogs and feeds, YouTube channels and podcasts, or a request to the AI (with optional web research that lists its sources).
+- **Material in:** typed notes, links, voice notes, photos and documents, GitHub repositories, blogs and feeds, YouTube channels and podcasts, X accounts (through the X API), or a request to the AI (with optional web research that lists its sources).
+- **Passions:** subjects you follow or take part in (a project, an ecosystem, a cause), each with its own sources. Posts are written as your view, and weak ideas are set aside automatically.
 - **Posts out:** one post per platform, in the right length and format. Threads where they fit. Up to 4 images, cropped per platform. Short explainer videos.
-- **Publishing:** straight to LinkedIn, X, Bluesky and Mastodon. Anywhere else, "Post it myself" (text and images ready to paste). Scheduling, and automation you switch on per platform.
+- **Publishing:** straight to LinkedIn, X, Bluesky and Mastodon. Anywhere else, "Post it myself" (text and images ready to paste). On LinkedIn the source link goes in the first comment; X posts with a link, quote or mention are always posted by you. Scheduling, and automation you switch on per platform.
 - **For teams and developers:** workspaces and roles, an audit log, plans and credits, a REST API, a TypeScript SDK and an MCP server.
 
 Nothing posts without your approval unless you switch automation on. The AI never adds facts that aren't in your material, your request, or a source it found.
@@ -50,7 +51,7 @@ tools/cost-benchmark     measures AI cost per post
 The other folders under `apps/` and `packages/` are reserved for later work and are empty for now.
 
 **Admin app.** `apps/admin` is a separate Worker on the same database, for Showrium staff only:
-- overview, waitlist invites, accounts and plans, staff, and an activity log
+- overview, waitlist and invite links, users and plans, AI and X costs, publishing health, billing, abuse signals with a reversible pause, staff, and an activity log
 - Cloudflare Access signs staff in, and the Worker checks Access's signed token and the person's staff role on every request
 - it offers no destructive operations
 - locally, run `pnpm --filter @nextrium/admin dev` (port 5175) with `ADMIN_DEV_EMAIL` and `PLATFORM_ADMIN_EMAILS` set to the same address in `apps/admin/.dev.vars`
@@ -98,10 +99,11 @@ Then open:
 ## Tests
 
 ```bash
-pnpm typecheck
-pnpm test                                    # server tests, run inside the real Workers runtime
+pnpm check                                   # types, server tests (inside the real Workers runtime) and build
 pnpm --filter @nextrium/web e2e              # browser tests (Playwright) of the main flows
 ```
+
+The [contributor handbook](docs/HANDBOOK.md) lists every check a change needs before it's pushed.
 
 Before the first browser test run, install the browser once with `pnpm --filter @nextrium/web exec playwright install chromium`. The browser tests start their own server on port 5174, with a separate local database, the fake AI and random settings, so they never touch your data or cost money.
 
@@ -117,12 +119,12 @@ Changes may only **add** tables and columns. Migrations run before each deploy, 
 
 - **`develop`:** where work happens. It deploys to the preview site.
 - **`main`:** the release. It deploys to production and only receives merges from `develop`.
-- **CI runs:** lint, typecheck, tests, build, browser tests, CodeQL and a secret scan.
+- **CI runs:** typecheck, tests, build, browser tests, CodeQL and a secret scan (a lint step is in place, with no linter configured yet).
 - **Deploys:** migrations, then the Worker, then a health check. A failing check stops the deploy.
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Every contributor signs the [Contributor License Agreement](CLA.md) once, by replying to a bot on their first pull request.
+Contributions are welcome. Start with the [contributor handbook](docs/HANDBOOK.md), then [CONTRIBUTING.md](CONTRIBUTING.md). Every contributor signs the [Contributor License Agreement](CLA.md) once, by replying to a bot on their first pull request.
 
 **Found a security problem?** Please report it privately ([SECURITY.md](SECURITY.md)).
 

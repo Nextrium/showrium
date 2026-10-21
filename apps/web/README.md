@@ -22,16 +22,24 @@ Email and password sign-in is on locally, on preview and in production. GitHub a
 
 ## Deploying
 
-Merging to `main` deploys automatically (see `.github/workflows/ci.yml`): D1 migrations are applied first, then the Worker.
+CI deploys automatically (see `.github/workflows/ci.yml`), after all checks pass:
+- **`develop`** deploys to preview (preview.showrium.com, its own Worker, database `showrium-db-preview` and settings).
+- **`main`** deploys to production (app.showrium.com, database `showrium-db`).
 
-To deploy by hand, with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set:
+Each deploy applies the D1 migrations first, then deploys the Worker, then checks `/api/v1/health`. The admin app deploys in the same run.
 
-```bash
-pnpm exec wrangler d1 migrations apply showrium-db --remote --env production
-CLOUDFLARE_ENV=production pnpm exec vite build && pnpm exec wrangler deploy
-```
+## Settings
 
-Production secrets are set with `wrangler secret put <NAME> --env production`:
-- `BETTER_AUTH_SECRET`
-- optional: `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
-- optional: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
+Secrets are set per environment with `wrangler secret put <NAME> --env preview|production`. Never commit them, and never paste them into issues or chat.
+
+| Group | Names |
+|---|---|
+| Required | `BETTER_AUTH_SECRET`, `TOKEN_ENCRYPTION_KEY` |
+| AI | `OPENROUTER_API_KEY` (writing and research); `LLM_MODE=fake` for local work |
+| Sign-in | `GITHUB_CLIENT_ID`/`_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET` |
+| Platforms | `X_CLIENT_ID`/`_SECRET`, `LINKEDIN_CLIENT_ID`/`_SECRET`, `TIKTOK_CLIENT_KEY`/`_SECRET` (plus the `TIKTOK_SANDBOX_*` pair and `TIKTOK_USE_SANDBOX`) |
+| Email | `BREVO_API_KEY`, `EMAIL_FROM` |
+| Billing | `PAYSTACK_SECRET_KEY`, `PAYSTACK_PLANS`, `PAYSTACK_NGN_PER_USD`, `LEMONSQUEEZY_API_KEY`, `LEMONSQUEEZY_STORE_ID`, `LEMONSQUEEZY_VARIANTS`, `LEMONSQUEEZY_WEBHOOK_SECRET`, `BILLING_SIGNING_SECRET` |
+| Optional | `BROWSER_RENDERING_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (page screenshots), `GITHUB_TOKEN` (higher GitHub limits), `HEYGEN_API_KEY`, `VEO_API_KEY` |
+| Access | `SIGNUP_MODE`, `BETA_ALLOWED_EMAILS`, `AUTH_PASSWORD_ENABLED`, `PLATFORM_ADMIN_EMAILS` |
+| Emergency | `PUBLISHING_PAUSED=true` stops all posting through platform APIs |

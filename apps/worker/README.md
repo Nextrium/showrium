@@ -1,5 +1,5 @@
 # apps/worker
 
-Durable workflow functions: ingest, compose, render, publish, listen.
+Reserved for later work; there is no code here yet.
 
-Design docs are internal (Nextrium/internal-docs, `projects/showrium/`).
+Planned: durable workflow functions: ingest, compose, render, publish, listen.

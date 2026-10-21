@@ -1,0 +1,70 @@
+name: Task
+description: A piece of work from the company roadmap.
+title: "[Task] "
+labels: ["task"]
+body:
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Roadmap phase
+      options:
+        - "1 · Release v0.2"
+        - "2 · Open beta"
+        - "3 · Launch prep"
+        - "4 · Public launch"
+        - "5 · First 90 days"
+        - "6 · Scale"
+    validations:
+      required: true
+  - type: input
+    id: item
+    attributes:
+      label: Roadmap item
+      description: The item's title as it appears on the roadmap.
+    validations:
+      required: true
+  - type: dropdown
+    id: team
+    attributes:
+      label: Team
+      options:
+        - Leadership
+        - Engineering
+        - Mobile
+        - AI and quality
+        - Platforms
+        - Security
+        - Growth
+        - Partnerships
+        - Support and ops
+        - Finance and legal
+        - Design
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What and why
+      description: What changes for people using Showrium, in a few lines.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Checkable outcomes. Each one can be tested.
+      placeholder: "- A person can …\n- Another workspace can't …"
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: How it will be tested
+      description: The tests to add, including what can go wrong, and any browser check (see the handbook, section 5).
+    validations:
+      required: true
+  - type: textarea
+    id: cost
+    attributes:
+      label: Cost to run
+      description: AI or paid API calls this adds, with an estimate. "None" if none.

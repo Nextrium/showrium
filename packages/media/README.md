@@ -1,5 +1,5 @@
 # packages/media
 
-Provider abstraction for image, video and TTS vendors.
+Reserved for later work; there is no code here yet.
 
-Design docs are internal (Nextrium/internal-docs, `projects/showrium/`).
+Planned: provider abstraction for image, video and TTS vendors.

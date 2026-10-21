@@ -1,0 +1,43 @@
+name: Bug
+description: Something in Showrium doesn't work as it should.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Security problems go to SECURITY.md, never in a public issue. Don't paste tokens, passwords or personal data."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Go to …\n2. Click …"
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - app.showrium.com (production)
+        - preview.showrium.com
+        - Local development
+        - API or SDK
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Browser and device
+      placeholder: "Chrome on Android, Safari on iPhone, …"

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/Nextrium/showrium/blob/develop/SECURITY.md
+    about: Please report security problems privately, never in a public issue.
+  - name: Contributor handbook
+    url: https://github.com/Nextrium/showrium/blob/develop/docs/HANDBOOK.md
+    about: What Showrium is, how work flows, and the checks every change passes.
