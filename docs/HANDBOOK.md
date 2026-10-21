@@ -165,6 +165,8 @@ A task is done when:
 | What changed | [CHANGELOG.md](../CHANGELOG.md) |
 | How to run the app | [README.md](../README.md) |
 | Pull-request basics | [CONTRIBUTING.md](../CONTRIBUTING.md) |
+| Questions about a task or the code | The task's page in the [contributors portal](https://contribute.nextrium.org/) |
+| How we treat each other | [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) |
 | Security reports | [SECURITY.md](../SECURITY.md) |
 | Licences | [LICENSING.md](../LICENSING.md), [CLA.md](../CLA.md), [TRADEMARKS.md](../TRADEMARKS.md) |
 | Internal plans, reviews and runbooks | Nextrium's private documentation, for maintainers |

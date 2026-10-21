@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.2.0: beta update (2026-10-21)
+
+Everything built and tested on preview since v0.1.0, for the invited testers.
+
 ### For people
 - **Follow X accounts properly:** paste an X account (x.com/name or @name) as a source, and its new posts are read through X's API with your connected X account. Showrium no longer reads X, LinkedIn, Instagram, Facebook, TikTok or Threads pages (their terms don't allow it); Bluesky profiles use their official feed. X profiles you added as pages switch over on their next check.
 - **Only a passion's strong ideas are kept:** a passion's ideas scoring under 55 are set aside (shown under "Not now" with the reason), so nothing is written from weak ones. Bring one back to write from it. Your own material isn't affected.
@@ -46,6 +50,12 @@
 - **Abuse:** workspaces worth a look, and a reversible **Pause/Resume** (owners only, with a reason, logged). A paused workspace keeps everything; its posting and automation simply wait.
 - **Invite links in the admin app:** create a one-off link for someone who isn't on the waitlist (shown once), see each link's status, and revoke unused ones. Every action is logged.
 - The old staff section in the product's Settings is gone; waitlist, invites and full access are in the admin app.
+
+### For contributors
+- **Contributor handbook** (`docs/HANDBOOK.md`): what Showrium is, how work flows from a task to a release, the standards, the checks every change passes, and how data is protected.
+- **Tasks** live in the [Nextrium contributors portal](https://contribute.nextrium.org/). GitHub issues are for findings (bugs, gaps, risks not on the roadmap), with a Finding template.
+- **Data can't be lost by a merge:** a required migration guard refuses destructive or edited migrations; `develop` and `main` accept changes only through approved pull requests; deploy keys are held only by the deploy pipeline.
+- **`pnpm check`** runs types, server tests and build in one go. A [code of conduct](CODE_OF_CONDUCT.md) applies everywhere.
 
 ## v0.1.0: private beta (2026-10-15)
 

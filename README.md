@@ -124,7 +124,7 @@ Changes may only **add** tables and columns. Migrations run before each deploy, 
 
 ## Contributing
 
-Contributions are welcome. Start with the [contributor handbook](docs/HANDBOOK.md), then [CONTRIBUTING.md](CONTRIBUTING.md). Every contributor signs the [Contributor License Agreement](CLA.md) once, by replying to a bot on their first pull request.
+Contributions are welcome. Start with the [contributor handbook](docs/HANDBOOK.md), then [CONTRIBUTING.md](CONTRIBUTING.md). Tasks live in the [Nextrium contributors portal](https://contribute.nextrium.org/), and everyone follows the [code of conduct](CODE_OF_CONDUCT.md). Every contributor signs the [Contributor License Agreement](CLA.md) once, by replying to a bot on their first pull request.
 
 **Found a security problem?** Please report it privately ([SECURITY.md](SECURITY.md)).
 

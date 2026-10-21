@@ -51,4 +51,4 @@ Short and clear: say what changed and why, in plain words.
 
 ## Code of conduct
 
-Be kind and constructive. Harassment or abuse of any kind isn't tolerated. Report problems to legal@showrium.com.
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md). Report problems to legal@showrium.com.
