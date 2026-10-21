@@ -17,13 +17,14 @@ import {
   type Platform,
 } from "@nextrium/db";
 import { generateStructured, insightSystemPrompt, insightUserPrompt, InsightSchema, type Provider } from "@nextrium/llm";
-import { blueskyEngagement, mastodonEngagement, type FetchLike, type PostEngagement } from "@nextrium/platforms";
+import { blueskyEngagement, mastodonEngagement, PlatformError, x, type FetchLike, type PostEngagement } from "@nextrium/platforms";
 import { addContextItems, backfillPublishedAt, compose, getOrgPlan, getPersona, markSourceChecked } from "./content.js";
-import { ageOf, baseScore, effectiveScore, IDEA_SHOW_MIN, isStale, sameStory, type IdeaOrigin } from "./idea-score.js";
+import { ageOf, baseScore, effectiveScore, IDEA_PASSION_KEEP_MIN, IDEA_SHOW_MIN, isStale, sameStory, type IdeaOrigin } from "./idea-score.js";
 import { PLAN_FEATURES } from "./plans.js";
 import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
-import { ingestFeed, ingestGithubActivity, ingestWatchedPage, resolveBlogSource } from "./ingest.js";
+import { blockedSocialMessage, ingestFeed, ingestGithubActivity, ingestWatchedPage, resolveBlogSource, socialSource, type IngestedItem } from "./ingest.js";
+import { recordXReads, type XReader } from "./publishing.js";
 import { sourceIsLive } from "./passions.js";
 import { recordAiUsage } from "./ai-usage.js";
 
@@ -41,40 +42,52 @@ export function scoreIdea(kind: string, title: string, label?: string, ctx: { bo
 /**
  * Turns new material into ideas. The same story from several sources (or twice from one) becomes one
  * idea: the existing one gets +10 instead, since more sources covering it means it matters more.
+ * A passion's idea scoring under 55 (with freshness) is set aside straight away; it's kept, so the same
+ * story from another source can still lift it back, and the person can bring it back.
  */
 export async function createIdeas(
   db: Db,
   orgId: string,
   kind: string,
-  items: { id: string; title: string; body?: string }[],
+  items: { id: string; title: string; body?: string; publishedAt?: Date | null }[],
   label?: string,
-  ctx: { keywords?: string[]; passionName?: string | null } = {},
+  ctx: { keywords?: string[]; passionName?: string | null; now?: Date } = {},
 ) {
   if (!items.length) return 0;
+  const now = ctx.now ?? new Date();
   const recent = await db
-    .select({ id: idea.id, score: idea.score, title: contextItem.title })
+    .select({ id: idea.id, score: idea.score, title: contextItem.title, status: idea.status, dismissedReason: idea.dismissedReason, publishedAt: contextItem.publishedAt, createdAt: idea.createdAt })
     .from(idea)
     .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
     .where(and(eq(idea.orgId, orgId), gte(idea.createdAt, new Date(Date.now() - 7 * DAY))))
     .orderBy(desc(idea.createdAt))
     .limit(200);
-  const rows: { id: string; orgId: string; contextItemId: string; reason: string; score: number; scoreVersion: number }[] = [];
+  const rows: { id: string; orgId: string; contextItemId: string; reason: string; score: number; scoreVersion: number; status: "new" | "dismissed"; dismissedReason: "low_score" | null }[] = [];
   const bumped = new Set<string>();
+  const { keywords, passionName } = ctx;
   for (const i of items) {
-    const { score, reason } = scoreIdea(kind, i.title, label, { ...(i.body !== undefined ? { body: i.body } : {}), ...ctx });
+    const { score, reason } = scoreIdea(kind, i.title, label, { ...(i.body !== undefined ? { body: i.body } : {}), ...(keywords ? { keywords } : {}), passionName: passionName ?? null });
     const same = recent.find((r) => sameStory(r.title, i.title));
     if (same) {
       if (!bumped.has(same.id)) {
         bumped.add(same.id);
-        await db.update(idea).set({ score: Math.min(100, same.score + 10) }).where(and(eq(idea.orgId, orgId), eq(idea.id, same.id)));
+        const lifted = Math.min(100, same.score + 10);
+        // Set aside for a low score, and now worth keeping: it comes back.
+        const back = same.status === "dismissed" && same.dismissedReason === "low_score" && effectiveScore(lifted, ageOf(same.publishedAt, same.createdAt, now)) >= IDEA_PASSION_KEEP_MIN;
+        await db
+          .update(idea)
+          .set({ score: lifted, ...(back ? { status: "new" as const, dismissedReason: null } : {}) })
+          .where(and(eq(idea.orgId, orgId), eq(idea.id, same.id)));
       }
       continue;
     }
     if (rows.some((r) => sameStory(r.reason, i.title))) continue;
-    rows.push({ id: newId("idea"), orgId, contextItemId: i.id, reason, score, scoreVersion: 2 });
+    const weak = Boolean(passionName) && effectiveScore(score, ageOf(i.publishedAt, now, now)) < IDEA_PASSION_KEEP_MIN;
+    rows.push({ id: newId("idea"), orgId, contextItemId: i.id, reason, score, scoreVersion: 2, status: weak ? "dismissed" : "new", dismissedReason: weak ? "low_score" : null });
   }
   let added = 0;
-  for (const part of chunkRows(rows, 7)) {
+  // 9 bound values per row (id, org, item, reason, score, status, version, reason set aside, kept).
+  for (const part of chunkRows(rows, 9)) {
     added += (await db.insert(idea).values(part).onConflictDoNothing({ target: [idea.orgId, idea.contextItemId] }).returning({ id: idea.id })).length;
   }
   return added;
@@ -129,11 +142,26 @@ function sourceLabel(key: string, kind: string): string | undefined {
 export async function syncSource(
   db: Db,
   src: typeof source.$inferSelect,
-  opts: { fetch?: FetchLike | undefined; now?: Date } = {},
+  opts: { fetch?: FetchLike | undefined; now?: Date; xReader?: XReader | undefined } = {},
 ): Promise<{ added: number; ideas: number; error: string | null }> {
   try {
+    // A watched page on a social site: an X account moves to X's API; the others aren't read (their terms).
+    if (src.kind === "page") {
+      const social = socialSource(src.key);
+      if (social && "kind" in social && social.kind === "x_account") {
+        try {
+          await db.update(source).set({ kind: "x_account", key: social.handle, seen: [] }).where(eq(source.id, src.id));
+        } catch {
+          throw new Error(`@${social.handle} is already followed as an X account. Remove this one.`);
+        }
+        return syncSource(db, { ...src, kind: "x_account", key: social.handle, seen: [] }, opts);
+      }
+      if (social && "blocked" in social) throw new Error(blockedSocialMessage(social.blocked));
+    }
     const batches: { kind: "github_release" | "github_activity" | "rss_item"; items: Awaited<ReturnType<typeof ingestFeed>> }[] = [];
-    if (src.kind === "github_repo") {
+    if (src.kind === "x_account") {
+      batches.push({ kind: "rss_item", items: await readXAccount(db, src, opts) });
+    } else if (src.kind === "github_repo") {
       const gh = await ingestGithubActivity(src.key, { fetch: opts.fetch, ...(opts.now ? { now: opts.now } : {}) });
       batches.push({ kind: "github_release", items: gh.releases }, { kind: "github_activity", items: gh.activity });
     } else if (src.kind === "page") {
@@ -168,7 +196,7 @@ export async function syncSource(
       if (src.lastCheckedAt) await backfillPublishedAt(db, src.orgId, b.items);
       const rows = await addContextItems(db, src.orgId, b.kind, freshOnly(b.items, !src.lastCheckedAt, now), src.id);
       added += rows.length;
-      ideas += await createIdeas(db, src.orgId, b.kind, rows, pas?.name ?? sourceLabel(src.key, b.kind), { keywords, passionName: pas?.name ?? null });
+      ideas += await createIdeas(db, src.orgId, b.kind, rows, pas?.name ?? sourceLabel(src.key, b.kind), { keywords, passionName: pas?.name ?? null, now });
     }
     await markSourceChecked(db, src.orgId, src.id, null);
     return { added, ideas, error: null };
@@ -179,8 +207,48 @@ export async function syncSource(
   }
 }
 
+/**
+ * An X account's newest original posts, through X's API with the workspace's X sign-in (never by
+ * reading x.com pages). Its id and the newest post seen are kept in `seen` ("uid:…", "since:…"), so
+ * each check asks only for newer posts; X charges per post read, recorded as our cost.
+ */
+async function readXAccount(db: Db, src: typeof source.$inferSelect, opts: { fetch?: FetchLike | undefined; xReader?: XReader | undefined }): Promise<IngestedItem[]> {
+  const tokens = await opts.xReader?.(src.orgId).catch((error: unknown) => {
+    throw error instanceof PlatformError && error.kind === "auth" ? new Error("Reconnect your X account in Accounts: Showrium reads X accounts with it.") : error;
+  });
+  if (!tokens) throw new Error("Connect your X account in Accounts: Showrium reads X accounts through X's API with it.");
+  const mark = (prefix: string) => src.seen.find((v) => v.startsWith(prefix))?.slice(prefix.length);
+  let userId = mark("uid:");
+  let users = 0;
+  if (!userId) {
+    const user = await x.userByUsername(tokens, src.key, opts.fetch);
+    users = 1;
+    if (!user) {
+      await recordXReads(db, src.orgId, { users, posts: 0 });
+      throw new Error(`There's no X account @${src.key}.`);
+    }
+    userId = user.id;
+  }
+  // The first check brings only the latest few (X's minimum is 5 per request).
+  const posts = await x.recentPosts(tokens, userId, { sinceId: mark("since:"), max: 5 }, opts.fetch);
+  await recordXReads(db, src.orgId, { users, posts: posts.length });
+  const newest = posts.reduce<string | undefined>((a, p) => (!a || BigInt(p.id) > BigInt(a) ? p.id : a), mark("since:"));
+  await db.update(source).set({ seen: [`uid:${userId}`, ...(newest ? [`since:${newest}`] : [])] }).where(eq(source.id, src.id));
+  return posts.map((p) => {
+    const text = p.text.trim();
+    const firstLine = text.split(/\r?\n/)[0]!;
+    return {
+      externalId: `x:${p.id}`,
+      title: firstLine.length > 120 ? `${firstLine.slice(0, 117)}…` : firstLine,
+      body: text,
+      url: `https://x.com/${src.key}/status/${p.id}`,
+      publishedAt: p.createdAt ? new Date(p.createdAt) : null,
+    };
+  });
+}
+
 /** Cron: checks the sources that have waited longest (at most every 6 hours each). */
-export async function runSourcePolling(db: Db, opts: { fetch?: FetchLike | undefined } = {}, now = new Date(), limit = 2) {
+export async function runSourcePolling(db: Db, opts: { fetch?: FetchLike | undefined; xReader?: XReader | undefined } = {}, now = new Date(), limit = 2) {
   const due = await db
     .select()
     .from(source)
@@ -208,6 +276,7 @@ async function scoredIdeas(db: Db, orgId: string, status: "new" | "drafted" | "d
       reason: idea.reason,
       base: idea.score,
       status: idea.status,
+      dismissedReason: idea.dismissedReason,
       createdAt: idea.createdAt,
       contextItemId: idea.contextItemId,
       title: contextItem.title,
@@ -264,6 +333,7 @@ export async function getIdea(db: Db, orgId: string, id: string) {
       reason: idea.reason,
       score: idea.score,
       status: idea.status,
+      dismissedReason: idea.dismissedReason,
       createdAt: idea.createdAt,
       contextItemId: idea.contextItemId,
       title: contextItem.title,
@@ -280,15 +350,34 @@ export async function getIdea(db: Db, orgId: string, id: string) {
   return { ...row, score: effectiveScore(row.score, ageOf(row.publishedAt, row.createdAt)), briefId: b?.id ?? null };
 }
 
-/** Brings a dismissed idea back. */
+/** Brings a dismissed idea back. One the person brings back is never set aside automatically again. */
 export async function restoreIdea(db: Db, orgId: string, id: string) {
-  const rows = await db.update(idea).set({ status: "new" }).where(and(eq(idea.orgId, orgId), eq(idea.id, id), eq(idea.status, "dismissed"))).returning({ id: idea.id });
+  const rows = await db.update(idea).set({ status: "new", dismissedReason: null, kept: true }).where(and(eq(idea.orgId, orgId), eq(idea.id, id), eq(idea.status, "dismissed"))).returning({ id: idea.id });
   return rows.length > 0;
 }
 
 export async function dismissIdea(db: Db, orgId: string, id: string) {
-  const rows = await db.update(idea).set({ status: "dismissed" }).where(and(eq(idea.orgId, orgId), eq(idea.id, id), eq(idea.status, "new"))).returning({ id: idea.id });
+  const rows = await db.update(idea).set({ status: "dismissed", dismissedReason: "person" }).where(and(eq(idea.orgId, orgId), eq(idea.id, id), eq(idea.status, "new"))).returning({ id: idea.id });
   return rows.length > 0;
+}
+
+/**
+ * Cron: a passion's ideas fade with age; once one is under 55 it's set aside (not deleted), so it's
+ * never written from by mistake. Ideas the person brought back are left alone. Returns how many.
+ */
+export async function setAsideWeakPassionIdeas(db: Db, now = new Date(), limit = 300) {
+  const rows = await db
+    .select({ id: idea.id, base: idea.score, publishedAt: contextItem.publishedAt, createdAt: idea.createdAt })
+    .from(idea)
+    .innerJoin(contextItem, eq(contextItem.id, idea.contextItemId))
+    .innerJoin(source, eq(source.id, contextItem.sourceId))
+    .where(and(eq(idea.status, "new"), eq(idea.kept, false), isNotNull(source.passionId)))
+    .limit(limit);
+  const weak = rows.filter((r) => effectiveScore(r.base, ageOf(r.publishedAt, r.createdAt, now)) < IDEA_PASSION_KEEP_MIN).map((r) => r.id);
+  for (let i = 0; i < weak.length; i += 50) {
+    await db.update(idea).set({ status: "dismissed", dismissedReason: "low_score" }).where(and(inArray(idea.id, weak.slice(i, i + 50)), eq(idea.status, "new")));
+  }
+  return weak.length;
 }
 
 export class IdeaError extends Error {
@@ -309,7 +398,8 @@ export async function composeIdea(db: Db, providers: Provider[], input: { orgId:
     .where(and(eq(idea.orgId, input.orgId), eq(idea.id, input.ideaId), eq(idea.status, "new")))
     .returning({ contextItemId: idea.contextItemId });
   if (!claimed) {
-    const [exists] = await db.select({ id: idea.id }).from(idea).where(and(eq(idea.orgId, input.orgId), eq(idea.id, input.ideaId)));
+    const [exists] = await db.select({ id: idea.id, dismissedReason: idea.dismissedReason }).from(idea).where(and(eq(idea.orgId, input.orgId), eq(idea.id, input.ideaId)));
+    if (exists?.dismissedReason === "low_score") throw new IdeaError("idea_used", `This idea was set aside: its score is under ${IDEA_PASSION_KEEP_MIN}. Bring it back to write from it.`);
     throw exists ? new IdeaError("idea_used", "This idea was already used or dismissed.") : new IdeaError("not_found", "No such idea in this workspace.");
   }
   try {

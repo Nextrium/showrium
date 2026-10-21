@@ -24,7 +24,7 @@ async function notifyWho(db: Db, orgId: string) {
  * The emails to send when scheduled posts didn't go out: what, when and the platform's reason.
  * Always sent (it's rare and needs action), whatever the automation email setting.
  */
-export async function failedPostEmails(db: Db, orgId: string, draftIds: string[], appUrl: string): Promise<Email[]> {
+export async function failedPostEmails(db: Db, orgId: string, draftIds: string[], appUrl: string, movedUp: { platform: Platform; to: Date }[] = []): Promise<Email[]> {
   if (!draftIds.length) return [];
   const posts = await db
     .select({ platform: draft.platform, text: draft.text, at: draft.scheduledAt, why: draft.lastError })
@@ -38,12 +38,16 @@ export async function failedPostEmails(db: Db, orgId: string, draftIds: string[]
     return `• ${NAMES[p.platform]}${p.at ? `, ${when.format(p.at)}` : ""}: "${text.length > 80 ? `${text.slice(0, 80)}…` : text}"\n  ${p.why ?? "It didn't go out."}`;
   });
   const n = posts.length;
+  // Later automated posts that moved up into the free time, so the day isn't left empty.
+  const moved = movedUp.length
+    ? `\n\nTo fill the free time, ${movedUp.length === 1 ? "this automated post moved up" : "these automated posts moved up"}:\n${movedUp.map((m) => `• ${NAMES[m.platform]}, now ${when.format(m.to)}`).join("\n")}`
+    : "";
   return (await notifyWho(db, orgId)).map((who) =>
     actionEmail({
       to: who.email,
       name: who.name,
       subject: n === 1 ? "A scheduled post didn't go out" : `${n} scheduled posts didn't go out`,
-      intro: `${n === 1 ? "This post" : "These posts"} didn't go out at the scheduled time (${s.timezone}):\n\n${lines.join("\n")}`,
+      intro: `${n === 1 ? "This post" : "These posts"} didn't go out at the scheduled time (${s.timezone}):\n\n${lines.join("\n")}${moved}`,
       button: n === 1 ? "See the post" : "See the posts",
       url: `${new URL(appUrl).origin}/app/posts?status=failed`,
       outro: "Fix what's needed, then post it now or schedule it again. Nothing else is affected.",

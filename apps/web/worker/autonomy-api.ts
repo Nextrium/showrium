@@ -72,6 +72,8 @@ const IdeaSchema = z
     /** 0 to 100, as of now: what it is, how relevant and how fresh. */
     score: z.number(),
     status: z.enum(["new", "drafted", "dismissed"]),
+    /** Set aside by the person, or automatically (a passion's idea scoring under 55). */
+    dismissedReason: z.enum(["person", "low_score"]).nullable(),
     title: z.string(),
     kind: z.string(),
     body: z.string(),
@@ -83,8 +85,8 @@ const IdeaSchema = z
   .openapi("Idea");
 /** "new" counts the ideas worth looking at; "hidden" the weak or stale ones (shown with all=true). */
 const Counts = z.object({ new: z.number(), drafted: z.number(), dismissed: z.number(), hidden: z.number() });
-type IdeaRow = { id: string; reason: string; score: number; status: "new" | "drafted" | "dismissed"; title: string; kind: string; body: string; url: string | null; publishedAt: Date | null; createdAt: Date };
-const toIdea = (r: IdeaRow) => ({ id: r.id, reason: r.reason, score: r.score, status: r.status, title: r.title, kind: r.kind, body: r.body, url: r.url, publishedAt: r.publishedAt?.toISOString() ?? null, createdAt: r.createdAt.toISOString() });
+type IdeaRow = { id: string; reason: string; score: number; status: "new" | "drafted" | "dismissed"; dismissedReason: "person" | "low_score" | null; title: string; kind: string; body: string; url: string | null; publishedAt: Date | null; createdAt: Date };
+const toIdea = (r: IdeaRow) => ({ id: r.id, reason: r.reason, score: r.score, status: r.status, dismissedReason: r.dismissedReason, title: r.title, kind: r.kind, body: r.body, url: r.url, publishedAt: r.publishedAt?.toISOString() ?? null, createdAt: r.createdAt.toISOString() });
 
 autonomyApi.openapi(
   createRoute({ method: "get", path: "/ideas", tags: ["Autonomy"], request: { query: z.object({ status: z.enum(["new", "drafted", "dismissed"]).default("new"), all: z.enum(["true", "false"]).optional() }) }, responses: { 200: json(z.object({ data: z.array(IdeaSchema), counts: Counts })), ...errs } }),

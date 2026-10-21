@@ -12,7 +12,7 @@ type Data = {
   byModel: Group[];
   perPost: { posts: number; usd: number };
   workspaces: { orgId: string; name: string; plan: string; costUsd: number; xUsd: number; paysUsd: number; losing: boolean }[];
-  xApi: { monthToDateUsd: number; last30Usd: number; posts: number; images: number };
+  xApi: { monthToDateUsd: number; last30Usd: number; posts: number; images: number; reads: number };
 };
 
 const FEATURES: Record<string, string> = { write: "Writing posts", research: "Web research", insights: "Audience insights", video_plan: "Video plans", narration: "Voice-over", image: "AI images", transcription: "Voice notes", photo: "Reading photos" };
@@ -27,7 +27,7 @@ export function Costs() {
         <Stat label="This month" value={money(data.monthToDateUsd)} sub="AI, all features" />
         <Stat label="Last 30 days" value={money(data.last30Usd)} sub={`${data.estimatedShare}% estimated`} info="Images, voice notes, photos and voice-overs run on Cloudflare Workers AI, which doesn't report a price: those are estimates from Cloudflare's published rates." />
         <Stat label="Per post" value={money(data.perPost.usd)} sub={`${data.perPost.posts} posts in 30 days`} info="Writing and research cost, divided by the posts written." />
-        <Stat label="X API" value={money(data.xApi.monthToDateUsd)} sub={`this month · ${data.xApi.posts} posts, ${data.xApi.images} images in 30 days`} info="What X charged for posts sent through the app: $0.015 a post and $0.005 per image description. Uploads, the Premium check and sign-in renewals are free. Posts with a link always go by hand." />
+        <Stat label="X API" value={money(data.xApi.monthToDateUsd)} sub={`this month · 30 days: ${data.xApi.posts} posts, ${data.xApi.images} images, ${data.xApi.reads} reads`} info="What X charged for posts sent through the app: $0.015 a post, $0.005 per image description, $0.005 per post read from followed X accounts ($0.010 per account lookup). Uploads, the Premium check and sign-in renewals are free. Posts with a link always go by hand." />
       </div>
       <Panel title="Daily cost">
         <DayBars title="AI cost" days={data.byDay.map((d) => ({ date: d.date, value: d.usd }))} format={money} />

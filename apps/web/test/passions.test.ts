@@ -135,34 +135,36 @@ describe("your connection to a passion, and the source link (owner feedback 2026
     await env.DB.prepare("INSERT INTO context_item (id, org_id, source_id, kind, title, body, url) VALUES (?, ?, ?, 'github_activity', 'GovTool work', 'GovTool lets ADA holders register as DReps and vote.', 'https://github.com/intersectmbo/govtool/commits')").bind(ctxId, u.orgId, src!.id).run();
     return { u, p, ctxId };
   }
-  type Draft = { platform: string; text: string; parts: string[] | null; issues: { code: string }[] };
+  type Draft = { platform: string; text: string; parts: string[] | null; linkComment: string | null; issues: { code: string }[] };
 
-  it("adds the source link: at the end where links work, in the first reply on X (with a line pointing to it), not on Instagram", async () => {
+  it("adds the source link (owner decision 2026-10-21): at the end on X and where links work, as the first comment on LinkedIn, not on Instagram", async () => {
     const { u, ctxId } = await setup("pas-link@example.com", { name: "Cardano", disclosure: "I'm a Cardano ambassador" });
     const out = (await (await u.call("POST", "/compose", { contextItemId: ctxId, mode: "teach", platforms: ["linkedin", "x", "instagram", "bluesky"] })).json()) as { drafts: Draft[] };
     const by = (p: string) => out.drafts.find((d) => d.platform === p)!;
     const repo = "https://github.com/intersectmbo/govtool"; // a day of work links the repository, not its commits list
-    // LinkedIn: the post, then the link, then the disclosure.
-    expect(by("linkedin").text.endsWith(`\n\n${repo}\n\nI'm a Cardano ambassador`)).toBe(true);
-    // X: two parts: the post (no link, says the link is in the reply, ends with the disclosure), then the link.
+    // LinkedIn: no link in the post (it would hide the image); it points to the comment, and the link is the first comment.
+    const li = by("linkedin");
+    expect(li.text).not.toContain("https://");
+    expect(li.text).toMatch(/comment|below|👇/i);
+    expect(li.text.endsWith("I'm a Cardano ambassador")).toBe(true);
+    expect(li.linkComment).toBe(repo);
+    // X: one post with the link at the end (X shows its preview), then the disclosure. Never a reply.
     const x = by("x");
-    expect(x.parts).toHaveLength(2);
-    expect(x.parts![1]).toBe(repo);
-    expect(x.parts![0]).not.toContain("https://");
-    expect(x.parts![0]).toMatch(/reply|below|👇/i);
-    expect(x.parts![0]!.endsWith("I'm a Cardano ambassador")).toBe(true);
+    expect(x.parts).toBeNull();
+    expect(x.text.endsWith(`\n\n${repo}\n\nI'm a Cardano ambassador`)).toBe(true);
+    expect(x.linkComment).toBeNull();
     // Instagram captions can't link.
     expect(by("instagram").text).not.toContain("https://");
     expect(by("bluesky").text).toContain(repo);
   });
 
   it("keeps the order text, link, disclosure even when the writer already added the disclosure", async () => {
-    const { u, ctxId } = await setup("pas-order@example.com", { name: "Cardano", disclosure: "I'm a Cardano ambassador" }, ["linkedin"]);
+    const { u, ctxId } = await setup("pas-order@example.com", { name: "Cardano", disclosure: "I'm a Cardano ambassador" }, ["bluesky"]);
     const writes = (r: string) => {
       const ids = (r.match(/Platform ids: ([^.]+)\./)?.[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
       return JSON.stringify({ angle: "a", key_points: ["k"], variants: ids.map((platform) => ({ platform, text: "Small fixes build a robust ecosystem. I'm a Cardano ambassador" })) });
     };
-    const out = await compose(createDb(env.DB), [fakeProvider((r) => writes(r.user))], { orgId: u.orgId, contextItemId: ctxId, mode: "teach", platforms: ["linkedin"] });
+    const out = await compose(createDb(env.DB), [fakeProvider((r) => writes(r.user))], { orgId: u.orgId, contextItemId: ctxId, mode: "teach", platforms: ["bluesky"] });
     expect(out.drafts[0]!.text).toBe("Small fixes build a robust ecosystem.\n\nhttps://github.com/intersectmbo/govtool\n\nI'm a Cardano ambassador");
   });
 
@@ -171,6 +173,7 @@ describe("your connection to a passion, and the source link (owner feedback 2026
     const out = (await (await u.call("POST", "/compose", { contextItemId: ctxId, mode: "teach", platforms: ["linkedin", "x"] })).json()) as { drafts: Draft[] };
     for (const d of out.drafts) expect(d.text).not.toContain("https://");
     expect(out.drafts.find((d) => d.platform === "x")!.parts).toBeNull();
+    expect(out.drafts.find((d) => d.platform === "linkedin")!.linkComment).toBeNull();
   });
 
   it("'I follow it' flags wording that claims the team's work; 'It's ours' writes as the team", async () => {
@@ -204,11 +207,12 @@ describe("your connection to a passion, and the source link (owner feedback 2026
     expect(sourceLink({ kind: "request", url: "https://x.example" })).toBeNull();
     expect(sourceLink({ kind: "manual", url: null })).toBeNull();
     const L = "https://github.com/a/b";
-    expect(placeLink("linkedin", "Post.", L)).toBe(`Post.\n\n${L}`);
-    expect(placeLink("linkedin", `Post ${L}`, L)).toBe(`Post ${L}`); // not twice
+    expect(placeLink("x", "Post.", L)).toBe(`Post.\n\n${L}`);
+    expect(placeLink("bluesky", `Post ${L}`, L)).toBe(`Post ${L}`); // not twice
     expect(placeLink("instagram", "Post.", L)).toBe("Post.");
-    expect(placeLink("x", `Post. See ${L}\n\nThe repo is in the reply 👇`, L)).toBe("Post. See \n\nThe repo is in the reply 👇".replace(" \n", "\n"));
-    expect(placeLink("x", "Post.", L)).toMatch(/^Post\.\n\n(Link in the reply 👇|The link is in the reply\.|More in the reply below 👇)$/);
+    // LinkedIn: the link comes out of the post (it goes in the first comment), with one line pointing to it.
+    expect(placeLink("linkedin", `Post. See ${L}\n\nThe repo is in the comments 👇`, L)).toBe("Post. See\n\nThe repo is in the comments 👇");
+    expect(placeLink("linkedin", "Post.", L)).toMatch(/^Post\.\n\n(Link in the comments 👇|The link is in the comments\.|More in the first comment 👇)$/);
     expect(placeLink("linkedin", "Post.", null)).toBe("Post.");
     // The owner's examples (2026-10-18).
     expect(soundsLikeTeam("the tools we build are changing how we interact with it")).toBe(true);
@@ -223,11 +227,12 @@ describe("your connection to a passion, and the source link (owner feedback 2026
 
   it("tells the writer the connection and how the link will be added", () => {
     const base = { mode: "teach" as const, contextTitle: "t", contextBody: "b", stance: "other" as const };
-    const follow = composeUserPrompt({ ...base, platforms: ["x", "linkedin"], passion: { name: "GovTool", about: "", disclosure: "", relation: "follow" }, link: { length: 40, atEnd: ["linkedin", "bluesky"], xReply: true } });
+    const follow = composeUserPrompt({ ...base, platforms: ["x", "linkedin"], passion: { name: "GovTool", about: "", disclosure: "", relation: "follow" }, link: { length: 40, atEnd: ["x", "bluesky"], inComment: ["linkedin"] } });
     expect(follow).toContain("is NOT part of its team");
     expect(follow).toContain("Never write the URL");
-    expect(follow).toContain("On linkedin it goes at the end of the post: leave about 42 characters");
-    expect(follow).toContain("On X it is posted as the first reply");
+    expect(follow).toContain("On x it goes at the end of the post: leave about 42 characters");
+    expect(follow).toContain("On linkedin it is posted as the first comment");
+    expect(follow).not.toContain("reply");
     const involved = composeUserPrompt({ ...base, platforms: ["linkedin"], passion: { name: "GovTool", about: "", disclosure: "", relation: "involved" } });
     expect(involved).toContain("involved with GovTool");
     expect(involved).not.toContain("Link:");

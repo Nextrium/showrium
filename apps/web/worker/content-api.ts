@@ -1,6 +1,6 @@
 // Phase 2 API: persona, context, sources, voice notes, compose, drafts, usage.
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { CONTENT_MODES, DRAFT_STATUSES, PLATFORMS, STANCES } from "@nextrium/db";
+import { CONTENT_MODES, DRAFT_STATUSES, PLATFORMS, STANCES, type Db } from "@nextrium/db";
 import {
   estimateTranscription,
   recordAiUsage,
@@ -25,6 +25,9 @@ import {
   getSource,
   getUsage,
   workspaceCosts,
+  socialSource,
+  xReader,
+  hasActiveConnection,
   GITHUB_REPO_RE,
   ingestFeed,
   ingestUrl,
@@ -54,6 +57,7 @@ import { PLATFORM_RULES } from "@nextrium/policy";
 import { aiProviders, researchProviders } from "./ai.js";
 import { ImageSummary, findImagesLater, toImageSummary } from "./images-api.js";
 import { apiError, requirePrincipal, type AppEnv } from "./principal.js";
+import { publishDeps } from "./connections-api.js";
 
 export const contentApi = new OpenAPIHono<AppEnv>({
   defaultHook: (result, c) => {
@@ -255,9 +259,23 @@ contentApi.openapi(
 
 const SourceInput = z.discriminatedUnion("kind", [z.object({ kind: z.literal("github_repo"), repo: z.string().trim().regex(GITHUB_REPO_RE, "Use the form owner/repository.") }), z.object({ kind: z.literal("rss"), url: z.string().trim().max(2000) })]);
 
-/** People paste a blog or channel page, not its feed: find the feed, or watch the page itself. */
-async function resolveSourceInput(input: z.infer<typeof SourceInput>): Promise<{ kind: "github_repo" | "rss" | "page"; key: string; note: string | null } | { error: string }> {
+/** Reading X accounts (sources) with the workspace's X sign-in, when tokens can be decrypted here. */
+export async function xReaderFor(env: AppEnv["Bindings"], db: Db) {
+  return env.TOKEN_ENCRYPTION_KEY ? xReader(await publishDeps(env, db)) : undefined;
+}
+
+/**
+ * People paste a blog or channel page, not its feed: find the feed, or watch the page itself. Social
+ * sites are only read the way their terms allow: an X account through X's API (with the workspace's
+ * connected X account), Bluesky through its RSS; other social sites' pages aren't read at all.
+ */
+async function resolveSourceInput(input: z.infer<typeof SourceInput>, ctx: { db: Db; orgId: string }): Promise<{ kind: "github_repo" | "rss" | "page" | "x_account"; key: string; note: string | null } | { error: string }> {
   if (input.kind === "github_repo") return { kind: "github_repo", key: input.repo.toLowerCase(), note: null };
+  const social = socialSource(input.url);
+  if (social && "kind" in social && social.kind === "x_account") {
+    if (!(await hasActiveConnection(ctx.db, ctx.orgId, "x"))) return { error: "Connect your X account in Accounts first: Showrium follows X accounts through X's API with it." };
+    return { kind: "x_account", key: social.handle, note: "Followed through X's API with your X account." };
+  }
   try {
     assertSafeUrl(input.url);
     const resolved = await resolveBlogSource(input.url);
@@ -285,7 +303,7 @@ contentApi.openapi(
     tags: ["Sources"],
     request: body(SourceInput),
     responses: {
-      201: json(z.object({ id: z.string(), kind: z.enum(["github_repo", "rss", "page"]), key: z.string(), note: z.string().nullable() }), "Added"),
+      201: json(z.object({ id: z.string(), kind: z.enum(["github_repo", "rss", "page", "x_account"]), key: z.string(), note: z.string().nullable() }), "Added"),
       409: json(Err, "Limit reached or already added"),
       ...errs,
     },
@@ -293,7 +311,7 @@ contentApi.openapi(
   async (c) => {
     if (denied(c, "content.write")) return c.json(forbidden("connect sources"), 403);
     const { orgId } = c.get("principal");
-    const resolved = await resolveSourceInput(c.req.valid("json"));
+    const resolved = await resolveSourceInput(c.req.valid("json"), { db: c.get("db"), orgId });
     if ("error" in resolved) return c.json(apiError("unreadable_source", resolved.error), 400);
     const { kind, key, note } = resolved;
     try {
@@ -329,7 +347,7 @@ contentApi.openapi(
     const { orgId } = c.get("principal");
     const src = await getSource(c.get("db"), orgId, c.req.valid("param").id);
     if (!src) return c.json(apiError("not_found", "No such source in this workspace."), 404);
-    const out = await syncSource(c.get("db"), src);
+    const out = await syncSource(c.get("db"), src, { xReader: await xReaderFor(c.env, c.get("db")) });
     return c.json({ added: out.added, error: out.error }, 200);
   },
 );
@@ -348,8 +366,10 @@ const PassionFields = z.object({
   endsOn: Day.nullable().optional(),
   /** follow: you follow it; involved: contributor, ambassador or partner; ours: your own team (posts say "we"). */
   relation: z.enum(["follow", "involved", "ours"]).optional(),
-  /** Add the source's link to posts (on X, as the first reply). */
+  /** Add the source's link to posts (on LinkedIn, as the first comment). */
   linkSource: z.boolean().optional(),
+  /** Its official X account ("@name"), which X posts may mention once. Empty to remove. */
+  xHandle: z.string().max(80).optional(),
 });
 const PassionSchema = z
   .object({
@@ -363,10 +383,11 @@ const PassionSchema = z
     endsOn: z.string().nullable(),
     relation: z.enum(["follow", "involved", "ours"]),
     linkSource: z.boolean(),
+    xHandle: z.string(),
     sources: z.array(SourceSchema),
   })
   .openapi("Passion");
-type PassionRow = { id: string; name: string; about: string; disclosure: string; active: boolean; startsOn: string | null; endsOn: string | null; relation: "follow" | "involved" | "ours"; linkSource: boolean; sources?: { id: string; kind: string; key: string; lastCheckedAt: Date | null; lastError: string | null }[] };
+type PassionRow = { id: string; name: string; about: string; disclosure: string; active: boolean; startsOn: string | null; endsOn: string | null; relation: "follow" | "involved" | "ours"; linkSource: boolean; xHandle: string; sources?: { id: string; kind: string; key: string; lastCheckedAt: Date | null; lastError: string | null }[] };
 const toPassion = (p: PassionRow) => ({
   id: p.id,
   name: p.name,
@@ -378,6 +399,7 @@ const toPassion = (p: PassionRow) => ({
   endsOn: p.endsOn,
   relation: p.relation,
   linkSource: p.linkSource,
+  xHandle: p.xHandle,
   sources: (p.sources ?? []).map((r) => ({ id: r.id, kind: r.kind, key: r.key, lastCheckedAt: r.lastCheckedAt?.toISOString() ?? null, lastError: r.lastError })),
 });
 const actorOf = (p: { kind: "user"; userId: string } | { kind: "api_key"; apiKeyId: string }) => ({ actorUserId: p.kind === "user" ? p.userId : null, actorApiKeyId: p.kind === "api_key" ? p.apiKeyId : null });
@@ -422,7 +444,7 @@ contentApi.openapi(
     const { orgId } = principal;
     try {
       const row = await updatePassion(c.get("db"), orgId, c.req.valid("param").id, c.req.valid("json"));
-      await recordAudit(c.get("db"), { orgId, ...actorOf(principal), action: "passion.updated", target: row.id, meta: { active: row.active, startsOn: row.startsOn, endsOn: row.endsOn, disclosure: Boolean(row.disclosure), relation: row.relation, linkSource: row.linkSource } });
+      await recordAudit(c.get("db"), { orgId, ...actorOf(principal), action: "passion.updated", target: row.id, meta: { active: row.active, startsOn: row.startsOn, endsOn: row.endsOn, disclosure: Boolean(row.disclosure), relation: row.relation, linkSource: row.linkSource, xHandle: row.xHandle } });
       const full = (await listPassions(c.get("db"), orgId)).find((p) => p.id === row.id) ?? row;
       return c.json(toPassion(full), 200);
     } catch (error) {
@@ -451,12 +473,12 @@ contentApi.openapi(
     path: "/passions/{id}/sources",
     tags: ["Passions"],
     request: { params: z.object({ id: z.string().max(64) }), ...body(SourceInput) },
-    responses: { 201: json(z.object({ id: z.string(), kind: z.enum(["github_repo", "rss", "page"]), key: z.string(), note: z.string().nullable() }), "Added"), 409: json(Err, "Limit reached or already added"), ...errs },
+    responses: { 201: json(z.object({ id: z.string(), kind: z.enum(["github_repo", "rss", "page", "x_account"]), key: z.string(), note: z.string().nullable() }), "Added"), 409: json(Err, "Limit reached or already added"), ...errs },
   }),
   async (c) => {
     if (denied(c, "content.write")) return c.json(forbidden("connect sources"), 403);
     const { orgId } = c.get("principal");
-    const resolved = await resolveSourceInput(c.req.valid("json"));
+    const resolved = await resolveSourceInput(c.req.valid("json"), { db: c.get("db"), orgId });
     if ("error" in resolved) return c.json(apiError("unreadable_source", resolved.error), 400);
     try {
       const created = await addPassionSource(c.get("db"), orgId, c.req.valid("param").id, resolved.kind, resolved.key);
@@ -492,6 +514,8 @@ const DraftSchema = z
     /** A thread's parts in order (null for a single post), and how many have been posted. */
     parts: z.array(z.string()).nullable(),
     partsPosted: z.number(),
+    /** LinkedIn: the source link, posted as the first comment (a link in the post hides its image). */
+    linkComment: z.string().nullable(),
     /** The post's images, in order (up to 4). The files are at /images/{id}. */
     images: z.array(ImageSummary),
     /** True when the post has its own images; false when it shares those of its material with the other posts. */
@@ -536,6 +560,7 @@ export const toDraft = (d: DraftRow, images: ImageRow[] = []) => ({
   createdAt: d.createdAt.toISOString(),
   parts: d.parts ?? null,
   partsPosted: d.postedParts?.length ?? 0,
+  linkComment: d.linkComment ?? null,
   images: images.map(toImageSummary),
   ownImages: d.ownImages || !d.briefId,
 });
@@ -704,7 +729,7 @@ const CostsSchema = z.object({
   since: z.string(),
   totalUsd: z.number(),
   ai: z.object({ usd: z.number(), byFeature: z.array(z.object({ feature: z.string(), usd: z.number(), calls: z.number(), estimated: z.boolean() })) }),
-  x: z.object({ usd: z.number(), posts: z.number(), images: z.number() }),
+  x: z.object({ usd: z.number(), posts: z.number(), images: z.number(), reads: z.number() }),
 });
 
 contentApi.openapi(

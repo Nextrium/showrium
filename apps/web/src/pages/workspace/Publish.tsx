@@ -54,7 +54,8 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
   // The id of your post on X, from its link (x.com/<you>/status/<id>), so replies open already replying to it.
   const rootId = rootUrl.match(/^https:\/\/(?:x|twitter)\.com\/[^/]+\/status\/(\d{5,25})/i)?.[1] ?? null;
   const replyUrl = (text: string) => `https://x.com/intent/post?text=${encodeURIComponent(text)}&in_reply_to=${rootId}`;
-  const xLink = draft.platform === "x" && /https?:\/\//i.test(draft.text);
+  // A link (a quoted post is a link too) or a mention: always "Post it myself" on X.
+  const xLink = draft.platform === "x" && (/https?:\/\//i.test(draft.text) || /(^|[^\w@.])@[A-Za-z0-9_]{1,15}(?![\w@])/.test(draft.text));
   const chosen = connectionId || accounts[0]?.id || "";
   // The post's images, loaded now: the share sheet only opens straight from a click.
   const { data: imageSettings } = useApi<{ sizes: Partial<Record<string, ImageSize>> }>("/image-settings", { live: false });
@@ -98,6 +99,7 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
     });
   const parts = draft.parts && draft.parts.length > 1 ? draft.parts : null;
   const [copiedPart, setCopiedPart] = useState<number | null>(null);
+  const [copiedComment, setCopiedComment] = useState(false);
   const tapToPost = () => {
     // Runs synchronously inside the click, alongside the link opening in a new tab.
     navigator.clipboard.writeText(parts ? parts[0]! : draft.text).catch(() => undefined);
@@ -183,8 +185,18 @@ export function PublishControls({ draft, onChange }: { draft: Draft; onChange: (
           {files.length > 1 && <button type="button" className="button secondary self-start" onClick={saveAll}>Save all {files.length}</button>}
         </div>
       )}
+      {draft.linkComment && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-line px-3 py-2">
+          <span className="flex min-w-0 items-center gap-1.5 text-[13.5px]">
+            <strong className="shrink-0 font-semibold">First comment:</strong>
+            <span className="truncate">{draft.linkComment}</span>
+            <Info label="About the first comment">The source link goes in the first comment, because a link in a LinkedIn post hides its image. Through the app it's added for you; when you post it yourself, add it as a comment.</Info>
+          </span>
+          <button type="button" className="button secondary" onClick={() => void navigator.clipboard?.writeText(draft.linkComment!).then(() => setCopiedComment(true))}>{copiedComment ? "Copied" : "Copy link"}</button>
+        </div>
+      )}
       {xLink && API_PLATFORMS.includes(draft.platform) && accounts.length > 0 && (
-        <p className="note">Has a link, so it goes to X with "Post it myself" (free). <Info label="Why links go this way">X charges a lot more for links sent through the app.</Info></p>
+        <p className="note">Has a link, quote or mention, so it goes to X with "Post it myself" (free). <Info label="Why these go this way">X charges a lot more for links sent through the app, and limits automated mentions. Posting it yourself is free.</Info></p>
       )}
       {opened && parts && draft.platform === "x" && (
         <label className="flex flex-col gap-1" htmlFor={`x-root-${draft.id}`}>

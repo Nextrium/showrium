@@ -7,11 +7,12 @@ import { publishingPaused } from "./env.js";
 import { apiError, type AppEnv } from "./principal.js";
 import { rateLimit } from "./rate-limit.js";
 import { createDb } from "@nextrium/db";
-import { backfillAiUsage, expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, rescoreOldIdeas, runAutopilot, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
+import { backfillAiUsage, expireSubscriptions, pruneExpiredOAuthStates, recoverStuckPublishing, rescoreOldIdeas, runAutopilot, setAsideWeakPassionIdeas, runDuePublishing, runEngagementSync, runSourcePolling } from "@nextrium/core";
 import { aiProviders } from "./ai.js";
 import { publishDeps } from "./connections-api.js";
+import { xReaderFor } from "./content-api.js";
 import { imageDeps } from "./images-api.js";
-import { autoImagesForBrief, autoScheduledEmails, failedPostEmails, sendEmail, sendNeedsYouNotices, type AfterCompose, type Email, type OnAutoScheduled, type OnPublishFailed } from "@nextrium/core";
+import { autoImagesForBrief, autoScheduledEmails, failedPostEmails, fillFreedSlots, sendEmail, sendNeedsYouNotices, type AfterCompose, type Email, type OnAutoScheduled, type OnPublishFailed } from "@nextrium/core";
 import type { Db } from "@nextrium/db";
 import type { Env } from "./env.js";
 
@@ -30,7 +31,11 @@ function notifyScheduled(env: Env, db: Db): OnAutoScheduled {
 
 /** Emails owners and admins when scheduled posts didn't go out, with the platform's reason. */
 function notifyFailed(env: Env, db: Db): OnPublishFailed {
-  return async (orgId, draftIds) => sendAll(env, await failedPostEmails(db, orgId, draftIds, env.BETTER_AUTH_URL), "failure notice");
+  return async (orgId, draftIds) => {
+    // The failed posts' time is free: later automated posts on those accounts move up into it.
+    const moved = await fillFreedSlots(db, orgId, draftIds).catch((error) => (console.warn("fill freed slots failed", error instanceof Error ? error.message : error), []));
+    await sendAll(env, await failedPostEmails(db, orgId, draftIds, env.BETTER_AUTH_URL, moved), "failure notice");
+  };
 }
 
 function autoImages(env: Env, db: Db): AfterCompose | undefined {
@@ -156,10 +161,10 @@ async function scheduled(event: ScheduledController, env: AppEnv["Bindings"], ct
       }
       const job = cronJob(event.scheduledTime);
       const result =
-        job === "sources" ? await runSourcePolling(db, {}, now, 6) // up to ~18 fetches; with Passions there are more sources
+        job === "sources" ? await runSourcePolling(db, { xReader: await xReaderFor(env, db) }, now, 6) // up to ~18 fetches; with Passions there are more sources
         : job === "autopilot" ? (paused ? { paused: true } : await runAutopilot(db, aiProviders(env), now, 3, autoImages(env, db), notifyScheduled(env, db)))
         : job === "engagement" ? await runEngagementSync(db, fetch, now)
-        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now), rescored: await rescoreOldIdeas(db), aiCostsCopied: await backfillAiUsage(db), needsYou: await sendNeedsYouNotices(db, env.BETTER_AUTH_URL, (emails) => sendAll(env, emails, "needs-you notice"), now) };
+        : { pruned: await pruneExpiredOAuthStates(db, now), recovered: await recoverStuckPublishing(db, now), expired: await expireSubscriptions(db, now), rescored: await rescoreOldIdeas(db), setAside: await setAsideWeakPassionIdeas(db, now), aiCostsCopied: await backfillAiUsage(db), needsYou: await sendNeedsYouNotices(db, env.BETTER_AUTH_URL, (emails) => sendAll(env, emails, "needs-you notice"), now) };
       console.log("cron", job, result);
     })(),
   );

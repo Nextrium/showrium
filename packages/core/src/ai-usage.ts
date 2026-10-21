@@ -130,8 +130,9 @@ export async function aiCostReport(db: Db, now = new Date()) {
     xApi: {
       monthToDateUsd: usd(xRows.filter((r) => r.at >= monthStart).reduce((a, r) => a + r.micro, 0)),
       last30Usd: usd(x30.reduce((a, r) => a + r.micro, 0)),
-      posts: x30.filter((r) => r.kind !== "image_description").length,
+      posts: x30.filter((r) => r.kind === "post" || r.kind === "post_with_link").length,
       images: x30.filter((r) => r.kind === "image_description").length,
+      reads: x30.filter((r) => r.kind === "post_read" || r.kind === "user_read").length,
     },
   };
 }
@@ -172,6 +173,6 @@ export async function workspaceCosts(db: Db, orgId: string, now = new Date()) {
       usd: usd(aiMicro),
       byFeature: ai.map((r) => ({ feature: r.feature, usd: usd(Number(r.micro)), calls: Number(r.calls), estimated: Boolean(Number(r.estimated)) })).sort((a, b) => b.usd - a.usd),
     },
-    x: { usd: usd(xMicro), posts: xCalls("post") + xCalls("post_with_link"), images: xCalls("image_description") },
+    x: { usd: usd(xMicro), posts: xCalls("post") + xCalls("post_with_link"), images: xCalls("image_description"), reads: xCalls("post_read") + xCalls("user_read") },
   };
 }

@@ -190,10 +190,11 @@ export function pickSlot(input: SlotInput): Date | null {
 }
 
 /** Scheduled and published times on an account (last day to two weeks ahead), for pickSlot. */
-export async function takenTimes(db: Db, orgId: string, connectionId: string, now: Date): Promise<Date[]> {
+export async function takenTimes(db: Db, orgId: string, connectionId: string, now: Date, exceptDraftId?: string): Promise<Date[]> {
   const rows = await db
-    .select({ scheduledAt: draft.scheduledAt, publishedAt: draft.publishedAt })
+    .select({ id: draft.id, scheduledAt: draft.scheduledAt, publishedAt: draft.publishedAt })
     .from(draft)
     .where(and(eq(draft.orgId, orgId), eq(draft.connectionId, connectionId), inArray(draft.status, ["scheduled", "publishing", "published"]), or(gte(draft.scheduledAt, new Date(now.getTime() - 86_400_000)), gte(draft.publishedAt, new Date(now.getTime() - 86_400_000)))));
-  return rows.flatMap((r) => [r.scheduledAt, r.publishedAt].filter((d): d is Date => Boolean(d)));
+  // A post being moved doesn't block its own new time.
+  return rows.filter((r) => r.id !== exceptDraftId).flatMap((r) => [r.scheduledAt, r.publishedAt].filter((d): d is Date => Boolean(d)));
 }

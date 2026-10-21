@@ -345,7 +345,7 @@ export const aiUsage = sqliteTable(
   (t) => [index("ai_usage_created_idx").on(t.createdAt), index("ai_usage_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("ai_usage_feature_ref_uq").on(t.feature, t.refId)],
 );
 
-export const PLATFORM_COST_KINDS = ["post", "post_with_link", "image_description"] as const;
+export const PLATFORM_COST_KINDS = ["post", "post_with_link", "image_description", "user_read", "post_read"] as const;
 export type PlatformCostKind = (typeof PLATFORM_COST_KINDS)[number];
 /**
  * What platforms charge us for API calls (X's pay-per-use, in micro US dollars), one row per paid
@@ -385,8 +385,10 @@ export const passion = sqliteTable(
     disclosure: text("disclosure").notNull().default(""),
     /** The person's connection: follows it (outsider), involved (contributor, ambassador, partner), or ours (their own team). */
     relation: text("relation", { enum: PASSION_RELATIONS }).notNull().default("follow"),
-    /** Add the source's link to posts (X: in the first reply). */
+    /** Add the source's link to posts (LinkedIn: as the first comment; an X post's link makes it a quote). */
     linkSource: integer("link_source", { mode: "boolean" }).notNull().default(true),
+    /** Its official X account (a handle, without "@"), which X posts may mention once. Empty when none. */
+    xHandle: text("x_handle").notNull().default(""),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     startsOn: text("starts_on"),
     endsOn: text("ends_on"),
@@ -397,7 +399,7 @@ export const passion = sqliteTable(
 );
 
 /** github_repo; rss (a feed); page (a blog or news page without a feed, watched for new article links). */
-export const SOURCE_KINDS = ["github_repo", "rss", "page"] as const;
+export const SOURCE_KINDS = ["github_repo", "rss", "page", "x_account"] as const;
 export const source = sqliteTable(
   "source",
   {
@@ -406,7 +408,7 @@ export const source = sqliteTable(
     kind: text("kind", { enum: SOURCE_KINDS }).notNull(),
     /** Set when the source belongs to a passion (it then doesn't count against the plan's own sources). */
     passionId: text("passion_id").references(() => passion.id, { onDelete: "cascade" }),
-    /** "owner/repo" for GitHub, a feed URL for RSS, the page URL for a watched page. */
+    /** "owner/repo" for GitHub, a feed URL for RSS, the page URL for a watched page, the handle for an X account. */
     key: text("key").notNull(),
     /** Watched pages: article links already seen, so only new ones become ideas (newest first, capped). */
     seen: text("seen", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
@@ -509,6 +511,8 @@ export const draft = sqliteTable(
     lastError: text("last_error"),
     /** A thread: the parts in order (null for a single post). `text` holds them joined, for search and display. */
     parts: text("parts", { mode: "json" }).$type<string[] | null>(),
+    /** LinkedIn: the source link, posted as the first comment (a link in the post hides its image). */
+    linkComment: text("link_comment"),
     /** Thread parts already posted (in order), so a retry continues instead of posting twice. */
     postedParts: text("posted_parts", { mode: "json" }).$type<{ id: string; cid?: string | undefined; url: string | null }[] | null>(),
     /** Sprint 6's single image. Superseded by `post_image` (copied there by migration 0017); kept for older rows. */
@@ -663,6 +667,10 @@ export const idea = sqliteTable(
     draftedAt: integer("drafted_at", { mode: "timestamp_ms" }),
     /** How the score was worked out: 1 the first rules, 2 freshness and relevance (2026-10-18). Old ones are re-scored. */
     scoreVersion: integer("score_version").notNull().default(1),
+    /** Why it was set aside: by the person, or automatically (a passion's idea scoring under 55). */
+    dismissedReason: text("dismissed_reason", { enum: ["person", "low_score"] }),
+    /** Brought back by the person: never set aside automatically again. */
+    kept: integer("kept", { mode: "boolean" }).notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("idea_org_context_uq").on(t.orgId, t.contextItemId), index("idea_org_status_idx").on(t.orgId, t.status, t.score)],

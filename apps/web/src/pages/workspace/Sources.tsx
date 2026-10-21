@@ -4,7 +4,7 @@ import { Link } from "../../ui/Link";
 import { Alert, Badge, Button, Empty, Icon, Info, PageHeader, Panel, type IconName } from "../../ui/kit";
 import { UploadForm } from "../../components/UploadForm";
 
-export type Source = { id: string; kind: "github_repo" | "rss" | "page"; key: string; lastCheckedAt: string | null; lastError: string | null };
+export type Source = { id: string; kind: "github_repo" | "rss" | "page" | "x_account"; key: string; lastCheckedAt: string | null; lastError: string | null };
 type ContextItem = { id: string; kind: string; title: string; body: string; url: string | null; createdAt: string };
 type Usage = { sources: { limit: number } };
 
@@ -61,13 +61,13 @@ export function SourceRow({ s, onRemoved }: { s: Source; onRemoved: () => void }
     <li className="flex flex-wrap items-center gap-3 border-t border-line py-3.5 first:border-t-0">
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-raised text-ink-2"><Icon name={s.kind === "github_repo" ? "git" : s.kind === "page" ? "globe" : "sources"} /></span>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate font-semibold">{s.key}</span>
-        <span className="text-[13px] text-muted">{s.kind === "github_repo" ? "GitHub · releases, commits and merged pull requests" : s.kind === "page" ? "Web page · watched for new articles" : "Feed"}</span>
+        <span className="truncate font-semibold">{s.kind === "x_account" ? `@${s.key}` : s.key}</span>
+        <span className="text-[13px] text-muted">{s.kind === "github_repo" ? "GitHub · releases, commits and merged pull requests" : s.kind === "x_account" ? "X account · new posts, through X's API" : s.kind === "page" ? "Web page · watched for new articles" : "Feed"}</span>
       </div>
       <span role="status" className={`text-[13px] sm:max-w-[300px] ${status.tone === "ok" ? "text-ok" : "text-warn"}`}>{status.text}</span>
       <div className="flex gap-2">
         <Button variant="secondary" size="sm" icon="refresh" disabled={busy} onClick={check}>{busy ? "Checking…" : "Check now"}</Button>
-        <Button variant="ghost" size="sm" aria-label={`Remove ${s.key}`} onClick={remove}><Icon name="trash" size={16} /></Button>
+        <Button variant="ghost" size="sm" aria-label={`Remove ${s.kind === "x_account" ? `@${s.key}` : s.key}`} onClick={remove}><Icon name="trash" size={16} /></Button>
       </div>
     </li>
   );

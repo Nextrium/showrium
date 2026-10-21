@@ -174,6 +174,26 @@ export const x = {
     }
     return data.id;
   },
+  /** An account's id from its handle (X charges this as one user read). Null when there's no such account. */
+  async userByUsername(tokens: TokenSet, username: string, doFetch: FetchLike = fetch): Promise<{ id: string; username: string } | null> {
+    const handle = username.replace(/^@/, "");
+    if (!/^[A-Za-z0-9_]{1,15}$/.test(handle)) return null;
+    // An unknown handle comes back as 200 with an "errors" list and no data.
+    const res = await request("X", doFetch, `https://api.x.com/2/users/by/username/${handle}`, { headers: { Authorization: `Bearer ${tokens.accessToken}` } }, "the account lookup");
+    const { data } = (await res.json()) as { data?: { id: string; username: string } };
+    return data ?? null;
+  },
+  /**
+   * An account's newest original posts (no reposts or replies), newer than `sinceId` when given. X
+   * charges per post returned, so at most `max` (5 to 10) come back.
+   */
+  async recentPosts(tokens: TokenSet, userId: string, opts: { sinceId?: string | undefined; max?: number } = {}, doFetch: FetchLike = fetch): Promise<{ id: string; text: string; createdAt: string | null }[]> {
+    const q = new URLSearchParams({ max_results: String(Math.min(10, Math.max(5, opts.max ?? 5))), exclude: "retweets,replies", "tweet.fields": "created_at" });
+    if (opts.sinceId) q.set("since_id", opts.sinceId);
+    const res = await request("X", doFetch, `https://api.x.com/2/users/${encodeURIComponent(userId)}/tweets?${q}`, { headers: { Authorization: `Bearer ${tokens.accessToken}` } }, "the account's posts");
+    const { data } = (await res.json()) as { data?: { id: string; text: string; created_at?: string }[] };
+    return (data ?? []).map((t) => ({ id: t.id, text: t.text, createdAt: t.created_at ?? null }));
+  },
   async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, replyTo?: ReplyTo, mediaIds: string[] = []): Promise<PublishResult> {
     const res = await request("X", doFetch, "https://api.x.com/2/tweets", {
       method: "POST",
@@ -254,6 +274,20 @@ export const linkedin = {
         return;
       }
     }
+  },
+  /** A comment on a post by the same member (the source link as the first comment). w_member_social covers it. */
+  async comment(tokens: TokenSet, account: Account, postUrn: string, text: string, doFetch: FetchLike = fetch): Promise<void> {
+    await request(
+      "LinkedIn",
+      doFetch,
+      `https://api.linkedin.com/rest/socialActions/${encodeURIComponent(postUrn)}/comments`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tokens.accessToken}`, "Content-Type": "application/json", "LinkedIn-Version": LINKEDIN_VERSION, "X-Restli-Protocol-Version": "2.0.0" },
+        body: JSON.stringify({ actor: `urn:li:person:${account.accountId}`, object: postUrn, message: { text: text.slice(0, 1250) } }),
+      },
+      "the link comment",
+    );
   },
   async publish(tokens: TokenSet, account: Account, text: string, doFetch: FetchLike = fetch, images: { urn: string; alt: string }[] = []): Promise<PublishResult> {
     const res = await request("LinkedIn", doFetch, "https://api.linkedin.com/rest/posts", {

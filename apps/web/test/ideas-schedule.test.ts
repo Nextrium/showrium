@@ -654,9 +654,11 @@ describe("X: automation may approve, with consent and within the plan's X posts"
     await createIdeas(createDb(env.DB), u.orgId, "rss_item", [{ id: ctx, title: "We released queue retries v2.0" }]);
     const out = await runAutopilotFor(createDb(env.DB), [fakeProvider((r) => reply(r.user))], u.orgId);
     expect(out).toMatchObject({ drafts: 1, approved: 0, scheduled: 0 });
-    const row = await env.DB.prepare("SELECT status, parts FROM draft WHERE org_id = ? AND platform = 'x'").bind(u.orgId).first<{ status: string; parts: string }>();
+    const row = await env.DB.prepare("SELECT status, text, parts FROM draft WHERE org_id = ? AND platform = 'x'").bind(u.orgId).first<{ status: string; text: string; parts: string | null }>();
     expect(row!.status).toBe("draft");
-    expect(JSON.parse(row!.parts)[1]).toBe("https://blog.example/retries"); // the link waits in the reply, for "Post it myself"
+    // The link is at the end of the post (owner decision 2026-10-21), which waits for "Post it myself".
+    expect(row!.text.endsWith("https://blog.example/retries")).toBe(true);
+    expect(row!.parts).toBeNull();
   });
 
   it("a post automation approved never spends credits on X", async () => {

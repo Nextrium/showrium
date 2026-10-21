@@ -15,6 +15,7 @@ import {
   type Stance,
   type DraftStatus,
   type Platform,
+  type SOURCE_KINDS,
 } from "@nextrium/db";
 import {
   checkVariants,
@@ -35,7 +36,7 @@ import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
 import { recordAudit } from "./orgs.js";
 import type { IngestedItem } from "./ingest.js";
-import { openingOf, recentPosts, repeats } from "./repetition.js";
+import { openingOf, recentPosts, repeatedSentences, repeats } from "./repetition.js";
 import { passionForContext } from "./passions.js";
 import { recordAiUsage } from "./ai-usage.js";
 import { addUsage, CREDITS_PER_EXTRA_POST, CREDITS_PER_EXTRA_RESEARCH, getUsage, limitsFor, seatsFor, type Limits, type Plan } from "./plans.js";
@@ -101,7 +102,7 @@ export class SourceLimitError extends Error {
   }
 }
 
-export async function addSource(db: Db, orgId: string, _plan: Plan, kind: "github_repo" | "rss" | "page", key: string) {
+export async function addSource(db: Db, orgId: string, _plan: Plan, kind: (typeof SOURCE_KINDS)[number], key: string) {
   // Passions have their own sources and allowance; only the person's own sources count here.
   const existing = await db.select({ id: source.id }).from(source).where(and(eq(source.orgId, orgId), isNull(source.passionId)));
   const { sources: limit } = (await getOrgLimits(db, orgId)).limits;
@@ -205,10 +206,16 @@ export type ComposeInput = {
 
 // --- The source link -------------------------------------------------------------------------
 
-/** Where the source link goes: at the end of the post here; on X, as the first reply; nowhere else (Instagram captions don't link, video scripts are spoken). */
-export const LINK_AT_END: Platform[] = ["linkedin", "facebook", "threads", "bluesky", "mastodon"];
-const POINTER_RE = /\b(reply|replies|below|thread)\b|👇|⬇/i;
-const POINTERS = ["Link in the reply 👇", "The link is in the reply.", "More in the reply below 👇"];
+/**
+ * Where the source link goes (owner decision 2026-10-21): at the end of the post here (X shows a good
+ * preview, and X posts with a link are always posted by the person); on LinkedIn as the first comment,
+ * because a link in the post hides its image; nowhere else (Instagram captions don't link, video
+ * scripts are spoken).
+ */
+export const LINK_AT_END: Platform[] = ["x", "facebook", "threads", "bluesky", "mastodon"];
+export const LINK_IN_COMMENT: Platform[] = ["linkedin"];
+const POINTER_RE = /\b(comment|comments|below)\b|👇|⬇/i;
+const POINTERS = ["Link in the comments 👇", "The link is in the comments.", "More in the first comment 👇"];
 
 /** The link a post should carry: the item's own page; for a day of GitHub work, the repository's main page. */
 export function sourceLink(ctx: { kind: string; url: string | null }): string | null {
@@ -217,10 +224,10 @@ export function sourceLink(ctx: { kind: string; url: string | null }): string | 
   return ctx.url;
 }
 
-/** The post with its link placed: at the end where links work; on X, without the link but with a line pointing to the reply. */
+/** The post with its link placed: at the end where links work; on LinkedIn, without the link but with a line pointing to the comment. */
 export function placeLink(platform: Platform, text: string, link: string | null): string {
   if (!link) return text;
-  if (platform === "x") {
+  if (LINK_IN_COMMENT.includes(platform)) {
     const without = text.split(link).join("").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
     return POINTER_RE.test(without) ? without : `${without}\n\n${POINTERS[without.length % POINTERS.length]}`;
   }
@@ -315,12 +322,13 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   // Recent posts on these platforms: their openings go to the writer to avoid, and new posts are checked against them.
   const recent = await recentPosts(db, input.orgId, platforms);
   const recentOpenings = [...new Set(recent.map((r) => openingOf(r.text)).filter((o) => o.length >= 12))].slice(0, 8);
+  const recentPhrases = repeatedSentences(recent.map((r) => r.text));
   const xLong = platforms.includes("x") && (await xLongAllowed(db, input.orgId));
   let result;
   try {
     result = await generateStructured(
       providers,
-      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research, recentOpenings, passion, link: link ? { length: link.length, atEnd: LINK_AT_END, xReply: true } : null }), maxTokens: 8000 },
+      { system, user: composeUserPrompt({ mode: input.mode, platforms, contextTitle: material.title, contextBody: material.body, thread: threadFor, xLong, instructions, stance, research, recentOpenings, recentPhrases, passion, link: link ? { length: link.length, atEnd: LINK_AT_END, inComment: LINK_IN_COMMENT } : null }), maxTokens: 8000 },
       ComposeSchema,
       (out) => checkVariants(out, platforms),
     );
@@ -332,7 +340,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   // Why a fallback model wrote this (kept in the logs, so a failing provider is noticed).
   if (result.attempts.length) console.warn("compose fell back", { model: result.model, attempts: result.attempts });
   let cost = result.costMicroUsd + researchCost;
-  const variants: { platform: Platform; text: string; parts: string[] | null; issues: LintIssue[] }[] = [];
+  const variants: { platform: Platform; text: string; parts: string[] | null; issues: LintIssue[]; linkComment?: string | null }[] = [];
   // What a post may state: the material, the person's own request, and what research found (with its links).
   const source = [
     ctx.title,
@@ -367,12 +375,13 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
           // The issue stays visible on that part.
         }
       }
-      if (link && (v.platform === "x" || LINK_AT_END.includes(v.platform))) parts.push(link);
+      // The link goes at the end of the last part (and it's never a part of its own).
+      if (link && LINK_AT_END.includes(v.platform)) parts[parts.length - 1] = placeLink(v.platform, parts[parts.length - 1]!, link);
       const text = joinParts(parts);
       variants.push({ platform: v.platform, text, parts, issues: [...lintDraft(v.platform, text, parts, xLong), ...checkFacts(text, source), ...teamIssue(text)] });
       continue;
     }
-    // Link placed first (X: a line pointing to the reply), then the disclosure at the very end.
+    // Link placed first (LinkedIn: a line pointing to the comment), then the disclosure at the very end.
     const finish = (raw: string) => {
       const cleaned = cleanPost(raw);
       const placed = placeLink(v.platform, link && passion?.disclosure ? withoutDisclosure(cleaned, passion.disclosure) : cleaned, link);
@@ -399,13 +408,8 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
         // Keep the original; the error stays visible to the user.
       }
     }
-    // X: the link goes out as the first reply, so the post becomes a two-part thread.
-    if (link && v.platform === "x") {
-      const parts = [text, link];
-      variants.push({ platform: v.platform, text: joinParts(parts), parts, issues: [...lintDraft(v.platform, joinParts(parts), parts, xLong), ...checkFacts(text, source), ...teamIssue(text)] });
-      continue;
-    }
-    variants.push({ platform: v.platform, text, parts: null, issues: [...issues, ...checkFacts(text, source), ...teamIssue(text)] });
+    // LinkedIn: the link is posted as the first comment, after the post.
+    variants.push({ platform: v.platform, text, parts: null, issues: [...issues, ...checkFacts(text, source), ...teamIssue(text)], linkComment: link && LINK_IN_COMMENT.includes(v.platform) ? link : null });
   }
 
   // Hints research couldn't confirm: the person checks they're written as their own knowledge.
@@ -417,7 +421,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   const rows = variants.map((v) => {
     const same = repeats(v.text, recent.filter((r) => r.platform === v.platform).map((r) => r.text));
     const repeatIssue: LintIssue[] = same.repeated ? [{ code: "too_similar", severity: "warn", message: `${same.reason} Rewrite it before posting.` }] : [];
-    return { id: newId("drf"), orgId: input.orgId, briefId, platform: v.platform, text: v.text, parts: v.parts, issues: [...v.issues, ...researchIssue, ...repeatIssue] };
+    return { id: newId("drf"), orgId: input.orgId, briefId, platform: v.platform, text: v.text, parts: v.parts, linkComment: v.linkComment ?? null, issues: [...v.issues, ...researchIssue, ...repeatIssue] };
   });
   await db.batch([
     db.insert(brief).values({

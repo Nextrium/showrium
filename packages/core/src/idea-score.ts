@@ -1,12 +1,15 @@
 // How good an idea is, without AI (owner decision 2026-10-18). A stored base score (what it is, how
 // relevant, how noisy) plus freshness worked out when it's read, so ideas fade as they age.
 //   below 40: hidden from Ideas (still under "Show all")
+//   a passion's idea below 55: set aside automatically (owner decision 2026-10-21), until brought back
 //   60+ and fresh: automation may write from it
 //   75+ and at most 48 hours old: "Approve for me" may approve it (posts are always scheduled, never sent at once)
 
 export const IDEA_SHOW_MIN = 40;
 export const IDEA_WRITE_MIN = 60;
 export const IDEA_APPROVE_MIN = 75;
+/** A passion's ideas under this are set aside, so only the ones worth posting are kept (owner decision 2026-10-21). */
+export const IDEA_PASSION_KEEP_MIN = 55;
 
 const DAY = 86_400_000;
 const STOP = new Set(["the", "and", "for", "with", "from", "that", "this", "your", "you", "are", "was", "has", "have", "new", "how", "why", "what", "our", "its", "into", "about", "will", "can", "now", "out", "all"]);

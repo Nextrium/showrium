@@ -325,6 +325,52 @@ export async function autoScheduleApprovedIds(db: Db, orgId: string, draftIds: s
   return scheduled;
 }
 
+// --- A failed post frees its slot ---------------------------------------------------------------
+
+/**
+ * Scheduled posts that failed leave their time free (failed posts never hold a slot). The same
+ * accounts' later automatically scheduled posts move up into free time, one at a time and in order,
+ * so each move frees the next one's way: never before 2 hours from now (time to cancel), never past a
+ * post's "good until", within the platform's posts a day. Posts the person scheduled never move. Returns what moved.
+ */
+export async function fillFreedSlots(db: Db, orgId: string, failedDraftIds: string[], now = new Date()): Promise<{ id: string; platform: Platform; from: Date; to: Date }[]> {
+  if (!failedDraftIds.length) return [];
+  const failed = await db
+    .select({ connectionId: draft.connectionId })
+    .from(draft)
+    .where(and(eq(draft.orgId, orgId), inArray(draft.id, failedDraftIds.slice(0, 50)), eq(draft.status, "failed")));
+  const connectionIds = [...new Set(failed.map((f) => f.connectionId).filter((c): c is string => Boolean(c)))];
+  if (!connectionIds.length) return [];
+  const s = await getAutopilot(db, orgId);
+  const moved: { id: string; platform: Platform; from: Date; to: Date }[] = [];
+  for (const connectionId of connectionIds) {
+    const later = await db
+      .select({ id: draft.id, platform: draft.platform, scheduledAt: draft.scheduledAt })
+      .from(draft)
+      .where(and(eq(draft.orgId, orgId), eq(draft.connectionId, connectionId), eq(draft.status, "scheduled"), eq(draft.autoScheduled, true), gte(draft.scheduledAt, now)))
+      .orderBy(asc(draft.scheduledAt))
+      .limit(10);
+    if (!later.length) continue;
+    const deadlines = await deadlinesFor(db, orgId, later.map((d) => d.id));
+    const stats = await learnWindows(db, orgId, later[0]!.platform, s.timezone, now);
+    for (const d of later) {
+      if (!d.scheduledAt) continue;
+      const taken = await takenTimes(db, orgId, connectionId, now, d.id);
+      const at = pickSlot({ now, tz: s.timezone, days: s.days, windows: s.windows, perDay: s.perDay[d.platform] ?? 1, taken, stats, notAfter: deadlines.get(d.id) ?? null });
+      // Only a real move up (at least an hour earlier); otherwise it keeps its time.
+      if (!at || at.getTime() > d.scheduledAt.getTime() - HOUR) continue;
+      const [row] = await db
+        .update(draft)
+        .set({ scheduledAt: at, updatedAt: new Date() })
+        .where(and(eq(draft.orgId, orgId), eq(draft.id, d.id), eq(draft.status, "scheduled"), eq(draft.autoScheduled, true)))
+        .returning({ id: draft.id });
+      if (row) moved.push({ id: d.id, platform: d.platform, from: d.scheduledAt, to: at });
+    }
+  }
+  if (moved.length) await recordAudit(db, { orgId, actorUserId: null, action: "autopilot.moved_up", target: moved[0]!.id, meta: { moved: moved.map((m) => ({ id: m.id, from: m.from.toISOString(), to: m.to.toISOString() })) } });
+  return moved;
+}
+
 // --- Clashes: a post you schedule yourself near another one on the same account ------------------
 
 const CLASH_GAP_MS = 4 * HOUR;

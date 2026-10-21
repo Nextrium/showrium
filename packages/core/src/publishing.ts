@@ -136,13 +136,15 @@ export async function mastodonClient(deps: PublishDeps, instance: string): Promi
  * X posts with a link (in the post or its reply) never go through the API: X charges about 13 times
  * more for them, so they're always posted with "Post it myself" (owner decision 2026-10-19).
  */
-export const xNeedsTapToPost = (platform: string, text: string) => platform === "x" && /https?:\/\//i.test(text);
+export const xNeedsTapToPost = (platform: string, text: string) => platform === "x" && (/https?:\/\//i.test(text) || X_MENTION_RE.test(text));
+/** An @mention of an X account (not an email address). X's automation rules limit automated mentions. */
+const X_MENTION_RE = /(^|[^\w@.])@[A-Za-z0-9_]{1,15}(?![\w@])/;
 const PAUSED_MESSAGE = "Posting from this workspace is paused by Showrium. Contact support@showrium.com.";
 async function assertNotPaused(db: Db, orgId: string) {
   const [row] = await db.select({ at: org.pausedAt }).from(org).where(eq(org.id, orgId));
   if (row?.at) throw new PublishError("paused", PAUSED_MESSAGE);
 }
-const TAP_TO_POST_MESSAGE = "Posts with a link go to X through \"Post it myself\" (free). X charges a lot more for links sent through the app.";
+const TAP_TO_POST_MESSAGE = "X posts with a link, a quote or a mention go through \"Post it myself\" (free): X charges a lot more for links sent through the app, and limits automated mentions.";
 
 export class PublishError extends Error {
   constructor(
@@ -199,7 +201,7 @@ async function freshTokens(deps: PublishDeps, conn: typeof connection.$inferSele
   return tokens;
 }
 
-type SendCache = { bluesky?: { service: string; accessJwt: string; account: Account }; imageNotes?: string[] };
+type SendCache = { bluesky?: { service: string; accessJwt: string; account: Account }; imageNotes?: string[]; linkComment?: string | null; commentNote?: string };
 
 async function sendToPlatform(deps: PublishDeps, conn: typeof connection.$inferSelect, text: string, idempotencyKey: string, replyTo?: ReplyTo, cache: SendCache = {}, images: ImageUpload[] = []) {
   const account = { accountId: conn.accountId, handle: conn.handle };
@@ -232,7 +234,16 @@ async function sendToPlatform(deps: PublishDeps, conn: typeof connection.$inferS
     case "linkedin": {
       const tokens = await freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, key));
       const media = await attachAll((image) => linkedin.uploadImage(tokens, account, image, deps.fetch));
-      return linkedin.publish(tokens, account, text, deps.fetch, media.map((m) => ({ urn: m.value, alt: m.image.alt })));
+      const posted = await linkedin.publish(tokens, account, text, deps.fetch, media.map((m) => ({ urn: m.value, alt: m.image.alt })));
+      // The source link as the first comment. The post is already out, so a refused comment never fails it.
+      if (cache.linkComment && posted.externalId) {
+        try {
+          await linkedin.comment(tokens, account, posted.externalId, cache.linkComment, deps.fetch);
+        } catch (error) {
+          cache.commentNote = `The link comment didn't go out${error instanceof PlatformError && error.kind !== "auth" ? ` (${error.message})` : ""}. Add it as a comment yourself: ${cache.linkComment}`;
+        }
+      }
+      return posted;
     }
     case "mastodon": {
       const { tokens } = await decryptJson<OAuthSecret>(deps.key, conn.secret, key);
@@ -337,7 +348,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     }
   }
 
-  const cache: SendCache = {};
+  const cache: SendCache = { linkComment: conn.platform === "linkedin" ? d.linkComment : null };
   try {
     if (conn.platform === "x" && parts.some((p) => xWeightedLength(p) > 280)) await confirmXLong(deps, conn);
     let result: { externalId: string; url: string | null };
@@ -357,7 +368,7 @@ export async function publishDraft(deps: PublishDeps, input: { orgId: string; dr
     }
     await db
       .update(draft)
-      .set({ status: "published", publishedAt: new Date(), externalPostId: result.externalId, externalUrl: result.url, publishMethod: "api", urgentUntil: null, lastError: cache.imageNotes?.length ? `Posted, but not every image went with it. ${cache.imageNotes.join(" ")}` : null, updatedAt: new Date() })
+      .set({ status: "published", publishedAt: new Date(), externalPostId: result.externalId, externalUrl: result.url, publishMethod: "api", urgentUntil: null, lastError: [cache.imageNotes?.length ? `Posted, but not every image went with it. ${cache.imageNotes.join(" ")}` : null, cache.commentNote ?? null].filter(Boolean).join(" ") || null, updatedAt: new Date() })
       .where(eq(draft.id, d.id));
     if (conn.platform === "x") await recordXCosts(db, input.orgId, d.id, remaining.slice(0, parts.length - startAt), describedOnFirst);
     await recordAudit(db, { orgId: input.orgId, actorUserId: input.actorUserId ?? null, action: "draft.published", target: d.id, meta: { platform: conn.platform, parts: parts.length, images: images.length, imagesLeftOut: cache.imageNotes?.length ?? 0 } });
@@ -395,6 +406,38 @@ async function recordXCosts(db: Db, orgId: string, draftId: string, sentParts: s
   if (!rows.length) return;
   try {
     await db.insert(platformUsage).values(rows);
+  } catch (error) {
+    console.warn("platform usage not recorded", error instanceof Error ? error.message : error);
+  }
+}
+
+/** Whether the workspace has a working account connected on this platform. */
+export async function hasActiveConnection(db: Db, orgId: string, platform: ConnectionPlatform) {
+  const [row] = await db.select({ id: connection.id }).from(connection).where(and(eq(connection.orgId, orgId), eq(connection.platform, platform), eq(connection.status, "active"))).limit(1);
+  return Boolean(row);
+}
+
+/** A signed-in X account's tokens for reading X through the API (following X accounts as sources). */
+export type XReader = (orgId: string) => Promise<TokenSet | null>;
+
+/** Reads with the workspace's active X account (renewing its sign-in if needed); null without one. */
+export function xReader(deps: PublishDeps): XReader {
+  return async (orgId) => {
+    const [conn] = await deps.db.select().from(connection).where(and(eq(connection.orgId, orgId), eq(connection.platform, "x"), eq(connection.status, "active"))).limit(1);
+    if (!conn) return null;
+    return freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, aad(conn.orgId, conn.platform, conn.accountId)));
+  };
+}
+
+/** What X charged us for reading (a source's account lookup and the posts read). Never fails the read. */
+export async function recordXReads(db: Db, orgId: string, reads: { users: number; posts: number }) {
+  const rows = [
+    ...Array.from({ length: reads.users }, () => "user_read" as const),
+    ...Array.from({ length: reads.posts }, () => "post_read" as const),
+  ].map((kind) => ({ id: newId("pfu"), orgId, platform: "x", kind, costMicroUsd: X_API_COST_MICRO[kind], draftId: null }));
+  if (!rows.length) return;
+  try {
+    for (let i = 0; i < rows.length; i += 10) await db.insert(platformUsage).values(rows.slice(i, i + 10));
   } catch (error) {
     console.warn("platform usage not recorded", error instanceof Error ? error.message : error);
   }

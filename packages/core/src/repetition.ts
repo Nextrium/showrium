@@ -36,10 +36,35 @@ export function overlap(a: string, b: string): number {
   return both / (x.size + y.size - both);
 }
 
-/** Whether a post repeats a recent one: the same opening words, or many of the same phrases. */
+/** A post's sentences of 6 words or more, normalised (lower case, no punctuation or links), with the original. */
+function sentencesOf(text: string): { key: string; text: string }[] {
+  return text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .map((s) => ({ key: words(s).join(" "), text: s }))
+    .filter((s) => s.key.split(" ").length >= 6);
+}
+
+/** Sentences that two or more recent posts share (the same background line in every post, for example). */
+export function repeatedSentences(recent: string[], max = 5): string[] {
+  const seen = new Map<string, { text: string; posts: number }>();
+  for (const r of recent) {
+    for (const key of new Set(sentencesOf(r).map((s) => s.key))) {
+      const found = seen.get(key);
+      seen.set(key, { text: found?.text ?? sentencesOf(r).find((s) => s.key === key)!.text, posts: (found?.posts ?? 0) + 1 });
+    }
+  }
+  return [...seen.values()].filter((s) => s.posts >= 2).slice(0, max).map((s) => s.text);
+}
+
+/** Whether a post repeats a recent one: the same opening words, a sentence used before, or many of the same phrases. */
 export function repeats(text: string, recent: string[]): { repeated: true; reason: string } | { repeated: false } {
   const open = words(openingOf(text)).slice(0, 6).join(" ");
+  const mine = sentencesOf(text);
   for (const r of recent) {
+    const used = sentencesOf(r);
+    const again = mine.find((s) => used.some((u) => u.key === s.key));
+    if (again) return { repeated: true, reason: `It repeats a sentence from a recent post: "${again.text.length > 90 ? `${again.text.slice(0, 90)}…` : again.text}"` };
     if (open.split(" ").length >= 4 && words(openingOf(r)).slice(0, 6).join(" ") === open) return { repeated: true, reason: "It opens the same way as a recent post." };
     if (overlap(text, r) >= 0.35) return { repeated: true, reason: "It repeats much of a recent post's wording." };
   }

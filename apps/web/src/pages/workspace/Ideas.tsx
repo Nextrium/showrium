@@ -6,7 +6,7 @@ import { Alert, Button, Chip, Empty, Icon, Info, LinkButton, Loading, PageHeader
 import { DetailPanel, ListItem, SectionLabel, Split, StatStrip, Tag, useQueryParams } from "../../ui/split";
 
 type IdeaStatus = "new" | "drafted" | "dismissed";
-type Idea = { id: string; reason: string; score: number; status: IdeaStatus; title: string; kind: string; body: string; url: string | null; publishedAt: string | null; createdAt: string };
+type Idea = { id: string; reason: string; score: number; status: IdeaStatus; dismissedReason?: "person" | "low_score" | null; title: string; kind: string; body: string; url: string | null; publishedAt: string | null; createdAt: string };
 type Counts = Record<IdeaStatus, number> & { hidden?: number };
 
 const TABS = [
@@ -140,6 +140,12 @@ function IdeaDetail({ id, persona }: { id: string; persona: Persona | null }) {
         </section>
       )}
 
+      {idea.status === "dismissed" && idea.dismissedReason === "low_score" && (
+        <p className="m-0 flex items-center gap-1.5 text-sm text-muted">
+          Set aside: score under 55
+          <Info label="About ideas set aside">A passion's ideas scoring under 55 are set aside, so only the ones worth posting are written. Bring one back to write from it; it won't be set aside again.</Info>
+        </p>
+      )}
       {idea.status === "dismissed" && (
         <Button variant="secondary" className="self-start" disabled={Boolean(busy)} onClick={() => act("restore", () => api(`/ideas/${idea.id}/restore`, { method: "POST" }))}>
           Bring it back

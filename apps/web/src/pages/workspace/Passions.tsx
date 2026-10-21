@@ -6,7 +6,7 @@ import { Alert, Badge, Button, Chip, Empty, Icon, Info, PageHeader, Panel, Switc
 import { SourceRow, type Source } from "./Sources";
 
 type Relation = "follow" | "involved" | "ours";
-type Passion = { id: string; name: string; about: string; disclosure: string; active: boolean; live: boolean; startsOn: string | null; endsOn: string | null; relation: Relation; linkSource: boolean; sources: Source[] };
+type Passion = { id: string; name: string; about: string; disclosure: string; active: boolean; live: boolean; startsOn: string | null; endsOn: string | null; relation: Relation; linkSource: boolean; xHandle: string; sources: Source[] };
 const RELATIONS: { id: Relation; label: string }[] = [
   { id: "follow", label: "I follow it" },
   { id: "involved", label: "I'm involved" },
@@ -14,11 +14,13 @@ const RELATIONS: { id: Relation; label: string }[] = [
 ];
 type List = { data: Passion[]; limits: { passions: number; sourcesEach: number } };
 
-/** "owner/repo" or a github.com address is a repository; anything else is a website, feed, channel or podcast. */
+/** "owner/repo" or a github.com address is a repository; "@name" an X account; anything else is a website, feed, channel or podcast. */
 function sourceBody(value: string) {
   const v = value.trim().replace(/\/+$/, "");
   const repo = v.replace(/^https?:\/\/(www\.)?github\.com\//i, "");
   if (/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/.test(repo) && (repo !== v || !v.includes("."))) return { kind: "github_repo", repo };
+  // "@name" is an X account (followed through X's API).
+  if (/^@[A-Za-z0-9_]{1,15}$/.test(v)) return { kind: "rss", url: `https://x.com/${v.slice(1)}` };
   return { kind: "rss", url: /^https?:\/\//i.test(v) ? v : `https://${v}` };
 }
 
@@ -81,6 +83,7 @@ function Details({ passion, onSaved }: { passion: Passion; onSaved: () => void }
           endsOn: String(f.get("endsOn") ?? "") || null,
           relation,
           linkSource,
+          xHandle: String(f.get("xHandle") ?? ""),
         }),
       });
       onSaved();
@@ -115,33 +118,39 @@ function Details({ passion, onSaved }: { passion: Passion; onSaved: () => void }
         <span className="flex items-center gap-1.5 text-[13.5px] font-medium">
           Link to the source{" "}
           <Info label="About the source link">
-            Each post ends with the link to what it's about. On X it goes in the first reply, and the post says so. X posts with a link are always Post it myself (free).
+            Each post links to what it's about: at the end of the post, and on LinkedIn in the first comment (a link in the post hides its image). On X, an X post's link shows it as a quote. X posts with a link are always Post it myself (free).
           </Info>
         </span>
         <Switch label="Link to the source" on={linkSource} onChange={setLinkSource} />
       </div>
-      <label>
+      <label htmlFor={`${passion.id}-xHandle`}>
+        <span className="flex items-center gap-1.5">
+          Official X account <Info label="About the official X account">X posts may mention it once, where it fits. X posts with a mention are always Post it myself (free).</Info>
+        </span>
+        <input id={`${passion.id}-xHandle`} name="xHandle" maxLength={80} defaultValue={passion.xHandle ? `@${passion.xHandle}` : ""} placeholder="@cardano" />
+      </label>
+      <label htmlFor={`${passion.id}-about`}>
         <span className="flex items-center gap-1.5">
           Your angle <Info label="About your angle">Why you care, or your connection to it. The writer uses it to sound like you.</Info>
         </span>
-        <input name="about" maxLength={300} defaultValue={passion.about} placeholder="e.g. I run a stake pool and teach newcomers" />
+        <input id={`${passion.id}-about`} name="about" maxLength={300} defaultValue={passion.about} placeholder="e.g. I run a stake pool and teach newcomers" />
       </label>
-      <label>
+      <label htmlFor={`${passion.id}-disclosure`}>
         <span className="flex items-center gap-1.5">
           Disclosure <Info label="About disclosure">Optional. Added word for word to the end of every post about it. If you're paid or rewarded for posting, platform rules and advertising law require one.</Info>
         </span>
-        <input name="disclosure" maxLength={120} defaultValue={passion.disclosure} placeholder="e.g. I'm a Cardano ambassador" />
+        <input id={`${passion.id}-disclosure`} name="disclosure" maxLength={120} defaultValue={passion.disclosure} placeholder="e.g. I'm a Cardano ambassador" />
       </label>
       <div className="grid gap-3 sm:grid-cols-2">
         <label>
           From
           <input type="date" name="startsOn" defaultValue={passion.startsOn ?? ""} />
         </label>
-        <label>
+        <label htmlFor={`${passion.id}-endsOn`}>
           <span className="flex items-center gap-1.5">
             Until <Info label="About dates">Optional. Outside these dates its sources aren't checked and automation skips it.</Info>
           </span>
-          <input type="date" name="endsOn" defaultValue={passion.endsOn ?? ""} />
+          <input id={`${passion.id}-endsOn`} type="date" name="endsOn" defaultValue={passion.endsOn ?? ""} />
         </label>
       </div>
       {error && <Alert>{error}</Alert>}

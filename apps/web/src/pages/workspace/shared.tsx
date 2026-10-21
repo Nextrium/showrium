@@ -22,6 +22,8 @@ export type Draft = {
   createdAt: string;
   parts?: string[] | null;
   partsPosted?: number;
+  /** LinkedIn: the source link, posted as the first comment. */
+  linkComment?: string | null;
   images: DraftImage[];
   ownImages: boolean;
   source?: DraftSource | null;

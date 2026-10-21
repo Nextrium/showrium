@@ -2,7 +2,7 @@
 // up to 10 sources of its own. Posts about a passion are the person's view of someone else's work,
 // with an optional disclosure. Every function filters by orgId (tenant isolation lives here).
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
-import { contextItem, passion, PASSION_RELATIONS, source, type Db, type PassionRelation } from "@nextrium/db";
+import { contextItem, passion, PASSION_RELATIONS, source, type Db, type PassionRelation, type SOURCE_KINDS } from "@nextrium/db";
 import { getOrgLimits } from "./content.js";
 import { newId } from "./ids.js";
 
@@ -20,6 +20,8 @@ export type PassionInput = {
   endsOn?: string | null | undefined;
   relation?: PassionRelation | undefined;
   linkSource?: boolean | undefined;
+  /** Its official X account: "@name", "name" or its x.com address. Empty to remove. */
+  xHandle?: string | undefined;
 };
 
 export class PassionError extends Error {
@@ -68,6 +70,11 @@ function clean(input: { [K in keyof PassionInput]?: PassionInput[K] | undefined 
     out.relation = input.relation;
   }
   if (input.linkSource !== undefined) out.linkSource = input.linkSource;
+  if (input.xHandle !== undefined) {
+    const handle = input.xHandle.trim().replace(/^https?:\/\/(www\.|mobile\.)?(x|twitter)\.com\//i, "").replace(/^@/, "").replace(/[/?#].*$/, "");
+    if (handle && !/^[A-Za-z0-9_]{1,15}$/.test(handle)) throw new PassionError("invalid", "Use an X account like @cardano.");
+    out.xHandle = handle;
+  }
   for (const key of ["startsOn", "endsOn"] as const) {
     const v = input[key];
     if (v === undefined) continue;
@@ -101,7 +108,7 @@ export async function createPassion(db: Db, orgId: string, input: PassionInput) 
   if (existing.some((e) => e.name.toLowerCase() === values.name!.toLowerCase())) throw new PassionError("exists", "You already have a passion with that name.");
   const [row] = await db
     .insert(passion)
-    .values({ id: newId("pas"), orgId, name: values.name!, about: values.about ?? "", disclosure: values.disclosure ?? "", active: values.active ?? true, startsOn: values.startsOn ?? null, endsOn: values.endsOn ?? null, relation: values.relation ?? "follow", linkSource: values.linkSource ?? true })
+    .values({ id: newId("pas"), orgId, name: values.name!, about: values.about ?? "", disclosure: values.disclosure ?? "", active: values.active ?? true, startsOn: values.startsOn ?? null, endsOn: values.endsOn ?? null, relation: values.relation ?? "follow", linkSource: values.linkSource ?? true, xHandle: values.xHandle ?? "" })
     .returning();
   return row!;
 }
@@ -128,7 +135,7 @@ export async function removePassion(db: Db, orgId: string, id: string) {
 }
 
 /** Adds a source to a passion (up to the plan's number per passion). Returns null if it's already connected. */
-export async function addPassionSource(db: Db, orgId: string, passionId: string, kind: "github_repo" | "rss" | "page", key: string) {
+export async function addPassionSource(db: Db, orgId: string, passionId: string, kind: (typeof SOURCE_KINDS)[number], key: string) {
   if (!(await getPassion(db, orgId, passionId))) throw new PassionError("not_found", "No such passion in this workspace.");
   const { limits } = await getOrgLimits(db, orgId);
   const [{ n }] = (await db.select({ n: sql<number>`count(*)` }).from(source).where(and(eq(source.orgId, orgId), eq(source.passionId, passionId)))) as [{ n: number }];
@@ -144,7 +151,7 @@ export async function addPassionSource(db: Db, orgId: string, passionId: string,
 /** The passion a piece of material came from, if any (for writing posts about it). */
 export async function passionForContext(db: Db, orgId: string, contextItemId: string) {
   const [row] = await db
-    .select({ id: passion.id, name: passion.name, about: passion.about, disclosure: passion.disclosure, relation: passion.relation, linkSource: passion.linkSource })
+    .select({ id: passion.id, name: passion.name, about: passion.about, disclosure: passion.disclosure, relation: passion.relation, linkSource: passion.linkSource, xHandle: passion.xHandle })
     .from(contextItem)
     .innerJoin(source, eq(source.id, contextItem.sourceId))
     .innerJoin(passion, eq(passion.id, source.passionId))

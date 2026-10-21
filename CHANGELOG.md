@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### For people
+- **Follow X accounts properly:** paste an X account (x.com/name or @name) as a source, and its new posts are read through X's API with your connected X account. Showrium no longer reads X, LinkedIn, Instagram, Facebook, TikTok or Threads pages (their terms don't allow it); Bluesky profiles use their official feed. X profiles you added as pages switch over on their next check.
+- **Only a passion's strong ideas are kept:** a passion's ideas scoring under 55 are set aside (shown under "Not now" with the reason), so nothing is written from weak ones. Bring one back to write from it. Your own material isn't affected.
+- **A failed post no longer leaves the day empty:** later automated posts on the account move up into the free time, and the failure email says what moved. Posts you scheduled keep their time.
+- **Links:** on LinkedIn the source link goes in the first comment (a link in the post hides its image); Showrium adds the comment, or gives you a copy button when you post it yourself. On X the link is back at the end of the post, where X shows its preview.
+- **Quotes and mentions on X:** a post written from an X post quotes it, and a passion can have its official X account to mention. X posts with a link, a quote or a mention are always "Post it myself" (free).
+- **Less repetition:** your passion's "angle" now shapes the voice without being restated in every post, and a post that repeats a sentence from a recent one is flagged.
 - **See what your use costs us:** Billing and usage shows what Showrium paid this month for your workspace's AI (by feature) and X posts. Those are our costs, not charges to you.
 - **X posts with several images:** through the app, beyond your plan's X posts, each image after the first adds 1 credit (X charges for each image).
 - **Clearer when X posting is down on our side:** if X stops accepting posts from Showrium for billing reasons, the post says it's on our side (not your account or your credits) and offers Post it myself. Nothing is charged.

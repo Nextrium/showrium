@@ -119,25 +119,30 @@ const RELATION_GUIDE: Record<"follow" | "involved" | "ours", (name: string) => s
     `${n} is the author's own organisation or project: they are part of the team. Write as an insider sharing their team's work. "We" and "our" are right for the team's work. Stay factual about what the material shows.`,
 };
 
-function passionLines(p: { name: string; about: string; disclosure: string; relation?: "follow" | "involved" | "ours" | undefined }): string[] {
+function passionLines(p: { name: string; about: string; disclosure: string; relation?: "follow" | "involved" | "ours" | undefined; xHandle?: string | undefined }, platforms: Platform[]): string[] {
   const name = p.name.slice(0, 60);
   return [
     `Passion: this material is about ${name}. ${RELATION_GUIDE[p.relation ?? "follow"](name)}`,
-    ...(p.about ? [`The author's angle on it, in their words: ${p.about.slice(0, 300)}`] : []),
+    // Background shapes the voice; restating it in every post reads as boilerplate (owner feedback 2026-10-21).
+    ...(p.about
+      ? [`Background on the author and ${name}, for tone and knowledge only: ${p.about.slice(0, 300)}. Don't restate it: no "I've been in this since…", years of involvement or role descriptions, unless this material is about the author's own history.`]
+      : []),
+    ...(p.xHandle && platforms.includes("x") ? [`On X, you may mention ${name}'s official account @${p.xHandle.slice(0, 15)} once, where it fits naturally. Never on other platforms.`] : []),
     ...(p.disclosure
       ? [`Disclosure: end each post (for a thread, its last part) with this disclosure, word for word: "${p.disclosure.slice(0, 120)}"`]
       : []),
   ];
 }
 
-/** The source link is added by the code; the writer leaves room for it and, on X, points to the reply. */
-function linkLines(link: { length: number; atEnd: Platform[]; xReply: boolean }, platforms: Platform[]): string[] {
+/** The source link is added by the code; the writer leaves room for it and, where it's a comment, points to it. */
+function linkLines(link: { length: number; atEnd: Platform[]; inComment: Platform[] }, platforms: Platform[]): string[] {
   const end = link.atEnd.filter((p) => platforms.includes(p));
+  const comment = link.inComment.filter((p) => platforms.includes(p));
   return [
     "Link: a link to the source is added automatically after you write. Never write the URL or a placeholder for it yourself.",
     ...(end.length ? [`On ${end.join(", ")} it goes at the end of the post: leave about ${link.length + 2} characters for it within the length limit.`] : []),
-    ...(link.xReply && platforms.includes("x")
-      ? ["On X it is posted as the first reply. End the X post with a short, natural line in the author's voice telling readers the link is in the reply (for example pointing to it below). Vary the wording."]
+    ...(comment.length
+      ? [`On ${comment.join(", ")} it is posted as the first comment. End that post with a short, natural line in the author's voice telling readers the link is in the comments. Vary the wording.`]
       : []),
   ];
 }
@@ -155,9 +160,11 @@ export function composeUserPrompt(input: {
   /** How recent posts opened: the writer must not reuse these openings or their structure. */
   recentOpenings?: string[] | undefined;
   /** The material comes from one of the person's passions (a subject they follow and care about). */
-  passion?: { name: string; about: string; disclosure: string; relation?: "follow" | "involved" | "ours" | undefined } | null | undefined;
+  passion?: { name: string; about: string; disclosure: string; relation?: "follow" | "involved" | "ours" | undefined; xHandle?: string | undefined } | null | undefined;
+  /** Sentences the author's recent posts used more than once: not to be used again. */
+  recentPhrases?: string[] | undefined;
   /** The source's link, added by the code after writing: where it goes, and how long it is. */
-  link?: { length: number; atEnd: Platform[]; xReply: boolean } | null | undefined;
+  link?: { length: number; atEnd: Platform[]; inComment: Platform[] } | null | undefined;
 }): string {
   const thread = new Set((input.thread ?? []).filter((p) => THREADABLE.includes(p)));
   const guide = (p: Platform) => (thread.has(p) ? THREAD_GUIDE[p]! : p === "x" && input.xLong ? X_LONG_GUIDE : PLATFORM_GUIDE[p]);
@@ -167,7 +174,8 @@ export function composeUserPrompt(input: {
       ? `Mode: choose the best one for the request and return it as "mode": ${CONTENT_MODES.map((m) => `${m} (${MODE_GUIDE[m]})`).join("; ")}`
       : `Mode: ${input.mode}. ${MODE_GUIDE[input.mode]}`,
     ...(stance ? [stance] : []),
-    ...(input.passion ? passionLines(input.passion) : []),
+    ...(input.passion ? passionLines(input.passion, input.platforms) : []),
+    ...(input.recentPhrases?.length ? ["", "Sentences recent posts already used more than once. Don't use them, or anything close:", ...input.recentPhrases.map((s) => `- ${s.slice(0, 200)}`)] : []),
     ...(input.link ? linkLines(input.link, input.platforms) : []),
     ...(input.recentOpenings?.length
       ? [

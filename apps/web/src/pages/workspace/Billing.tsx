@@ -4,7 +4,7 @@ import { Info, Meter, PageHeader, Panel } from "../../ui/kit";
 
 type Me = { principal: { role: string } };
 type Credits = { balance: number; transactions: { id: string; kind: string; description: string; amount: number; createdAt: string }[] };
-type Costs = { totalUsd: number; ai: { usd: number; byFeature: { feature: string; usd: number; calls: number; estimated: boolean }[] }; x: { usd: number; posts: number; images: number } };
+type Costs = { totalUsd: number; ai: { usd: number; byFeature: { feature: string; usd: number; calls: number; estimated: boolean }[] }; x: { usd: number; posts: number; images: number; reads: number } };
 type Usage = { posts: { used: number; limit: number }; videos: { used: number; limit: number }; sources: { limit: number } };
 
 export function BillingPage() {
@@ -62,7 +62,9 @@ const usd = (n: number) => (n === 0 ? "$0" : n < 0.01 ? "<$0.01" : `$${n.toFixed
 function CostsPanel({ costs }: { costs: Costs }) {
   const rows = [
     ...costs.ai.byFeature.map((f) => ({ key: f.feature, label: FEATURES[f.feature] ?? f.feature, detail: `${f.calls} AI ${f.calls === 1 ? "call" : "calls"}${f.estimated ? ", estimated" : ""}`, usd: f.usd })),
-    ...(costs.x.posts || costs.x.images ? [{ key: "x", label: "X API", detail: `${costs.x.posts} ${costs.x.posts === 1 ? "post" : "posts"}${costs.x.images ? `, ${costs.x.images} image ${costs.x.images === 1 ? "description" : "descriptions"}` : ""}`, usd: costs.x.usd }] : []),
+    ...(costs.x.posts || costs.x.images || costs.x.reads
+      ? [{ key: "x", label: "X API", detail: [costs.x.posts && `${costs.x.posts} ${costs.x.posts === 1 ? "post" : "posts"}`, costs.x.images && `${costs.x.images} image ${costs.x.images === 1 ? "description" : "descriptions"}`, costs.x.reads && `${costs.x.reads} ${costs.x.reads === 1 ? "read" : "reads"} from followed accounts`].filter(Boolean).join(", "), usd: costs.x.usd }]
+      : []),
   ];
   return (
     <Panel
@@ -70,7 +72,7 @@ function CostsPanel({ costs }: { costs: Costs }) {
       title={
         <span className="inline-flex items-center gap-1.5">
           What your use costs us
-          <Info label="About these costs">What Showrium paid AI providers and X for your workspace this month. These are our costs, not charges to you. Some AI costs (images, voice) are estimates, as that provider doesn't report a price. X charges $0.015 a post and $0.005 per image description.</Info>
+          <Info label="About these costs">What Showrium paid AI providers and X for your workspace this month. These are our costs, not charges to you. Some AI costs (images, voice) are estimates, as that provider doesn't report a price. X charges $0.015 a post, $0.005 per image description, and $0.005 for each post read from an X account you follow.</Info>
         </span>
       }
     >

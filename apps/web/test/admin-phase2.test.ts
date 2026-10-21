@@ -61,7 +61,7 @@ describe("X costs (measured against X's console 2026-10-20)", () => {
     // What X charged: one post ($0.015) and three image descriptions ($0.005 each).
     const rows = await env.DB.prepare("SELECT kind, cost_micro_usd AS c FROM platform_usage WHERE org_id = ? ORDER BY kind").bind(u.orgId).all<{ kind: string; c: number }>();
     expect(rows.results).toEqual([{ kind: "image_description", c: 5000 }, { kind: "image_description", c: 5000 }, { kind: "image_description", c: 5000 }, { kind: "post", c: 15000 }]);
-    expect((await workspaceCosts(deps.db, u.orgId)).x).toEqual({ usd: 0.03, posts: 1, images: 3 });
+    expect((await workspaceCosts(deps.db, u.orgId)).x).toEqual({ usd: 0.03, posts: 1, images: 3, reads: 0 });
     // The workspace sees its own costs (AI and X); another workspace sees none of them.
     const mine = (await (await u.call("GET", "/costs")).json()) as { totalUsd: number; x: { usd: number } };
     expect(mine.x.usd).toBe(0.03);
