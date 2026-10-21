@@ -1,15 +1,15 @@
-# Code owners review every change. On develop and main, a merge needs a code owner's approval
-# (branch rules); the data, deploy and rule files below are what protects production data.
-* @Basrahtop @Lucifer-010
+# Code owners (the showrium-code-owners team) review every change. On develop and main, a merge needs
+# a code owner's approval (branch rules); the data, deploy and rule files below protect production data.
+* @Nextrium/showrium-code-owners
 
 # Database migrations and the guard that keeps them additive
-/packages/db/migrations/ @Basrahtop @Lucifer-010
-/scripts/migration-guard.mjs @Basrahtop @Lucifer-010
-/scripts/migration-guard.test.mjs @Basrahtop @Lucifer-010
+/packages/db/migrations/ @Nextrium/showrium-code-owners
+/scripts/migration-guard.mjs @Nextrium/showrium-code-owners
+/scripts/migration-guard.test.mjs @Nextrium/showrium-code-owners
 
 # CI, deploys, templates and this file
-/.github/ @Basrahtop @Lucifer-010
+/.github/ @Nextrium/showrium-code-owners
 
 # Cloudflare configuration (databases, routes, crons)
-/apps/web/wrangler.jsonc @Basrahtop @Lucifer-010
-/apps/admin/wrangler.jsonc @Basrahtop @Lucifer-010
+/apps/web/wrangler.jsonc @Nextrium/showrium-code-owners
+/apps/admin/wrangler.jsonc @Nextrium/showrium-code-owners
