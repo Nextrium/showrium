@@ -10,6 +10,8 @@
 
 ### Security
 - Two older code-scanning findings fixed: the app's requests can only reach Showrium's own API, whatever is in the page address, and replies read from other servers have every HTML tag removed in one pass.
+- **Node.js October 2026 security release:** CI, builds and local development now use Node.js 22.23.4, which fixes the 22.x issues in it (TLS hostname checks, DNS names, the Brotli decoder, keep-alive sockets). `.nvmrc` pins it and `engines` requires it. The live app runs on Cloudflare's runtime, not Node.js, so it was never exposed.
+- **Dependency advisories fixed** (the dependency audit reports none left): Hono 4.13.13 (`serveStatic` path decoding; Showrium doesn't use `serveStatic`), Vite 8.3.4 (dev server file access and editor launching) and Vitest 4.1.12 (mock registration). The Vite and Vitest issues only affected local development and tests.
 
 ## v0.2.0: beta update (2026-10-21)
 
