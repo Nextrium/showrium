@@ -118,7 +118,11 @@ export function Split({ list, detail, hasSelection, onBack, backLabel }: { list:
   );
 }
 
-/** The right-hand panel. Scrolls on its own on wide screens. */
+/**
+ * The right-hand panel. Scrolls on its own on wide screens. `relative` makes it the box that
+ * positioned children (hidden file inputs, pop-ups) are placed in, so they scroll and clip with
+ * it instead of stretching the page below the app.
+ */
 export function DetailPanel({ children, label = "Details" }: { children: ReactNode; label?: string }) {
-  return <aside aria-label={label} className="flex min-w-0 flex-col gap-5 rounded-[18px] border border-line bg-panel p-5 sm:p-6 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto">{children}</aside>;
+  return <aside aria-label={label} className="relative flex min-w-0 flex-col gap-5 rounded-[18px] border border-line bg-panel p-5 sm:p-6 lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto">{children}</aside>;
 }
