@@ -21,7 +21,7 @@
     "@nextrium/policy": "workspace:*",
     "better-auth": "1.7.6",
     "heic-to": "1.5.2",
-    "hono": "4.13.9",
+    "hono": "4.13.13",
     "qrcode-generator": "^2.0.4",
     "react": "19.3.0",
     "react-dom": "19.3.0"
@@ -38,8 +38,8 @@
     "axe-core": "^4.13.0",
     "tailwindcss": "4.3.3",
     "typescript": "^7.0.2",
-    "vite": "8.3.1",
-    "vitest": "^4.1.11",
+    "vite": "8.3.4",
+    "vitest": "4.1.12",
     "wrangler": "4.141.0",
     "zod": "4.6.5"
   }

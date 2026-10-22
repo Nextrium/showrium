@@ -97,7 +97,8 @@ function localSql(sql: string): Record<string, unknown>[] {
       shell: process.platform === "win32",
       env: { ...process.env, CI: "true" },
     });
-    const parsed = JSON.parse(out.slice(out.indexOf("["))) as { results: Record<string, unknown>[] }[];
+    // The JSON starts on a line of its own; pnpm and wrangler may print warnings before it.
+    const parsed = JSON.parse(out.slice(out.search(/^\[/m))) as { results: Record<string, unknown>[] }[];
     return parsed.flatMap((p) => p.results);
   } finally {
     rmSync(dir, { recursive: true, force: true });

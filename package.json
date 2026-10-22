@@ -5,7 +5,7 @@
   "description": "Showrium by Nextrium: one context in, platform-native content out.",
   "packageManager": "pnpm@10.24.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.23.4"
   },
   "scripts": {
     "build": "turbo run build",
