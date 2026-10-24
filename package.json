@@ -16,7 +16,7 @@
     "check": "turbo run typecheck test build"
   },
   "devDependencies": {
-    "turbo": "^2.11.4",
+    "turbo": "^2.11.10",
     "typescript": "^7.0.2"
   },
   "pnpm": {
