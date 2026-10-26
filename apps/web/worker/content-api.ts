@@ -10,6 +10,7 @@ import {
   createPassion,
   listPassions,
   PassionError,
+  passionHandles,
   passionIsLive,
   removePassion,
   updatePassion,
@@ -54,7 +55,7 @@ import {
   type Permission,
 } from "@nextrium/core";
 import { PLATFORM_RULES } from "@nextrium/policy";
-import { aiProviders, researchProviders } from "./ai.js";
+import { aiProviders, embedderFor, researchProviders } from "./ai.js";
 import { ImageSummary, findImagesLater, toImageSummary } from "./images-api.js";
 import { apiError, requirePrincipal, type AppEnv } from "./principal.js";
 import { publishDeps } from "./connections-api.js";
@@ -347,7 +348,7 @@ contentApi.openapi(
     const { orgId } = c.get("principal");
     const src = await getSource(c.get("db"), orgId, c.req.valid("param").id);
     if (!src) return c.json(apiError("not_found", "No such source in this workspace."), 404);
-    const out = await syncSource(c.get("db"), src, { xReader: await xReaderFor(c.env, c.get("db")) });
+    const out = await syncSource(c.get("db"), src, { xReader: await xReaderFor(c.env, c.get("db")), embed: embedderFor(c.env) });
     return c.json({ added: out.added, error: out.error }, 200);
   },
 );
@@ -368,8 +369,12 @@ const PassionFields = z.object({
   relation: z.enum(["follow", "involved", "ours"]).optional(),
   /** Add the source's link to posts (on LinkedIn, as the first comment). */
   linkSource: z.boolean().optional(),
-  /** Its official X account ("@name"), which X posts may mention once. Empty to remove. */
+  /** Its official X account ("@name"), which X posts may mention once. Empty to remove. Older single field: use xHandles. */
   xHandle: z.string().max(80).optional(),
+  /** The X accounts of the organisations in it ("@name"), up to 10. X posts may mention the one a post is about. */
+  xHandles: z.array(z.string().max(80)).max(10).optional(),
+  /** Words and names that mark an item as being about it, up to 20 (checked alongside its meaning). */
+  topics: z.array(z.string().max(40)).max(20).optional(),
 });
 const PassionSchema = z
   .object({
@@ -384,10 +389,12 @@ const PassionSchema = z
     relation: z.enum(["follow", "involved", "ours"]),
     linkSource: z.boolean(),
     xHandle: z.string(),
+    xHandles: z.array(z.string()),
+    topics: z.array(z.string()),
     sources: z.array(SourceSchema),
   })
   .openapi("Passion");
-type PassionRow = { id: string; name: string; about: string; disclosure: string; active: boolean; startsOn: string | null; endsOn: string | null; relation: "follow" | "involved" | "ours"; linkSource: boolean; xHandle: string; sources?: { id: string; kind: string; key: string; lastCheckedAt: Date | null; lastError: string | null }[] };
+type PassionRow = { id: string; name: string; about: string; disclosure: string; active: boolean; startsOn: string | null; endsOn: string | null; relation: "follow" | "involved" | "ours"; linkSource: boolean; xHandle: string; xHandles: string[]; topics: string[]; sources?: { id: string; kind: string; key: string; lastCheckedAt: Date | null; lastError: string | null }[] };
 const toPassion = (p: PassionRow) => ({
   id: p.id,
   name: p.name,
@@ -400,6 +407,8 @@ const toPassion = (p: PassionRow) => ({
   relation: p.relation,
   linkSource: p.linkSource,
   xHandle: p.xHandle,
+  xHandles: passionHandles(p),
+  topics: p.topics,
   sources: (p.sources ?? []).map((r) => ({ id: r.id, kind: r.kind, key: r.key, lastCheckedAt: r.lastCheckedAt?.toISOString() ?? null, lastError: r.lastError })),
 });
 const actorOf = (p: { kind: "user"; userId: string } | { kind: "api_key"; apiKeyId: string }) => ({ actorUserId: p.kind === "user" ? p.userId : null, actorApiKeyId: p.kind === "api_key" ? p.apiKeyId : null });

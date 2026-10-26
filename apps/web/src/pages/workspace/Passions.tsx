@@ -6,7 +6,13 @@ import { Alert, Badge, Button, Chip, Empty, Icon, Info, PageHeader, Panel, Switc
 import { SourceRow, type Source } from "./Sources";
 
 type Relation = "follow" | "involved" | "ours";
-type Passion = { id: string; name: string; about: string; disclosure: string; active: boolean; live: boolean; startsOn: string | null; endsOn: string | null; relation: Relation; linkSource: boolean; xHandle: string; sources: Source[] };
+type Passion = { id: string; name: string; about: string; disclosure: string; active: boolean; live: boolean; startsOn: string | null; endsOn: string | null; relation: Relation; linkSource: boolean; xHandle: string; xHandles: string[]; topics: string[]; sources: Source[] };
+/** A comma-separated field as a list (X accounts may also be separated by spaces). */
+const listOf = (value: FormDataEntryValue | null, spaces = false) =>
+  String(value ?? "")
+    .split(spaces ? /[,\s]+/ : /,/)
+    .map((v) => v.trim())
+    .filter(Boolean);
 const RELATIONS: { id: Relation; label: string }[] = [
   { id: "follow", label: "I follow it" },
   { id: "involved", label: "I'm involved" },
@@ -83,7 +89,8 @@ function Details({ passion, onSaved }: { passion: Passion; onSaved: () => void }
           endsOn: String(f.get("endsOn") ?? "") || null,
           relation,
           linkSource,
-          xHandle: String(f.get("xHandle") ?? ""),
+          xHandles: listOf(f.get("xHandles"), true),
+          topics: listOf(f.get("topics")),
         }),
       });
       onSaved();
@@ -123,11 +130,23 @@ function Details({ passion, onSaved }: { passion: Passion; onSaved: () => void }
         </span>
         <Switch label="Link to the source" on={linkSource} onChange={setLinkSource} />
       </div>
-      <label htmlFor={`${passion.id}-xHandle`}>
+      <label htmlFor={`${passion.id}-xHandles`}>
         <span className="flex items-center gap-1.5">
-          Official X account <Info label="About the official X account">X posts may mention it once, where it fits. X posts with a mention are always Post it myself (free).</Info>
+          X accounts{" "}
+          <Info label="About X accounts">
+            The organisations in it, up to 10, separated by commas. An X post may mention the one it's about, once. Their posts always count as on-topic, and their names help spot related news. X posts with a mention are always Post it myself (free).
+          </Info>
         </span>
-        <input id={`${passion.id}-xHandle`} name="xHandle" maxLength={80} defaultValue={passion.xHandle ? `@${passion.xHandle}` : ""} placeholder="@cardano" />
+        <input id={`${passion.id}-xHandles`} name="xHandles" maxLength={400} defaultValue={passion.xHandles.map((h) => `@${h}`).join(", ")} placeholder="@name, @another" />
+      </label>
+      <label htmlFor={`${passion.id}-topics`}>
+        <span className="flex items-center gap-1.5">
+          Topics{" "}
+          <Info label="About topics">
+            Optional words and names that mean a new item is about it, up to 20, separated by commas. Showrium also judges each item by its meaning, so you don't need every word; add the ones its sources use that its name doesn't cover.
+          </Info>
+        </span>
+        <input id={`${passion.id}-topics`} name="topics" maxLength={900} defaultValue={passion.topics.join(", ")} placeholder="Words or names, separated by commas" />
       </label>
       <label htmlFor={`${passion.id}-about`}>
         <span className="flex items-center gap-1.5">

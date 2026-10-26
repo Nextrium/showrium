@@ -328,6 +328,8 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
   const recentPhrases = repeatedSentences(recent.map((r) => r.text));
   const xLong = platforms.includes("x") && (await xLongAllowed(db, input.orgId));
   let result;
+  // How long writing takes (the first model, any fallback and any fixes), kept with its cost.
+  const writeStart = Date.now();
   try {
     result = await generateStructured(
       providers,
@@ -415,6 +417,7 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
     variants.push({ platform: v.platform, text, parts: null, issues: [...issues, ...checkFacts(text, source), ...teamIssue(text)], linkComment: link && LINK_IN_COMMENT.includes(v.platform) ? link : null });
   }
 
+  const writeDurationMs = Date.now() - writeStart;
   // Hints research couldn't confirm: the person checks they're written as their own knowledge.
   const unconfirmed = research?.hints.filter((h) => h.status === "unconfirmed").length ?? 0;
   const researchIssue: LintIssue[] = unconfirmed
@@ -445,7 +448,15 @@ export async function compose(db: Db, providers: Provider[], input: ComposeInput
 
   // What it cost us: writing (with any fixes), and the web research.
   await recordAiUsage(db, [
-    { orgId: input.orgId, feature: "write", model: result.model, costMicroUsd: cost - researchCost, refId: briefId },
+    {
+      orgId: input.orgId,
+      feature: "write",
+      model: result.model,
+      costMicroUsd: cost - researchCost,
+      refId: briefId,
+      durationMs: writeDurationMs,
+      fallback: result.attempts.length ? result.attempts.map((a) => `${a.model}: ${a.error}`).join("; ") : null,
+    },
     ...(research ? [{ orgId: input.orgId, feature: "research" as const, model: research.model, costMicroUsd: researchCost, refId: briefId }] : []),
   ]);
   // Charge usage after success. A concurrent request can push slightly past the limit;

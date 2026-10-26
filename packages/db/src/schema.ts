@@ -1,7 +1,7 @@
 // Showrium database schema (Cloudflare D1 / SQLite).
 // Portability rules (ADR-0002): Drizzle only, text IDs, no SQLite-only SQL.
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const createdAt = () =>
   integer("created_at", { mode: "timestamp_ms" }).notNull().default(sql`(unixepoch() * 1000)`);
@@ -327,7 +327,7 @@ export const persona = sqliteTable("persona", {
  * (images, transcription, photo reading, narration) don't return a price: those are estimates from
  * Cloudflare's published rates, marked `estimated`.
  */
-export const AI_FEATURES = ["write", "research", "insights", "video_plan", "narration", "image", "transcription", "photo"] as const;
+export const AI_FEATURES = ["write", "research", "insights", "video_plan", "narration", "image", "transcription", "photo", "relevance"] as const;
 export type AiFeature = (typeof AI_FEATURES)[number];
 export const aiUsage = sqliteTable(
   "ai_usage",
@@ -340,6 +340,10 @@ export const aiUsage = sqliteTable(
     estimated: integer("estimated", { mode: "boolean" }).notNull().default(false),
     /** What it was for (a brief, insight or video id), so older costs are copied in once. */
     refId: text("ref_id"),
+    /** How long the call took, start to finish, including any fallback (ms). Not known for older rows. */
+    durationMs: integer("duration_ms"),
+    /** Why a fallback model answered (the first models' errors, shortened). Null when the first one did. */
+    fallback: text("fallback"),
     createdAt: createdAt(),
   },
   (t) => [index("ai_usage_created_idx").on(t.createdAt), index("ai_usage_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("ai_usage_feature_ref_uq").on(t.feature, t.refId)],
@@ -387,8 +391,12 @@ export const passion = sqliteTable(
     relation: text("relation", { enum: PASSION_RELATIONS }).notNull().default("follow"),
     /** Add the source's link to posts (LinkedIn: as the first comment; an X post's link makes it a quote). */
     linkSource: integer("link_source", { mode: "boolean" }).notNull().default(true),
-    /** Its official X account (a handle, without "@"), which X posts may mention once. Empty when none. */
+    /** Its official X account (a handle, without "@"), which X posts may mention once. Empty when none. Older single field: see xHandles. */
     xHandle: text("x_handle").notNull().default(""),
+    /** The X accounts of the organisations in it (handles, without "@"), up to 10. X posts may mention the one a post is about. */
+    xHandles: text("x_handles", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
+    /** Words and names that mark an item as being about it (the person's own list, up to 20), checked alongside the meaning. */
+    topics: text("topics", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     startsOn: text("starts_on"),
     endsOn: text("ends_on"),
@@ -671,6 +679,10 @@ export const idea = sqliteTable(
     dismissedReason: text("dismissed_reason", { enum: ["person", "low_score"] }),
     /** Brought back by the person: never set aside automatically again. */
     kept: integer("kept", { mode: "boolean" }).notNull().default(false),
+    /** For a passion's idea: how it was found to be on-topic (its own source, its words, its meaning, both, or neither). */
+    topicMatch: text("topic_match", { enum: ["own", "words", "meaning", "both", "none"] }),
+    /** For a passion's idea: how much closer its meaning is to the passion than to small talk (null when not measured). */
+    relevance: real("relevance"),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("idea_org_context_uq").on(t.orgId, t.contextItemId), index("idea_org_status_idx").on(t.orgId, t.status, t.score)],

@@ -425,7 +425,15 @@ export function xReader(deps: PublishDeps): XReader {
   return async (orgId) => {
     const [conn] = await deps.db.select().from(connection).where(and(eq(connection.orgId, orgId), eq(connection.platform, "x"), eq(connection.status, "active"))).limit(1);
     if (!conn) return null;
-    return freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, aad(conn.orgId, conn.platform, conn.accountId)));
+    try {
+      return await freshTokens(deps, conn, await decryptJson<OAuthSecret>(deps.key, conn.secret, aad(conn.orgId, conn.platform, conn.accountId)));
+    } catch (error) {
+      // Its sign-in was refused: show it in Accounts as needing reconnecting, as a failed post does.
+      if (error instanceof PlatformError && error.kind === "auth") {
+        await deps.db.update(connection).set({ status: "needs_reconnect", updatedAt: new Date() }).where(eq(connection.id, conn.id));
+      }
+      throw error;
+    }
   };
 }
 

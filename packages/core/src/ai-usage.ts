@@ -19,11 +19,11 @@ export const AI_ESTIMATES = { image: 850, transcriptionPerMinute: 500, narration
 export const estimateTranscription = (text: string) => Math.max(1, Math.ceil((text.split(/\s+/).filter(Boolean).length / 150) * AI_ESTIMATES.transcriptionPerMinute));
 export const estimateNarration = (text: string) => Math.max(1, Math.ceil((text.length / 900) * AI_ESTIMATES.narrationPerMinute));
 
-export type AiUsageRow = { orgId: string; feature: AiFeature; model: string; costMicroUsd: number; estimated?: boolean; refId?: string | null };
+export type AiUsageRow = { orgId: string; feature: AiFeature; model: string; costMicroUsd: number; estimated?: boolean; refId?: string | null; durationMs?: number | null; fallback?: string | null };
 
 /** Records AI calls. Never throws: a failed cost row is logged, and the request carries on. */
 export async function recordAiUsage(db: Db, rows: AiUsageRow[]) {
-  const values = rows.filter((r) => r.costMicroUsd >= 0).map((r) => ({ id: newId("aiu"), orgId: r.orgId, feature: r.feature, model: r.model.slice(0, 120), costMicroUsd: Math.round(r.costMicroUsd), estimated: Boolean(r.estimated), refId: r.refId ?? null }));
+  const values = rows.filter((r) => r.costMicroUsd >= 0).map((r) => ({ id: newId("aiu"), orgId: r.orgId, feature: r.feature, model: r.model.slice(0, 120), costMicroUsd: Math.round(r.costMicroUsd), estimated: Boolean(r.estimated), refId: r.refId ?? null, durationMs: r.durationMs == null ? null : Math.round(r.durationMs), fallback: r.fallback?.slice(0, 500) ?? null }));
   if (!values.length) return;
   try {
     await db.insert(aiUsage).values(values).onConflictDoNothing();
@@ -67,7 +67,7 @@ export async function aiCostReport(db: Db, now = new Date()) {
   const since30 = new Date(now.getTime() - 30 * DAY);
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const rows = await db
-    .select({ orgId: aiUsage.orgId, feature: aiUsage.feature, model: aiUsage.model, micro: aiUsage.costMicroUsd, estimated: aiUsage.estimated, at: aiUsage.createdAt })
+    .select({ orgId: aiUsage.orgId, feature: aiUsage.feature, model: aiUsage.model, micro: aiUsage.costMicroUsd, estimated: aiUsage.estimated, at: aiUsage.createdAt, durationMs: aiUsage.durationMs, fallback: aiUsage.fallback })
     .from(aiUsage)
     .where(gte(aiUsage.createdAt, since30 < monthStart ? since30 : monthStart));
   const last30 = rows.filter((r) => r.at >= since30);
@@ -88,6 +88,18 @@ export async function aiCostReport(db: Db, now = new Date()) {
       m.set(r[key], g);
     }
     return [...m.entries()].map(([name, g]) => ({ name, usd: usd(g.micro), calls: g.calls })).sort((a, b) => b.usd - a.usd);
+  };
+
+  // How long writing takes, and how often a fallback model had to answer (and why), last 30 days.
+  const writes = last30.filter((r) => r.feature === "write" && r.durationMs !== null).sort((a, b) => b.at.getTime() - a.at.getTime());
+  const ms = writes.map((r) => r.durationMs!).sort((a, b) => a - b);
+  const pct = (q: number) => (ms.length ? ms[Math.min(ms.length - 1, Math.floor(q * ms.length))]! : 0);
+  const writeSpeed = {
+    measured: ms.length,
+    medianMs: pct(0.5),
+    slowestTenthMs: pct(0.9),
+    fallbacks: writes.filter((r) => r.fallback).length,
+    recentFallbacks: writes.filter((r) => r.fallback).slice(0, 5).map((r) => ({ at: r.at.toISOString(), model: r.model, durationMs: r.durationMs!, reason: r.fallback! })),
   };
 
   // Writing one post: the cost of writing (brief) divided by the posts written in the period.
@@ -126,6 +138,7 @@ export async function aiCostReport(db: Db, now = new Date()) {
     byFeature: group("feature"),
     byModel: group("model"),
     perPost: { posts: posts30, usd: posts30 ? usd(writeMicro / posts30) : 0 },
+    writeSpeed,
     workspaces,
     xApi: {
       monthToDateUsd: usd(xRows.filter((r) => r.at >= monthStart).reduce((a, r) => a + r.micro, 0)),

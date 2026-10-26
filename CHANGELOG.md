@@ -2,7 +2,16 @@
 
 ## Unreleased
 
+### For people
+- **A passion's good news is no longer thrown away for not naming it:** each new item is checked two ways at once, by its words (the passion's name, your topics, its X accounts' names) and by its meaning (a Workers AI model), and either is enough. An article about ransomware counts for "CyberSecurity" without the word; small talk ("Excited to see this movie") is still set aside. If the model is unavailable, the words still decide.
+- **Your own sources are always on-topic:** everything from an "It's ours" passion, from its GitHub repositories and from its listed X accounts.
+- **Several X accounts per passion:** list the organisations in it (up to 10). An X post may mention the one it's about, never one it isn't. Their names also help spot related news.
+- **Topics:** optional words and names for a passion (up to 20), for what its sources say that its name doesn't cover.
+- **A broken X sign-in shows in Accounts:** when Showrium can't renew it while reading your followed X accounts, the account now says "Needs reconnecting" (before, only a failed post showed it).
+
 ### For Showrium staff
+- **Writing speed on the Costs page:** how long writing takes (typical and slowest 10%), how often a fallback model had to answer, and why. Each write's time and fallback reason are kept with its cost.
+- **Topic checks** appear as their own line in AI costs (estimated, a fraction of a cent).
 - **Paying, granted or free, at a glance:** every workspace in the admin app is labelled Paying (a subscription still in force), Granted plan (given by staff), Full access (given by staff) or Free. Overview counts each, so granted access is never mistaken for revenue, and Users lists each group with who gave the access, when and why.
 
 ### For contributors
