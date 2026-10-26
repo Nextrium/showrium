@@ -25,7 +25,8 @@ import { chunkRows } from "./chunk.js";
 import { newId } from "./ids.js";
 import { blockedSocialMessage, ingestFeed, ingestGithubActivity, ingestWatchedPage, resolveBlogSource, socialSource, type IngestedItem } from "./ingest.js";
 import { recordXReads, type XReader } from "./publishing.js";
-import { sourceIsLive } from "./passions.js";
+import { passionHandles, sourceIsLive } from "./passions.js";
+import { EMBEDDING_MODEL, estimateRelevanceCost, judgeRelevance, type Embedder, type TopicMatch } from "./relevance.js";
 import { recordAiUsage } from "./ai-usage.js";
 
 const HOUR = 3_600_000;
@@ -34,7 +35,7 @@ const DAY = 24 * HOUR;
 // --- Sources -> ideas ------------------------------------------------------------------
 
 /** The base score (no AI; see idea-score.ts) and the idea's reason line. Freshness is added when it's read. */
-export function scoreIdea(kind: string, title: string, label?: string, ctx: { body?: string; keywords?: string[]; passionName?: string | null } = {}): { score: number; reason: string } {
+export function scoreIdea(kind: string, title: string, label?: string, ctx: { body?: string; keywords?: string[]; passionName?: string | null; onTopic?: boolean | undefined } = {}): { score: number; reason: string } {
   const what = label ?? (kind === "github_release" ? "New release" : kind === "github_activity" ? "Your work" : kind === "rss_item" ? "New post" : "New material");
   return { score: baseScore({ kind, title, ...ctx }), reason: `${what}: ${title || "untitled"}`.slice(0, 200) };
 }
@@ -49,7 +50,7 @@ export async function createIdeas(
   db: Db,
   orgId: string,
   kind: string,
-  items: { id: string; title: string; body?: string; publishedAt?: Date | null }[],
+  items: { id: string; title: string; body?: string; publishedAt?: Date | null; match?: TopicMatch | undefined; margin?: number | null | undefined }[],
   label?: string,
   ctx: { keywords?: string[]; passionName?: string | null; now?: Date } = {},
 ) {
@@ -62,11 +63,12 @@ export async function createIdeas(
     .where(and(eq(idea.orgId, orgId), gte(idea.createdAt, new Date(Date.now() - 7 * DAY))))
     .orderBy(desc(idea.createdAt))
     .limit(200);
-  const rows: { id: string; orgId: string; contextItemId: string; reason: string; score: number; scoreVersion: number; status: "new" | "dismissed"; dismissedReason: "low_score" | null }[] = [];
+  const rows: { id: string; orgId: string; contextItemId: string; reason: string; score: number; scoreVersion: number; status: "new" | "dismissed"; dismissedReason: "low_score" | null; topicMatch: TopicMatch | null; relevance: number | null }[] = [];
   const bumped = new Set<string>();
   const { keywords, passionName } = ctx;
   for (const i of items) {
-    const { score, reason } = scoreIdea(kind, i.title, label, { ...(i.body !== undefined ? { body: i.body } : {}), ...(keywords ? { keywords } : {}), passionName: passionName ?? null });
+    const onTopic = i.match ? i.match !== "none" : undefined;
+    const { score, reason } = scoreIdea(kind, i.title, label, { ...(i.body !== undefined ? { body: i.body } : {}), ...(keywords ? { keywords } : {}), passionName: passionName ?? null, onTopic });
     const same = recent.find((r) => sameStory(r.title, i.title));
     if (same) {
       if (!bumped.has(same.id)) {
@@ -83,11 +85,11 @@ export async function createIdeas(
     }
     if (rows.some((r) => sameStory(r.reason, i.title))) continue;
     const weak = Boolean(passionName) && effectiveScore(score, ageOf(i.publishedAt, now, now)) < IDEA_PASSION_KEEP_MIN;
-    rows.push({ id: newId("idea"), orgId, contextItemId: i.id, reason, score, scoreVersion: 2, status: weak ? "dismissed" : "new", dismissedReason: weak ? "low_score" : null });
+    rows.push({ id: newId("idea"), orgId, contextItemId: i.id, reason, score, scoreVersion: 2, status: weak ? "dismissed" : "new", dismissedReason: weak ? "low_score" : null, topicMatch: passionName ? (i.match ?? null) : null, relevance: i.margin ?? null });
   }
   let added = 0;
-  // 9 bound values per row (id, org, item, reason, score, status, version, reason set aside, kept).
-  for (const part of chunkRows(rows, 9)) {
+  // Up to 12 bound values per row (the columns above, plus the defaults Drizzle fills in).
+  for (const part of chunkRows(rows, 12)) {
     added += (await db.insert(idea).values(part).onConflictDoNothing({ target: [idea.orgId, idea.contextItemId] }).returning({ id: idea.id })).length;
   }
   return added;
@@ -142,7 +144,7 @@ function sourceLabel(key: string, kind: string): string | undefined {
 export async function syncSource(
   db: Db,
   src: typeof source.$inferSelect,
-  opts: { fetch?: FetchLike | undefined; now?: Date; xReader?: XReader | undefined } = {},
+  opts: { fetch?: FetchLike | undefined; now?: Date; xReader?: XReader | undefined; embed?: Embedder | undefined } = {},
 ): Promise<{ added: number; ideas: number; error: string | null }> {
   try {
     // A watched page on a social site: an X account moves to X's API; the others aren't read (their terms).
@@ -188,7 +190,8 @@ export async function syncSource(
     let added = 0;
     let ideas = 0;
     // A passion's ideas carry its name ("Cardano: <title>"), so they're easy to tell apart in Ideas.
-    const [pas] = src.passionId ? await db.select({ name: passion.name }).from(passion).where(and(eq(passion.orgId, src.orgId), eq(passion.id, src.passionId))) : [];
+    const [pas] = src.passionId ? await db.select().from(passion).where(and(eq(passion.orgId, src.orgId), eq(passion.id, src.passionId))) : [];
+    const topic = pas ? { name: pas.name, topics: pas.topics, handles: passionHandles(pas), relation: pas.relation } : null;
     const who = await getPersona(db, src.orgId);
     const keywords = [...(who?.interests ?? []), ...(who?.expertise ?? [])];
     const now = opts.now ?? new Date();
@@ -196,7 +199,14 @@ export async function syncSource(
       if (src.lastCheckedAt) await backfillPublishedAt(db, src.orgId, b.items);
       const rows = await addContextItems(db, src.orgId, b.kind, freshOnly(b.items, !src.lastCheckedAt, now), src.id);
       added += rows.length;
-      ideas += await createIdeas(db, src.orgId, b.kind, rows, pas?.name ?? sourceLabel(src.key, b.kind), { keywords, passionName: pas?.name ?? null, now });
+      // A passion's items: on-topic by its words or its meaning, both checked at once (relevance.ts).
+      const verdicts = topic ? await judgeRelevance(topic, src, rows, opts.embed) : [];
+      if (verdicts.some((v) => v.margin !== null)) {
+        await recordAiUsage(db, [{ orgId: src.orgId, feature: "relevance", model: EMBEDDING_MODEL, costMicroUsd: estimateRelevanceCost(rows.map((r) => `${r.title}
+${r.body ?? ""}`)), estimated: true }]);
+      }
+      const judged = rows.map((r, k) => ({ ...r, ...(verdicts[k] ? { match: verdicts[k].match, margin: verdicts[k].margin } : {}) }));
+      ideas += await createIdeas(db, src.orgId, b.kind, judged, pas?.name ?? sourceLabel(src.key, b.kind), { keywords, passionName: pas?.name ?? null, now });
     }
     await markSourceChecked(db, src.orgId, src.id, null);
     return { added, ideas, error: null };
@@ -248,7 +258,7 @@ async function readXAccount(db: Db, src: typeof source.$inferSelect, opts: { fet
 }
 
 /** Cron: checks the sources that have waited longest (at most every 6 hours each). */
-export async function runSourcePolling(db: Db, opts: { fetch?: FetchLike | undefined; xReader?: XReader | undefined } = {}, now = new Date(), limit = 2) {
+export async function runSourcePolling(db: Db, opts: { fetch?: FetchLike | undefined; xReader?: XReader | undefined; embed?: Embedder | undefined } = {}, now = new Date(), limit = 2) {
   const due = await db
     .select()
     .from(source)

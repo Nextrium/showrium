@@ -11,11 +11,13 @@ type Data = {
   byFeature: Group[];
   byModel: Group[];
   perPost: { posts: number; usd: number };
+  writeSpeed: { measured: number; medianMs: number; slowestTenthMs: number; fallbacks: number; recentFallbacks: { at: string; model: string; durationMs: number; reason: string }[] };
   workspaces: { orgId: string; name: string; plan: string; costUsd: number; xUsd: number; paysUsd: number; losing: boolean }[];
   xApi: { monthToDateUsd: number; last30Usd: number; posts: number; images: number; reads: number };
 };
 
-const FEATURES: Record<string, string> = { write: "Writing posts", research: "Web research", insights: "Audience insights", video_plan: "Video plans", narration: "Voice-over", image: "AI images", transcription: "Voice notes", photo: "Reading photos" };
+const FEATURES: Record<string, string> = { write: "Writing posts", research: "Web research", insights: "Audience insights", video_plan: "Video plans", narration: "Voice-over", image: "AI images", transcription: "Voice notes", photo: "Reading photos", relevance: "Topic checks" };
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
 export function Costs() {
   const { data, error } = useLoad<Data>("/costs");
@@ -40,6 +42,23 @@ export function Costs() {
           <Table rows={data.byModel} cols={[{ label: "Model", cell: (r) => <span className="font-mono text-[12px]">{r.name}</span> }, { label: "Calls", cell: (r) => r.calls, num: true }, { label: "Cost", cell: (r) => money(r.usd), num: true }]} />
         </Panel>
       </div>
+      <Panel title="Writing speed" info="Last 30 days, from clicking Write to the posts being ready: the first model, any fallback and any fixes. A fallback means the first model failed or its answer was rejected; the reason is kept.">
+        <div className="grid grid-cols-3 gap-3">
+          <Stat label="Typical" value={data.writeSpeed.measured ? secs(data.writeSpeed.medianMs) : "–"} sub={`${data.writeSpeed.measured} writes measured`} />
+          <Stat label="Slowest 10%" value={data.writeSpeed.measured ? secs(data.writeSpeed.slowestTenthMs) : "–"} sub="or slower" />
+          <Stat label="Fallbacks" value={data.writeSpeed.fallbacks} sub={data.writeSpeed.measured ? `${Math.round((data.writeSpeed.fallbacks / data.writeSpeed.measured) * 100)}% of writes` : "none measured"} />
+        </div>
+        <Table
+          rows={data.writeSpeed.recentFallbacks}
+          empty="No fallbacks."
+          cols={[
+            { label: "When", cell: (r) => new Date(r.at).toLocaleString() },
+            { label: "Answered by", cell: (r) => <span className="font-mono text-[12px]">{r.model}</span> },
+            { label: "Took", cell: (r) => secs(r.durationMs), num: true },
+            { label: "Why", cell: (r) => <span className="text-[12.5px] [overflow-wrap:anywhere]">{r.reason}</span> },
+          ]}
+        />
+      </Panel>
       <Panel title="Workspaces that cost most" info="AI and X costs in the last 30 days against what the workspace pays a month (yearly plans divided by 12). Losing: costs more than it pays (for a workspace that pays nothing, over $1 in 30 days).">
         <Table
           rows={data.workspaces}

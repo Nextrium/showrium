@@ -1,6 +1,7 @@
 // Builds the AI provider chain from configuration (ADR-0004, benchmark 2026-09-27):
 // DeepSeek V4 Flash -> Gemini 3.1 Flash-Lite (both via OpenRouter) -> Workers AI (free).
 import { fakeProvider, fakeResearchProvider, openRouterProvider, openRouterResearchProvider, workersAiProvider, type Provider, type ResearchProvider } from "@nextrium/llm";
+import { EMBEDDING_MODEL, type Embedder } from "@nextrium/core";
 import type { Env } from "./env.js";
 
 /** The fake provider only ever runs on localhost (tests, local dev), never in a deployed environment. */
@@ -59,6 +60,20 @@ export function aiProviders(env: Env): Provider[] {
   }
   if (env.AI) providers.push(workersAiProvider({ ai: env.AI, model: "@cf/meta/llama-3.1-8b-instruct" }));
   return providers;
+}
+
+/**
+ * The meaning check for a passion's new items (relevance.ts): Workers AI embeddings, inside the free
+ * daily allowance. None in local tests (the topic words decide there).
+ */
+export function embedderFor(env: Env): Embedder | undefined {
+  if (fakeAllowed(env) || !env.AI) return undefined;
+  const ai = env.AI;
+  return async (texts) => {
+    const out = (await ai.run(EMBEDDING_MODEL as Parameters<Ai["run"]>[0], { text: texts } as never)) as { data?: number[][] };
+    if (!out?.data?.length) throw new Error("no embeddings returned");
+    return out.data;
+  };
 }
 
 /**

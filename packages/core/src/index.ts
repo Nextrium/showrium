@@ -31,3 +31,4 @@ export * from "./idea-score.js";
 export * from "./notify.js";
 export * from "./ai-usage.js";
 export * from "./admin-reports.js";
+export * from "./relevance.js";

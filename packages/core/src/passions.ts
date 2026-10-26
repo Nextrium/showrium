@@ -9,6 +9,10 @@ import { newId } from "./ids.js";
 export const PASSION_NAME_MAX = 60;
 export const PASSION_ABOUT_MAX = 300;
 export const PASSION_DISCLOSURE_MAX = 120;
+/** X accounts per passion (the organisations in it) and topic words, each the person's own list. */
+export const PASSION_HANDLES_MAX = 10;
+export const PASSION_TOPICS_MAX = 20;
+export const PASSION_TOPIC_CHARS = 40;
 
 export type Passion = typeof passion.$inferSelect;
 export type PassionInput = {
@@ -20,9 +24,34 @@ export type PassionInput = {
   endsOn?: string | null | undefined;
   relation?: PassionRelation | undefined;
   linkSource?: boolean | undefined;
-  /** Its official X account: "@name", "name" or its x.com address. Empty to remove. */
+  /** Its official X account: "@name", "name" or its x.com address. Empty to remove. Older single field: use xHandles. */
   xHandle?: string | undefined;
+  /** The X accounts of the organisations in it (each like xHandle), up to 10. Replaces xHandle when given. */
+  xHandles?: string[] | undefined;
+  /** Words and names that mark an item as being about it, up to 20. */
+  topics?: string[] | undefined;
 };
+
+/** Its X accounts: the list, or the older single one. */
+export function passionHandles(p: Pick<Passion, "xHandle" | "xHandles">): string[] {
+  return p.xHandles?.length ? p.xHandles : p.xHandle ? [p.xHandle] : [];
+}
+
+/** Non-empty values, each kept as first written; later repeats (any letter case) are dropped. */
+function firstOfEach(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((v) => v && !seen.has(v.toLowerCase()) && seen.add(v.toLowerCase()));
+}
+
+/** "@name", "name" or an x.com address, as a bare handle ("" when empty). */
+function cleanHandle(raw: string): string {
+  const bare = raw.trim().replace(/^https?:\/\/(www\.|mobile\.)?(x|twitter)\.com\//i, "").replace(/^@/, "");
+  // Cut at the first "/", "?" or "#" (a find, then a slice: linear time on any input).
+  const cut = bare.search(/[/?#]/);
+  const handle = cut < 0 ? bare : bare.slice(0, cut);
+  if (handle && !/^[A-Za-z0-9_]{1,15}$/.test(handle)) throw new PassionError("invalid", `"${raw.trim().slice(0, 40)}" isn't an X account. Use one like @name.`);
+  return handle;
+}
 
 export class PassionError extends Error {
   constructor(
@@ -70,13 +99,22 @@ function clean(input: { [K in keyof PassionInput]?: PassionInput[K] | undefined 
     out.relation = input.relation;
   }
   if (input.linkSource !== undefined) out.linkSource = input.linkSource;
-  if (input.xHandle !== undefined) {
-    const bare = input.xHandle.trim().replace(/^https?:\/\/(www\.|mobile\.)?(x|twitter)\.com\//i, "").replace(/^@/, "");
-    // Cut at the first "/", "?" or "#" (a find, then a slice: linear time on any input).
-    const cut = bare.search(/[/?#]/);
-    const handle = cut < 0 ? bare : bare.slice(0, cut);
-    if (handle && !/^[A-Za-z0-9_]{1,15}$/.test(handle)) throw new PassionError("invalid", "Use an X account like @cardano.");
+  if (input.xHandles !== undefined) {
+    const handles = firstOfEach(input.xHandles.map(cleanHandle));
+    if (handles.length > PASSION_HANDLES_MAX) throw new PassionError("invalid", `Add up to ${PASSION_HANDLES_MAX} X accounts.`);
+    out.xHandles = handles;
+    // The older single field keeps the first, for anything that still reads it.
+    out.xHandle = handles[0] ?? "";
+  } else if (input.xHandle !== undefined) {
+    const handle = cleanHandle(input.xHandle);
     out.xHandle = handle;
+    out.xHandles = handle ? [handle] : [];
+  }
+  if (input.topics !== undefined) {
+    const topics = firstOfEach(input.topics.map((t) => t.trim().replace(/\s+/g, " ")));
+    if (topics.length > PASSION_TOPICS_MAX) throw new PassionError("invalid", `Add up to ${PASSION_TOPICS_MAX} topics.`);
+    if (topics.some((t) => t.length > PASSION_TOPIC_CHARS)) throw new PassionError("invalid", `Keep each topic under ${PASSION_TOPIC_CHARS} characters.`);
+    out.topics = topics;
   }
   for (const key of ["startsOn", "endsOn"] as const) {
     const v = input[key];
@@ -111,7 +149,7 @@ export async function createPassion(db: Db, orgId: string, input: PassionInput) 
   if (existing.some((e) => e.name.toLowerCase() === values.name!.toLowerCase())) throw new PassionError("exists", "You already have a passion with that name.");
   const [row] = await db
     .insert(passion)
-    .values({ id: newId("pas"), orgId, name: values.name!, about: values.about ?? "", disclosure: values.disclosure ?? "", active: values.active ?? true, startsOn: values.startsOn ?? null, endsOn: values.endsOn ?? null, relation: values.relation ?? "follow", linkSource: values.linkSource ?? true, xHandle: values.xHandle ?? "" })
+    .values({ id: newId("pas"), orgId, name: values.name!, about: values.about ?? "", disclosure: values.disclosure ?? "", active: values.active ?? true, startsOn: values.startsOn ?? null, endsOn: values.endsOn ?? null, relation: values.relation ?? "follow", linkSource: values.linkSource ?? true, xHandle: values.xHandle ?? "", xHandles: values.xHandles ?? [], topics: values.topics ?? [] })
     .returning();
   return row!;
 }
@@ -154,10 +192,10 @@ export async function addPassionSource(db: Db, orgId: string, passionId: string,
 /** The passion a piece of material came from, if any (for writing posts about it). */
 export async function passionForContext(db: Db, orgId: string, contextItemId: string) {
   const [row] = await db
-    .select({ id: passion.id, name: passion.name, about: passion.about, disclosure: passion.disclosure, relation: passion.relation, linkSource: passion.linkSource, xHandle: passion.xHandle })
+    .select({ id: passion.id, name: passion.name, about: passion.about, disclosure: passion.disclosure, relation: passion.relation, linkSource: passion.linkSource, xHandle: passion.xHandle, xHandles: passion.xHandles })
     .from(contextItem)
     .innerJoin(source, eq(source.id, contextItem.sourceId))
     .innerJoin(passion, eq(passion.id, source.passionId))
     .where(and(eq(contextItem.orgId, orgId), eq(contextItem.id, contextItemId), eq(passion.orgId, orgId)));
-  return row ?? null;
+  return row ? { ...row, xHandles: passionHandles(row) } : null;
 }

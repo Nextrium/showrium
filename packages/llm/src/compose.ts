@@ -119,15 +119,19 @@ const RELATION_GUIDE: Record<"follow" | "involved" | "ours", (name: string) => s
     `${n} is the author's own organisation or project: they are part of the team. Write as an insider sharing their team's work. "We" and "our" are right for the team's work. Stay factual about what the material shows.`,
 };
 
-function passionLines(p: { name: string; about: string; disclosure: string; relation?: "follow" | "involved" | "ours" | undefined; xHandle?: string | undefined }, platforms: Platform[]): string[] {
+function passionLines(p: { name: string; about: string; disclosure: string; relation?: "follow" | "involved" | "ours" | undefined; xHandle?: string | undefined; xHandles?: string[] | undefined }, platforms: Platform[]): string[] {
   const name = p.name.slice(0, 60);
+  const handles = (p.xHandles?.length ? p.xHandles : p.xHandle ? [p.xHandle] : []).slice(0, 10).map((h) => `@${h.slice(0, 15)}`);
   return [
     `Passion: this material is about ${name}. ${RELATION_GUIDE[p.relation ?? "follow"](name)}`,
     // Background shapes the voice; restating it in every post reads as boilerplate (owner feedback 2026-10-21).
     ...(p.about
       ? [`Background on the author and ${name}, for tone and knowledge only: ${p.about.slice(0, 300)}. Don't restate it: no "I've been in this since…", years of involvement or role descriptions, unless this material is about the author's own history.`]
       : []),
-    ...(p.xHandle && platforms.includes("x") ? [`On X, you may mention ${name}'s official account @${p.xHandle.slice(0, 15)} once, where it fits naturally. Never on other platforms.`] : []),
+    ...(handles.length === 1 && platforms.includes("x") ? [`On X, you may mention ${name}'s official account ${handles[0]} once, where it fits naturally. Never on other platforms.`] : []),
+    ...(handles.length > 1 && platforms.includes("x")
+      ? [`On X, you may mention one of these official accounts, and only the one whose organisation this material is actually about: ${handles.join(", ")}. If the material isn't about any of them, mention none. Once at most, where it fits naturally. Never on other platforms.`]
+      : []),
     ...(p.disclosure
       ? [`Disclosure: end each post (for a thread, its last part) with this disclosure, word for word: "${p.disclosure.slice(0, 120)}"`]
       : []),
@@ -160,7 +164,7 @@ export function composeUserPrompt(input: {
   /** How recent posts opened: the writer must not reuse these openings or their structure. */
   recentOpenings?: string[] | undefined;
   /** The material comes from one of the person's passions (a subject they follow and care about). */
-  passion?: { name: string; about: string; disclosure: string; relation?: "follow" | "involved" | "ours" | undefined; xHandle?: string | undefined } | null | undefined;
+  passion?: { name: string; about: string; disclosure: string; relation?: "follow" | "involved" | "ours" | undefined; xHandle?: string | undefined; xHandles?: string[] | undefined } | null | undefined;
   /** Sentences the author's recent posts used more than once: not to be used again. */
   recentPhrases?: string[] | undefined;
   /** The source's link, added by the code after writing: where it goes, and how long it is. */
