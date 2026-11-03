@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@nextrium/db": "workspace:*",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260926.1",
